@@ -744,7 +744,7 @@ final class TodayDetailRow: UIView {
         label.textColor = TodayStyle.muted
         value.font = TodayFont.text(13, weight: .medium)
         value.textAlignment = .right
-        value.lineLimit = 1
+        value.numberOfLines = 1
 
         let stack = UIStackView(arrangedSubviews: [label, value])
         stack.axis = .horizontal
@@ -800,7 +800,7 @@ final class TodayProfileRow: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func apply(_ profile: AdapterProfile, negotiated: Int?) {
+    func apply(_ profile: PDProfile, negotiated: Int?) {
         let selected = profile.index == negotiated
         iconView.image = UIImage(systemName: selected ? "largecircle.fill.circle" : "circle")
         iconView.tintColor = selected ? TodayStyle.accent : TodayStyle.muted
