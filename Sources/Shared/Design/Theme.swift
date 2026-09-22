@@ -108,7 +108,7 @@ nonisolated enum AppFont {
     static func text(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         Font.system(size: size,
                     weight: weight,
-                    design: LocalizedBundle.language.prefersRoundedDesign ? .rounded : .default)
+                    design: AppLanguage.current.prefersRoundedDesign ? .rounded : .default)
     }
 
     /// 等宽。这个不随语言变 —— 它管的是数字对齐，而中文下要用到等宽的地方本来就只有数字。
@@ -118,12 +118,12 @@ nonisolated enum AppFont {
 
     /// 微标签的字距。
     static var captionTracking: CGFloat {
-        LocalizedBundle.language.prefersRoundedDesign ? 0.9 : 0.3
+        AppLanguage.current.prefersRoundedDesign ? 0.9 : 0.3
     }
 
     /// 微标签是否转大写。汉字没有大小写，转了也白转。
     static var captionUppercases: Bool {
-        LocalizedBundle.language.prefersRoundedDesign
+        AppLanguage.current.prefersRoundedDesign
     }
 }
 

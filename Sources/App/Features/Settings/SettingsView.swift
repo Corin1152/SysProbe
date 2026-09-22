@@ -82,6 +82,11 @@ struct SettingsView: View {
                     Text("Credits")
                 }
             }
+            // 与三个分页铺同一张画布。原先是裸 `Form`，用的是系统分组背景 —— 弹入／
+            // 退出设置页时整屏底色会从画布色跳成系统灰（深色下是近黑跳成 #1C1C1E），
+            // 看起来就是一下闪。铺上画布后，转场前后是同一个底色。
+            .scrollContentBackground(.hidden)
+            .background(Backdrop(glow: .mwAccent))
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

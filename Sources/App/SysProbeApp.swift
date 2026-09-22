@@ -10,9 +10,13 @@ struct SysProbeApp: App {
     @StateObject private var optimizer = MemoryOptimizer()
 
     init() {
-        // 必须在第一帧之前把 `Bundle.main` 的类换掉：文案是渲染时从 `Bundle.main`
-        // 取出来的，晚一步第一屏就会走原路径，留下半屏英文。
-        LocalizationBootstrap.install()
+        // 语言要在第一帧之前就位。`AppFont` 与 `Strings.text` 读的是
+        // `AppLanguage.current` 这个全局，而 `@StateObject` 的自动闭包要等到第一次
+        // 求值 `body` 才跑 —— 那时第一屏已经在渲染了。
+        //
+        // 这里不再需要给 `Bundle.main` 换类：SwiftUI 的 `Text("…")` 不走
+        // `localizedString(forKey:value:table:)`，换类对它一个字都不生效。
+        AppLanguage.current = AppLanguage.stored ?? .systemPreferred
     }
 
     var body: some Scene {
@@ -22,6 +26,9 @@ struct SysProbeApp: App {
                 .environmentObject(monitor)
                 .environmentObject(hardware)
                 .environmentObject(optimizer)
+                // 转场（启动第一帧、切分页、弹／收设置页）里若有一帧还没画上内容，
+                // 露出来的就是窗口底色。铺一层画布色，省得闪出系统白／系统黑。
+                .background(Color.mwCanvas.ignoresSafeArea())
         }
     }
 }

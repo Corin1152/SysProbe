@@ -2,13 +2,35 @@ import Foundation
 
 /// 界面语言。
 ///
-/// 存在 `UserDefaults` 里，切换后**不重启**即可生效 —— 具体机制见
-/// `LocalizedBundle`。
+/// 存在 `UserDefaults` 里，切换后**不重启**即可生效。
 nonisolated enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case english = "en"
     case chinese = "zh-Hans"
 
     var id: String { rawValue }
+
+    /// 当前界面语言。**运行期唯一的真相**：`AppFont` 用它决定字形，`Strings.text`
+    /// 用它挑 `.lproj`，`RootView` 把它转成环境里的 `\.locale`。
+    ///
+    /// 为什么不是「让 `Bundle.main` 自己查」：SwiftUI 的 `Text("…")` 根本不走
+    /// `Bundle.main.localizedString(forKey:value:table:)`，它按环境里的 locale 直接去
+    /// bundle 的 `.lproj` 里挑。所以「当前是哪种语言」这件事得我们自己记着。
+    ///
+    /// `nonisolated(unsafe)`：写它的是主 actor 上的 `AppState`，读它的地方
+    /// （`AppFont`、`Strings.text`）够不到主 actor。读写的都是一个枚举值，原子替换，
+    /// 没有撕裂的可能。
+    nonisolated(unsafe) static var current: AppLanguage = .systemPreferred
+
+    /// 用户上次选的语言。键名只写这一处，主 App 与设置页共用。
+    private static let storageKey = "appLanguage"
+
+    static var stored: AppLanguage? {
+        UserDefaults.standard.string(forKey: storageKey).flatMap(AppLanguage.init(rawValue:))
+    }
+
+    static func store(_ language: AppLanguage) {
+        UserDefaults.standard.set(language.rawValue, forKey: storageKey)
+    }
 
     /// 语言选择器里显示的名字，一律用该语言自己的写法。
     ///

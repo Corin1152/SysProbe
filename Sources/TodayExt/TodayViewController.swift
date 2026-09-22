@@ -24,13 +24,13 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 扩展跑在独立进程里，`Bundle.main` 是扩展自己的包，所以要在这里单独换一次
-        // 类；主 App 那次替换不会带过来。必须在建 `UIHostingController` 之前做完，
-        // 否则第一帧的文案会走原路径。
+        // 文案由扩展自己的 `en.lproj` / `zh-Hans.lproj` 提供（两份都打进了 appex），
+        // SwiftUI 按环境里的 locale 去挑，系统是中文就是中文。
         //
         // 语言只能跟随系统：工程里没有 App Group entitlement，扩展读不到主 App 的
-        // `UserDefaults`，所以设置页里那个语言开关管不到这一屏。
-        LocalizationBootstrap.install()
+        // `UserDefaults`，所以设置页里那个语言开关管不到这一屏。`AppFont` 读的是
+        // `AppLanguage.current` 这个全局，这里先给它落一个值。
+        AppLanguage.current = .systemPreferred
 
         view.backgroundColor = .clear
 

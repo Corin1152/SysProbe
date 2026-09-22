@@ -141,6 +141,43 @@ jobs:
           fi
           rm -rf "$work"
 
+      # 本地化漏掉同样是静默失败：`.lproj` 不在包里，切语言就只有那几条直接查表的
+      # 文案会变，其余 `Text("…")` 全部原地不动 —— 而且不会有任何报错。
+      - name: Check the localizations are in the bundle
+        run: |
+          work=$(mktemp -d)
+          unzip -q build/export/SysProbe-unsigned.ipa -d "$work"
+          app="$(ls -d "$work"/Payload/*.app)"
+
+          fail=0
+          for bundle in "$app" "$app"/PlugIns/*.appex; do
+            [ -d "$bundle" ] || continue
+            for lang in en zh-Hans; do
+              if [ ! -f "$bundle/$lang.lproj/Localizable.strings" ]; then
+                echo "::error::$lang.lproj/Localizable.strings is missing from $(basename "$bundle"). SwiftUI resolves Text(\"…\") against these files, so without them the in-app language switch silently does nothing."
+                fail=1
+              fi
+            done
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
+          # 文件在、内容是空的，同样会静默失效 —— 顺手确认中文真的在里面。
+          if ! plutil -p "$app/zh-Hans.lproj/Localizable.strings" | grep -q "硬件"; then
+            echo "::error::zh-Hans.lproj/Localizable.strings does not contain the expected Chinese copy."
+            exit 1
+          fi
+          count=$(plutil -convert json -o - "$app/zh-Hans.lproj/Localizable.strings" \
+                  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          echo "zh-Hans entries: $count"
+          if [ "$count" -lt 150 ]; then
+            echo "::error::only $count entries in zh-Hans.lproj; the catalog looks truncated."
+            exit 1
+          fi
+
+          echo "lproj directories in the ipa:"
+          find "$app" -name '*.lproj' | sed "s|$work/||" | sort | sed 's/^/  /'
+          rm -rf "$work"
+
       - name: Upload ipa
         uses: actions/upload-artifact@v4
         with:

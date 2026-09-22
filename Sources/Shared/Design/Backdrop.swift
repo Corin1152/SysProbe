@@ -31,11 +31,14 @@ struct Backdrop: View {
                 }
                 context.stroke(path, with: .color(.mwGrid), lineWidth: 0.5)
             }
-            // Rasterised once into a texture instead of stroking ~50 lines on
-            // every pass. Kept to the grid alone: the glow below it uses
-            // `plusLighter`, and blend modes inside a drawing group do not always
-            // composite the same way.
-            .drawingGroup()
+            // 刻意**不加** `.drawingGroup()`。
+            //
+            // 它会把这一层渲进一张离屏纹理。而每次转场（启动第一帧、切分页、弹／收
+            // 设置页）SwiftUI 都可能把那张纹理丢掉重画，中间会有一帧是空的；配上
+            // 下面 `plusLighter` 的发光层在同一个合成组里，表现出来就是整屏闪一下。
+            //
+            // 性能上也不需要它：`Canvas` 本身已经是一层 CALayer，只有尺寸变化才会
+            // 重画，那 ~50 条网格线画一次就留在层里了。
 
             RadialGradient(colors: [glow.opacity(0.22 * glowIntensity), .clear],
                            center: .init(x: 0.5, y: 0.18),

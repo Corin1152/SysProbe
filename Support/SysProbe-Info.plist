@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 只写构建设置表达不了的键。`GENERATE_INFOPLIST_FILE` 会把这份并进
+	     合成出来的整份 plist（扩展的 NSExtension 同理）。
+	     启动屏底色取画布的深色端，跟 `Backdrop` 的渐变对得上。 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+</dict>
+</plist>
