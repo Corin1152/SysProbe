@@ -41,8 +41,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "1.5.0"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -90,8 +90,8 @@ targets:
       base:
         PRODUCT_NAME: TodayExtension
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.today
-        MARKETING_VERSION: "1.5.0"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

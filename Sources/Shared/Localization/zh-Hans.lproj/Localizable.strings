@@ -187,3 +187,4 @@
 "Actual" = "实际";
 "Rated" = "额定";
 "%lld services" = "%lld 项服务";
+"Reading sensors…" = "正在读取传感器…";

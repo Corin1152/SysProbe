@@ -187,3 +187,4 @@
 "Actual" = "Actual";
 "Rated" = "Rated";
 "%lld services" = "%lld services";
+"Reading sensors…" = "Reading sensors…";

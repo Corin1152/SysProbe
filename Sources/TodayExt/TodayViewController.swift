@@ -13,10 +13,25 @@ import UIKit
 /// `widgetPerformUpdate` 提供一个快照。传统扩展自 iOS 14 起被标记废弃、
 /// iOS 18 起被移除 —— 而本机（iPhone X）的系统封顶就是 iOS 16.x，所以不受影响。
 ///
-/// **界面是纯 UIKit 的**（`TodayWidgetView`），不是 SwiftUI。原因写在那个类型的
-/// 文档里：用 `UIHostingController` 装 SwiftUI 会让 appex 拖进整个 SwiftUI 运行时，
-/// 而扩展的内存预算与启动 watchdog 撑不起它 —— 症状就是负一屏显示「无法载入」。
-/// 能正常工作的 CPU-X，它的 appex 里 SwiftUI 符号是 0。
+/// 界面是纯 UIKit 的（`TodayWidgetView`），不用 SwiftUI。
+///
+/// ## 启动路径刻意压到最小
+///
+/// 这一屏曾经一直显示「无法载入」。产物层面能查的都查过了：类确实注册在
+/// `__objc_classlist` 里、名字对得上、入口点是 `NSExtensionMain`、
+/// `LC_BUILD_VERSION` 正常、没有缺失的链接库、也**没有** SwiftUI 依赖。
+/// 剩下唯一解释得通的是：**扩展进程在启动阶段被 watchdog 掐掉**。
+///
+/// 所以这里把启动路径拆成两段：
+///
+/// 1. `viewDidLoad` 只做三件不可能失败的事 —— 落一次语言、设背景色、挂一个占位
+///    标签。**不碰 IO、不建视图树、不 `dlopen`。** 只要这一段跑完，系统就认为
+///    扩展「加载成功」，负一屏不会再显示「无法载入」。
+/// 2. 真正的内容（`PowerMonitor` 的构造会碰 IOKit、HID 与文件系统；`TodayWidgetView`
+///    要建二十来个视图；`dlopen` 要拉一个框架）全部推迟到 `viewDidAppear`。
+///
+/// 属性初始化（原来的 `private let monitor = PowerMonitor()`）也一并去掉了 ——
+/// 那段跑在 `viewDidLoad` **之前**，属于启动路径的一部分，正是最可疑的位置。
 ///
 /// 类名显式暴露给 ObjC 运行时。`NSExtensionPrincipalClass` 要靠 `NSClassFromString`
 /// 找到这个类，而 Swift 给主模块里的类注册的运行时名字带着模块前缀
@@ -26,9 +41,12 @@ import UIKit
 @objc(SysProbeTodayViewController)
 final class TodayViewController: UIViewController, NCWidgetProviding {
 
-    private let monitor = PowerMonitor()
-    private let widget = TodayWidgetView()
+    // 全部延迟创建，理由见类型文档。
+    private var monitor: PowerMonitor?
+    private var widget: TodayWidgetView?
     private var snapshotSubscription: AnyCancellable?
+    private var placeholder: UILabel?
+    private var didInstallContent = false
 
     /// 收起态以下的高度下限。
     private let minimumHeight: CGFloat = 110
@@ -36,17 +54,66 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 文案由扩展自己的 `en.lproj` / `zh-Hans.lproj` 提供（两份都打进了 appex）。
+        // 这一段就是「扩展能加载」的全部条件。保持它又短又安全。
         //
         // 语言只能跟随系统：工程里没有 App Group entitlement，扩展读不到主 App 的
         // `UserDefaults`，所以设置页里那个语言开关管不到这一屏。`TodayFont` 与
-        // `Strings.text` 读的都是 `AppLanguage.current` 这个全局，这里先给它落一个值。
+        // `Strings.text` 读的都是 `AppLanguage.current` 这个全局。
         AppLanguage.current = .systemPreferred
 
         view.backgroundColor = .clear
+        installPlaceholder()
+        preferredContentSize = CGSize(width: 0, height: minimumHeight)
+    }
+
+    // MARK: 生命周期
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        installContentIfNeeded()
+        // `PowerMonitor.start()` 就是一个 1 秒的重采样循环，和 CPU-X 里那个
+        // NSTimer 等价：进程活着就一直在跑。重复调用是幂等的。
+        monitor?.start()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // 滑走 / 锁屏后停止重采样，别在后台空转耗电。已记录的会话保持打开。
+        monitor?.pause()
+    }
+
+    // MARK: 占位
+
+    /// 内容就位之前先显示这一行，免得第一帧是一片空白。
+    ///
+    /// 它还有个诊断作用：如果负一屏上能看到这句话，说明扩展**加载成功了**，
+    /// 后面出问题就都在内容那一侧，而不是扩展配置。
+    private func installPlaceholder() {
+        let label = UILabel()
+        label.text = Strings.text("Reading sensors…")
+        label.font = TodayFont.text(13)
+        label.textColor = TodayStyle.muted
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+        ])
+        placeholder = label
+    }
+
+    // MARK: 真正的内容
+
+    private func installContentIfNeeded() {
+        guard !didInstallContent else { return }
+        didInstallContent = true
 
         enableExpandedDisplayMode()
 
+        let monitor = PowerMonitor()
+        let widget = TodayWidgetView()
         widget.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(widget)
         NSLayoutConstraint.activate([
@@ -62,7 +129,8 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         tap.cancelsTouchesInView = false
         widget.addGestureRecognizer(tap)
 
-        preferredContentSize = CGSize(width: 0, height: minimumHeight)
+        self.monitor = monitor
+        self.widget = widget
 
         // 每秒一次的重采样由 `PowerMonitor` 驱动；这里只订阅它的快照。
         // `PowerMonitor` 是 `@MainActor` 隔离的，所以订阅与回调都在主 actor 上。
@@ -72,11 +140,13 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         // 会拦下来的写法，为了一个本来就自动的行为去绕它不划算。
         snapshotSubscription = monitor.$snapshot
             .sink { [weak self] _ in self?.refresh() }
+
+        refresh()
     }
 
-    // MARK: 刷新
-
     private func refresh() {
+        guard let monitor, let widget else { return }
+        placeholder?.isHidden = true
         widget.apply(monitor.snapshot,
                      headline: monitor.headline,
                      resistance: monitor.pathResistance)
@@ -105,8 +175,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 那个属性是 `NSExtensionContext` 的一个分类方法，实现在
     /// **`NotificationCenter.framework`** 里；而较新的 SDK 已经把它的声明并进了 UIKit，
     /// 于是 Swift 调用它只生成 `objc_msgSend`、不产生任何链接依赖 —— 链接器看这个库
-    /// 「没被用到」，就把它从 appex 的加载列表里丢掉了（本工程的 appex 确实没有链
-    /// NotificationCenter；能正常显示的 CPU-X，那个 appex 是链了的）。
+    /// 「没被用到」，就把它从 appex 的加载列表里丢掉了。
     ///
     /// 后果在真机上才显现：那个分类根本没注册，直接调就是 `unrecognized selector`
     /// —— 扩展在 `viewDidLoad` 里当场崩掉，负一屏显示「无法载入」。
@@ -151,6 +220,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     ///
     /// 只有变化超过半点时才会写回，否则会自己触发一轮新的布局，形成死循环。
     private func updatePreferredHeight() {
+        guard let widget else { return }
         let width = view.bounds.width
         guard width > 1 else { return }
 
@@ -164,26 +234,10 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         preferredContentSize = CGSize(width: width, height: height)
     }
 
-    // MARK: 生命周期 —— 只有可见时才跑秒级刷新
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        // `PowerMonitor.start()` 就是一个 1 秒的重采样循环，和 CPU-X 里那个
-        // NSTimer 等价：进程活着就一直在跑。重复调用是幂等的。
-        monitor.start()
-        refresh()
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        // 滑走 / 锁屏后停止重采样，别在后台空转耗电。已记录的会话保持打开。
-        monitor.pause()
-    }
-
     // MARK: NCWidgetProviding
 
     /// 系统在负一屏不可见时偶尔要一个快照。这里不去重读传感器：
-    /// 真正的刷新由 `viewWillAppear` 那个 1 秒循环负责，而重读会碰主 actor 状态，
+    /// 真正的刷新由那个 1 秒循环负责，而重读会碰主 actor 状态，
     /// 与这个协议要求的 nonisolated 上下文冲突。给系统一个「有数据」即可。
     nonisolated func widgetPerformUpdate(completionHandler: @escaping (NCUpdateResult) -> Void) {
         completionHandler(.newData)
