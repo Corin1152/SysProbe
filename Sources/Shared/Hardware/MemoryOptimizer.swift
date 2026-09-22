@@ -35,6 +35,10 @@ final class MemoryOptimizer: ObservableObject {
         guard !phase.isRunning else { return }
         phase = .running(progress: 0, allocated: 0)
 
+        // 先清本 App 自己的缓存，这部分是真实有效的。放在主 actor 上做，
+        // 免得在下面那个 `@Sendable` 闭包里碰 `URLCache.shared` 这种非 Sendable 全局。
+        URLCache.shared.removeAllCachedResponses()
+
         let cap = min(UInt64(Double(ProcessInfo.processInfo.physicalMemory) * MemoryReclaimer.maxFraction),
                       MemoryReclaimer.maxBytes)
 
@@ -42,9 +46,6 @@ final class MemoryOptimizer: ObservableObject {
         // 这个闭包是 `@Sendable` 的，所以它只能碰 `MemoryReclaimer`（非隔离）里的
         // 东西；回主线程更新状态走 `Task { @MainActor in }`。
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // 先清本 App 自己的缓存，这部分是真实有效的。
-            URLCache.shared.removeAllCachedResponses()
-
             let before = MemoryReclaimer.availableMemory()
             var pointers: [UnsafeMutableRawPointer] = []
             var allocated: UInt64 = 0

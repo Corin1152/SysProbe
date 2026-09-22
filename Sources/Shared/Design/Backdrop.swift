@@ -214,3 +214,26 @@ struct BarRow: View {
         }
     }
 }
+
+/// Used wherever a probe legitimately has nothing to report.
+///
+/// Lives here rather than next to the app's page chrome because the charts need it
+/// too, and the charts are shared with the Today extension — which does not compile
+/// the app's own sources.
+struct EmptyNote: View {
+    let text: LocalizedStringResource
+    var systemImage: String = "info.circle"
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.mwMuted)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
