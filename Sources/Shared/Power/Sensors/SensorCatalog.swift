@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import SwiftUI
 
 /// Where in the phone a temperature sensor sits.
 ///
@@ -22,18 +21,23 @@ nonisolated enum ThermalZone: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    /// 译文由 `Strings.text` 直接查表得到，返回 `String`。
+    ///
+    /// 这里一度返回 `LocalizedStringKey` —— 那是 SwiftUI 的类型，而本层是主 App 与
+    /// 负一屏扩展共用的。扩展那一侧必须完全脱离 SwiftUI（见 `TodayStyle`），
+    /// 所以整层的 `LocalizedStringKey` 都换掉了。
+    var title: String {
         switch self {
-        case .battery: return "Battery"
-        case .charger: return "Charge IC"
-        case .wirelessCoil: return "Wireless coil"
-        case .soc: return "SoC dies"
-        case .storage: return "Storage"
-        case .radio: return "Radios"
-        case .display: return "Display"
-        case .camera: return "Camera"
-        case .surface: return "Chassis"
-        case .other: return "Other sensors"
+        case .battery: return Strings.text("Battery")
+        case .charger: return Strings.text("Charge IC")
+        case .wirelessCoil: return Strings.text("Wireless coil")
+        case .soc: return Strings.text("SoC dies")
+        case .storage: return Strings.text("Storage")
+        case .radio: return Strings.text("Radios")
+        case .display: return Strings.text("Display")
+        case .camera: return Strings.text("Camera")
+        case .surface: return Strings.text("Chassis")
+        case .other: return Strings.text("Other sensors")
         }
     }
 
@@ -101,8 +105,8 @@ nonisolated enum SensorCatalog {
     /// The translated label for a sensor we recognise, or nil for one we do not.
     /// Callers show the hardware name itself in that case — `Charger VQ0u` is not
     /// copy, and must never reach the string catalog as a lookup key.
-    static func label(for name: String) -> LocalizedStringKey? {
-        labels[name].map { LocalizedStringKey($0) }
+    static func label(for name: String) -> String? {
+        labels[name].map { Strings.text($0) }
     }
 
     /// Sorts a sensor name into a zone by whole words rather than by substring.

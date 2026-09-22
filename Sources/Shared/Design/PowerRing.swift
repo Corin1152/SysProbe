@@ -11,7 +11,7 @@ struct PowerRing: View {
     let fullScale: Double
     /// Optional: with no reading at all the dial says so itself, and a caption
     /// underneath would only repeat it.
-    let caption: LocalizedStringKey?
+    let caption: String?
     var tint: Color = .mwAccent
     var size: CGFloat = 232
 
@@ -105,7 +105,9 @@ struct PowerRing: View {
                     .foregroundStyle(Color.mwMuted.opacity(0.6))
             }
             if let caption {
-                Text(caption)
+                // `caption` 已经是译文（`Strings.text` 查过表），不能再交给
+                // `Text(_: LocalizedStringKey)` —— 那会拿译文当键再查一次。
+                Text(verbatim: caption)
                     .font(AppFont.text(12, weight: .medium))
                     .foregroundStyle(Color.mwMuted)
                     .multilineTextAlignment(.center)

@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import SwiftUI
 
 /// One point in the rolling live chart.
 nonisolated struct LiveSample: Identifiable, Hashable {
@@ -416,27 +415,32 @@ final class PowerMonitor: ObservableObject {
     /// to carry a `primaryWatts` that answered a simpler version of the same
     /// question, which nothing called, while `DashboardView` open-coded this. One
     /// answer, in the layer that can actually give it.
-    var headline: (watts: Double, caption: LocalizedStringKey)? {
+    var headline: (watts: Double, caption: String)? {
         if snapshot.externalConnected {
             if let watts = snapshot.inputWatts {
                 // Written out rather than as a ternary in the tuple. The string
                 // extractor took only the first branch there — "from charger" never
                 // reached the catalog and the dial's caption fell back to English on
-                // every wired charge. `Text` and `LocalizedStringKey` literals want
-                // to be at their own return site.
-                if snapshot.isWirelessInput { return (watts, "from MagSafe") }
-                return (watts, "from charger")
+                // every wired charge. The literals want to be at their own return site.
+                if snapshot.isWirelessInput { return (watts, Strings.text("from MagSafe")) }
+                return (watts, Strings.text("from charger"))
             }
             // Wireless charging has no input-current sensor — the PMU exposes the
             // coil voltage and nothing to multiply it by — so rather than reading
             // "no reading" while the phone is visibly charging, the dial drops to
             // the battery side and says so. A measured zero is still a reading: a
             // phone sitting at 100 % on a charger is genuinely taking nothing.
-            if let watts = snapshot.batteryWatts { return (max(watts, 0), "into battery") }
+            if let watts = snapshot.batteryWatts {
+                return (max(watts, 0), Strings.text("into battery"))
+            }
             return nil
         }
-        if let watts = snapshot.batteryWatts, watts != 0 { return (abs(watts), "drawn from battery") }
-        if let watts = rateEstimateWatts { return (abs(watts), "from battery (%-rate estimate)") }
+        if let watts = snapshot.batteryWatts, watts != 0 {
+            return (abs(watts), Strings.text("drawn from battery"))
+        }
+        if let watts = rateEstimateWatts {
+            return (abs(watts), Strings.text("from battery (%-rate estimate)"))
+        }
         return nil
     }
 

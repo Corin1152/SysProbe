@@ -51,7 +51,7 @@ struct DashboardView: View {
                     .padding(.top, 4)
 
                 FlowRow(spacing: 6) {
-                    Pill(text: Text(snapshot.statusText),
+                    Pill(text: Text(verbatim: snapshot.statusText),
                          systemImage: plugged ? "bolt.fill" : "battery.50",
                          tint: plugged ? .mwAccent : .mwMuted)
                     if snapshot.isWirelessInput {
@@ -63,7 +63,7 @@ struct DashboardView: View {
                     if monitor.lowPowerMode || snapshot.lowPowerMode {
                         Pill(text: Text("Low Power"), systemImage: "battery.25", tint: .mwLoss)
                     }
-                    Pill(text: Text(monitor.thermalState.title),
+                    Pill(text: Text(verbatim: monitor.thermalState.title),
                          systemImage: monitor.thermalState.symbol,
                          tint: thermalTint)
                 }
@@ -106,7 +106,7 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Thermal throttling active")
                         .font(AppFont.text(14, weight: .semibold))
-                    Text(monitor.thermalState.chargingEffect)
+                    Text(verbatim: monitor.thermalState.chargingEffect)
                         .font(.caption)
                         .foregroundStyle(Color.mwMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -114,7 +114,7 @@ struct DashboardView: View {
                     // `%@ for %@` 且其中一个参数是 `Text`，格式串怎么解析没有
                     // 保证；拆开后只是一句带 `%@` 的普通文案，中文语序也顺。
                     HStack(spacing: 4) {
-                        Text(monitor.thermalState.title)
+                        Text(verbatim: monitor.thermalState.title)
                         Text("for \(Formatting.duration(Date.now.timeIntervalSince(monitor.thermalStateSince)))")
                     }
                     .mwMono(size: 10)

@@ -123,6 +123,39 @@ jobs:
             echo "::error::the appex calls setWidgetLargestAvailableDisplayMode: but never loads NotificationCenter.framework. On device the category is unregistered, so the extension crashes in viewDidLoad and the Today view shows \"Unable to Load\"."
             exit 1
           fi
+
+          # 3) appex 里不许出现 SwiftUI 符号。这一条是「无法载入」的**真正**根因。
+          #
+          #    传统 Today 扩展的内存预算与启动 watchdog 都远小于主 App；appex 里只要
+          #    还有 SwiftUI 的东西，dyld 就会把 SwiftUI.framework 映射进来，再叠上
+          #    `UIHostingController` 那一整套视图运行时 —— 在这点预算里就是启动即被
+          #    掐掉，系统显示「无法载入」。
+          #
+          #    判据来自对比，不是推测：能正常工作的 CPU-X，它的 appex 里 SwiftUI 符号
+          #    是 **0** 个（storyboard + UIKit 控件）；我们原来是 181 个。
+          #
+          #    用 `nm -u` 而不是 `grep` 二进制：未定义符号不会被 strip（dyld 要靠它
+          #    解析），所以这个判据在 Release 产物上依然成立。
+          swiftui=$(nm -u "$binary" 2>/dev/null | grep -c '\$s7SwiftUI' || true)
+          echo "SwiftUI symbols referenced by the appex: ${swiftui:-0}"
+          if [ "${swiftui:-0}" -gt 0 ]; then
+            echo "::error::the appex references ${swiftui} SwiftUI symbols. A traditional Today extension cannot afford the SwiftUI runtime — it gets killed at launch and the Today view shows \"Unable to Load\". Keep the widget on UIKit; see Sources/TodayExt/TodayWidgetView.swift."
+            exit 1
+          fi
+
+          # 4) 点击跳转：主 App 要注册 scheme，appex 要真的构造那个 URL。
+          #    缺任何一半都是**静默**失败 —— 点组件没反应，没有任何报错。
+          scheme=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$app/Info.plist" 2>/dev/null || true)
+          echo "host app URL scheme: ${scheme:-<missing>}"
+          if [ "$scheme" != "sysprobe" ]; then
+            echo "::error::the host app does not register the 'sysprobe' URL scheme. Tapping the widget calls extensionContext.open(\"sysprobe://open\") and would fail silently."
+            exit 1
+          fi
+          if ! grep -qa "sysprobe://open" "$binary"; then
+            echo "::error::the appex never builds the 'sysprobe://open' URL, so tapping the widget cannot open the app."
+            exit 1
+          fi
+
           echo "widget load checks passed"
           rm -rf "$work"
 

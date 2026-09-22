@@ -14,5 +14,26 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 	</dict>
+
+	<!-- 负一屏组件点一下就打开主 App。
+	     扩展那边走 `extensionContext.open(URL(string: "sysprobe://open")!)`
+	     （见 `TodayViewController.openApp`）—— 扩展里没有 `UIApplication`，
+	     这是唯一能唤起居主 App 的通道，所以主 App 必须先把这个 scheme 注册上，
+	     否则 `open` 会静默失败。
+	     与 CPU-X 同一条路：它注册的是 `armcpuz`。
+	     写成局部 plist 而不是 `INFOPLIST_KEY_*`：这是个数组，构建设置表达不了。 -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.corin.sysprobe</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sysprobe</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

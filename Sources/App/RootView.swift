@@ -19,6 +19,11 @@ struct RootView: View {
                 // 设置面板挂在 `tabs` 外面，而 `tabs` 会随语言换 identity —— 挂在里面的话，
                 // 用户在设置页切完语言，面板会被自己触发的重建关掉。
                 .sheet(isPresented: $app.showingSettings) { SettingsView() }
+                // 负一屏那一下点击会带 `sysprobe://open` 进来（见
+                // `TodayViewController.openApp`）。这里只把设置面板收起来 ——
+                // 用户是来看数据的，不该一进来就压着一个模态。分页不重置：
+                // 停在用户上次看的那一屏更自然。
+                .onOpenURL { _ in app.showingSettings = false }
                 // 采样的生命周期单独放进一个零尺寸视图。
                 //
                 // 独立出来是为了把每秒一次的 `PowerSnapshot` 发布挡在 `RootView` 之外：

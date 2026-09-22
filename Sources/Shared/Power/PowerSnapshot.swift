@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// One advertised USB-PD / HVC power profile from the adapter's menu.
 nonisolated struct PDProfile: Identifiable, Hashable {
@@ -228,12 +227,14 @@ nonisolated struct PowerSnapshot {
 
     var holdIsInferred: Bool { chargeStatusText == nil && isChargingOnHold }
 
-    var statusText: LocalizedStringKey {
-        if isChargingOnHold { return "Charging on hold" }
-        if fullyCharged && externalConnected { return "Full" }
-        if isCharging { return isFinishingCharge ? "Finishing charge" : "Charging" }
-        if externalConnected { return "Plugged in, not charging" }
-        return "On battery"
+    var statusText: String {
+        if isChargingOnHold { return Strings.text("Charging on hold") }
+        if fullyCharged && externalConnected { return Strings.text("Full") }
+        if isCharging {
+            return Strings.text(isFinishingCharge ? "Finishing charge" : "Charging")
+        }
+        if externalConnected { return Strings.text("Plugged in, not charging") }
+        return Strings.text("On battery")
     }
 
     /// Minutes to full while charging, to empty otherwise.

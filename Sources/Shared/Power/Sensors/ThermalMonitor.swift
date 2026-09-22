@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// Watches the system's own thermal verdict.
 ///
@@ -36,24 +35,24 @@ final class ThermalMonitor {
 }
 
 extension ProcessInfo.ThermalState {
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
-        case .nominal: return "Nominal"
-        case .fair: return "Fair"
-        case .serious: return "Serious"
-        case .critical: return "Critical"
-        @unknown default: return "Unknown"
+        case .nominal: return Strings.text("Nominal")
+        case .fair: return Strings.text("Fair")
+        case .serious: return Strings.text("Serious")
+        case .critical: return Strings.text("Critical")
+        @unknown default: return Strings.text("Unknown")
         }
     }
 
     /// What the state means for charging specifically.
-    var chargingEffect: LocalizedStringKey {
+    var chargingEffect: String {
         switch self {
-        case .nominal: return "No thermal limit on charge current."
-        case .fair: return "Warming up. Charge current may be trimmed."
-        case .serious: return "Throttling: iOS is limiting charge current and clocks."
-        case .critical: return "Overheated: charging is suspended until the phone cools."
-        @unknown default: return "Unrecognised thermal state."
+        case .nominal: return Strings.text("No thermal limit on charge current.")
+        case .fair: return Strings.text("Warming up. Charge current may be trimmed.")
+        case .serious: return Strings.text("Throttling: iOS is limiting charge current and clocks.")
+        case .critical: return Strings.text("Overheated: charging is suspended until the phone cools.")
+        @unknown default: return Strings.text("Unrecognised thermal state.")
         }
     }
 

@@ -1,6 +1,6 @@
-import UIKit
-import SwiftUI
+import Combine
 import NotificationCenter
+import UIKit
 
 /// 负一屏（Today View）小组件。
 ///
@@ -13,6 +13,11 @@ import NotificationCenter
 /// `widgetPerformUpdate` 提供一个快照。传统扩展自 iOS 14 起被标记废弃、
 /// iOS 18 起被移除 —— 而本机（iPhone X）的系统封顶就是 iOS 16.x，所以不受影响。
 ///
+/// **界面是纯 UIKit 的**（`TodayWidgetView`），不是 SwiftUI。原因写在那个类型的
+/// 文档里：用 `UIHostingController` 装 SwiftUI 会让 appex 拖进整个 SwiftUI 运行时，
+/// 而扩展的内存预算与启动 watchdog 撑不起它 —— 症状就是负一屏显示「无法载入」。
+/// 能正常工作的 CPU-X，它的 appex 里 SwiftUI 符号是 0。
+///
 /// 类名显式暴露给 ObjC 运行时。`NSExtensionPrincipalClass` 要靠 `NSClassFromString`
 /// 找到这个类，而 Swift 给主模块里的类注册的运行时名字带着模块前缀
 /// （`TodayExtension.TodayViewController`）—— 一旦模块名变了、或系统那边按不带前缀的
@@ -22,43 +27,73 @@ import NotificationCenter
 final class TodayViewController: UIViewController, NCWidgetProviding {
 
     private let monitor = PowerMonitor()
-    private var hosting: UIHostingController<TodayContentView>?
+    private let widget = TodayWidgetView()
+    private var snapshotSubscription: AnyCancellable?
 
-    /// 收起态以下的高度下限。展开态的高度按内容实测（见 `updatePreferredHeight`），
-    /// 内容少时也不至于塌成一条。
-    private let minimumHeight: CGFloat = 520
+    /// 收起态以下的高度下限。
+    private let minimumHeight: CGFloat = 110
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        // 文案由扩展自己的 `en.lproj` / `zh-Hans.lproj` 提供（两份都打进了 appex），
-        // SwiftUI 按环境里的 locale 去挑，系统是中文就是中文。
+        // 文案由扩展自己的 `en.lproj` / `zh-Hans.lproj` 提供（两份都打进了 appex）。
         //
         // 语言只能跟随系统：工程里没有 App Group entitlement，扩展读不到主 App 的
-        // `UserDefaults`，所以设置页里那个语言开关管不到这一屏。`AppFont` 读的是
-        // `AppLanguage.current` 这个全局，这里先给它落一个值。
+        // `UserDefaults`，所以设置页里那个语言开关管不到这一屏。`TodayFont` 与
+        // `Strings.text` 读的都是 `AppLanguage.current` 这个全局，这里先给它落一个值。
         AppLanguage.current = .systemPreferred
 
         view.backgroundColor = .clear
 
         enableExpandedDisplayMode()
+
+        widget.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(widget)
+        NSLayoutConstraint.activate([
+            widget.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            widget.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            widget.topAnchor.constraint(equalTo: view.topAnchor),
+            widget.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        // 点一下整块组件就打开主 App。CPU-X 走的是同一条路：主 App 注册一个自定义
+        // URL scheme，扩展这边用 `extensionContext.open(_:)` 把它唤起来。
+        let tap = UITapGestureRecognizer(target: self, action: #selector(openApp))
+        tap.cancelsTouchesInView = false
+        widget.addGestureRecognizer(tap)
+
         preferredContentSize = CGSize(width: 0, height: minimumHeight)
 
-        let host = UIHostingController(rootView: TodayContentView(monitor: monitor))
-        host.view.backgroundColor = .clear
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-
-        addChild(host)
-        view.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        host.didMove(toParent: self)
-        hosting = host
+        // 每秒一次的重采样由 `PowerMonitor` 驱动；这里只订阅它的快照。
+        // `PowerMonitor` 是 `@MainActor` 隔离的，所以订阅与回调都在主 actor 上。
+        //
+        // 不写 `deinit { cancel() }`：`AnyCancellable` 释放时自己就会取消，而
+        // `deinit` 是非隔离的 —— 在那里碰一个主 actor 隔离的存储属性是 Swift 6
+        // 会拦下来的写法，为了一个本来就自动的行为去绕它不划算。
+        snapshotSubscription = monitor.$snapshot
+            .sink { [weak self] _ in self?.refresh() }
     }
+
+    // MARK: 刷新
+
+    private func refresh() {
+        widget.apply(monitor.snapshot,
+                     headline: monitor.headline,
+                     resistance: monitor.pathResistance)
+        updatePreferredHeight()
+    }
+
+    // MARK: 点击跳转
+
+    @objc private func openApp() {
+        guard let url = URL(string: Self.hostAppURL) else { return }
+        // `extensionContext` 是扩展唯一能唤起居主 App 的通道 —— 扩展里没有
+        // `UIApplication`（那个 API 在 appex 上编译就过不去）。
+        extensionContext?.open(url, completionHandler: nil)
+    }
+
+    /// 与主 App 的 `CFBundleURLTypes` 里注册的 scheme 一致（见 `Support/SysProbe-Info.plist`）。
+    private static let hostAppURL = "sysprobe://open"
 
     // MARK: 展开态
 
@@ -68,7 +103,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     ///
     /// **这里刻意不直接写 `extensionContext?.widgetLargestAvailableDisplayMode = .expanded`。**
     /// 那个属性是 `NSExtensionContext` 的一个分类方法，实现在
-    /// **`NotificationCenter.framework`** 里；而 iOS 26 SDK 已经把它的声明并进了 UIKit，
+    /// **`NotificationCenter.framework`** 里；而较新的 SDK 已经把它的声明并进了 UIKit，
     /// 于是 Swift 调用它只生成 `objc_msgSend`、不产生任何链接依赖 —— 链接器看这个库
     /// 「没被用到」，就把它从 appex 的加载列表里丢掉了（本工程的 appex 确实没有链
     /// NotificationCenter；能正常显示的 CPU-X，那个 appex 是链了的）。
@@ -94,15 +129,13 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 把 `NotificationCenter.framework` 加载进本进程（懒执行，只做一次）。
     ///
     /// 为什么用 `dlopen` 而不是在 `project.yml` 里加 `-framework NotificationCenter`：
-    /// 链接器会做 `-dead_strip_dylibs` —— 本工程的 appex 就被它丢掉了用不到的
-    /// `Charts.framework`；而分类方法不是符号、引用不到，加了照样会被丢掉。
+    /// 链接器会做 `-dead_strip_dylibs`；而分类方法不是符号、引用不到，加了照样会被丢掉。
     /// `dlopen` 绕开链接期，直接把库拉进来。
     ///
-    /// 系统框架，允许 dlopen；`HIDSensors` 读 IOKit 用的也是同一招。
+    /// 返回值显式丢掉：这个 `static let` 的类型是 `Void`（它只负责「加载」这个副作用），
+    /// 而 `dlopen` 返回的是句柄。丢掉的那个句柄不该被 `dlclose` —— 分类注册在
+    /// 进程生命期里都要在。
     private static let loadNotificationCenter: Void = {
-        // 返回值显式丢掉：这个 `static let` 的类型是 `Void`（它只负责「加载」这个副作用），
-        // 而 `dlopen` 返回的是句柄。丢掉的那个句柄不该被 `dlclose` —— 分类注册在
-        // 进程生命期里都要在。
         _ = dlopen("/System/Library/Frameworks/NotificationCenter.framework/NotificationCenter",
                    RTLD_NOW)
     }()
@@ -118,12 +151,13 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     ///
     /// 只有变化超过半点时才会写回，否则会自己触发一轮新的布局，形成死循环。
     private func updatePreferredHeight() {
-        guard let host = hosting else { return }
         let width = view.bounds.width
         guard width > 1 else { return }
 
-        let fitted = host.sizeThatFits(in: CGSize(width: width,
-                                                  height: .greatestFiniteMagnitude))
+        let fitted = widget.systemLayoutSizeFitting(
+            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel)
         let height = max(minimumHeight, fitted.height.rounded(.up))
         guard preferredContentSize.width != width
                 || abs(preferredContentSize.height - height) > 0.5 else { return }
@@ -137,6 +171,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         // `PowerMonitor.start()` 就是一个 1 秒的重采样循环，和 CPU-X 里那个
         // NSTimer 等价：进程活着就一直在跑。重复调用是幂等的。
         monitor.start()
+        refresh()
     }
 
     override func viewWillDisappear(_ animated: Bool) {

@@ -41,8 +41,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "1.4.0"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "1.5.0"
+        CURRENT_PROJECT_VERSION: "5"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -71,21 +71,27 @@ targets:
   TodayExtension:
     type: app-extension
     platform: iOS
-    # 只吃 Power 与 Design：扩展不需要 Hardware 那一套（Mach / getifaddrs / 内存分配），
-    # 少链接一点，也避免把与扩展无关的代码带进 appex。
+    # 只吃 Power 与 Localization：扩展不需要 Hardware 那一套（Mach / getifaddrs /
+    # 内存分配），也**不再需要 Design** —— 那一层整份建立在 SwiftUI 之上。
+    #
+    # 这里曾经把 `Sources/Shared/Design` 链进来，好让负一屏复用主 App 的
+    # `Backdrop` / `Panel` / `Metric`。代价是 appex 被拖进整个 SwiftUI 运行时
+    # （实测 181 个 SwiftUI 符号），而传统 Today 扩展的内存预算与启动 watchdog
+    # 撑不起它 —— 负一屏于是显示「无法载入」。
+    #
+    # 现在这一屏是纯 UIKit（`Sources/TodayExt/TodayWidgetView.swift`），
+    # `Shared/Power` 也去掉了 `LocalizedStringKey`，整条链上再没有一处 SwiftUI。
+    # CI 有断言卡住这一点，别再把 Design 加回来。
     sources:
       - path: Sources/TodayExt
       - path: Sources/Shared/Power
-      - path: Sources/Shared/Design
-      # 扩展也要文案表与 `Bundle.main` 的替身：`Theme.AppFont` 依赖语言、
-      # `Backdrop` 那几个组件依赖 `LocalizedStringKey`。
       - path: Sources/Shared/Localization
     settings:
       base:
         PRODUCT_NAME: TodayExtension
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.today
-        MARKETING_VERSION: "1.4.0"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "1.5.0"
+        CURRENT_PROJECT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist
