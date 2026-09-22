@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>充电控制</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- 顶部标签栏 -->
+<div class="tabs">
+  <div class="tab on" data-tab="control" data-i18n="tab_control">充电控制</div>
+  <div class="tab"    data-tab="battery" data-i18n="tab_battery">电池信息</div>
+</div>
+
+<!-- ══════════ Tab 1：充电控制 ══════════ -->
+<div class="pane on" id="pane-control">
+
+  <div class="sect-title" data-i18n="sec_basic">基础</div>
+  <div class="card">
+    <div class="row">
+      <span class="lbl" data-i18n="enable">启用</span>
+      <span class="sw" id="sw-enable"></span>
+    </div>
+    <div class="row" id="row-mode">
+      <span class="lbl" data-i18n="mode">模式</span>
+      <span class="val strong" id="val-mode">—</span>
+    </div>
+    <div class="hint" id="hint-mode"></div>
+    <div class="row" id="row-freq">
+      <span class="lbl" data-i18n="update_freq">更新频率</span>
+      <span class="val strong" id="val-freq">—</span>
+    </div>
+    <div class="hint" data-i18n="update_freq_desc"></div>
+    <div class="row" id="row-action">
+      <span class="lbl" data-i18n="action">行为</span>
+      <span class="val strong" id="val-action">—</span>
+    </div>
+  </div>
+
+  <div class="sect-title" data-i18n="sec_capacity">电量阈值</div>
+  <div class="card">
+    <div class="row nb">
+      <span class="lbl" data-i18n="start_charge">低于 (%) 开始充电</span>
+      <span class="val strong accent" id="val-below">—</span>
+    </div>
+    <div class="slider">
+      <input type="range" id="rg-below" min="10" max="80" step="5">
+      <div class="ticks"><span>10%</span><span>30%</span><span>50%</span><span>70%</span><span>80%</span></div>
+    </div>
+    <div class="row nb">
+      <span class="lbl" data-i18n="stop_charge">高于 (%) 停止充电</span>
+      <span class="val strong battery" id="val-above">—</span>
+    </div>
+    <div class="slider">
+      <input type="range" id="rg-above" min="30" max="100" step="5">
+      <div class="ticks"><span>30%</span><span>50%</span><span>70%</span><span>90%</span><span>100%</span></div>
+    </div>
+  </div>
+
+  <div class="sect-title" data-i18n="sec_temp">温度控制</div>
+  <div class="card">
+    <div class="row">
+      <span class="lbl" data-i18n="temp_ctrl">温度控制</span>
+      <span class="sw accent" id="sw-temp"></span>
+    </div>
+    <div class="row nb">
+      <span class="lbl" data-i18n="stop_charge">高于 (°C) 停止充电</span>
+      <span class="val strong" id="val-tstop">—</span>
+    </div>
+    <div class="slider">
+      <input type="range" id="rg-tstop" min="20" max="45" step="1">
+      <div class="ticks"><span>20°</span><span>25°</span><span>30°</span><span>35°</span><span>45°</span></div>
+    </div>
+    <div class="row nb">
+      <span class="lbl" data-i18n="start_charge">低于 (°C) 恢复充电</span>
+      <span class="val strong" id="val-tstart">—</span>
+    </div>
+    <div class="slider">
+      <input type="range" id="rg-tstart" min="10" max="40" step="1">
+      <div class="ticks"><span>10°</span><span>20°</span><span>30°</span><span>40°</span></div>
+    </div>
+  </div>
+
+  <div class="sect-title" data-i18n="sec_adv">高级</div>
+  <div class="card">
+    <div class="row">
+      <span class="lbl" data-i18n="adv_prefer_smart">使用 SmartBattery</span>
+      <span class="sw" id="sw-smart"></span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="adv_predictive_inhibit_charge">智能停充</span>
+      <span class="sw" id="sw-inhibit"></span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="adv_disable_inflow">停充时启用禁流</span>
+      <span class="sw" id="sw-inflow"></span>
+    </div>
+    <div class="row" id="row-thermal">
+      <span class="lbl" data-i18n="adv_thermal_simulate">热模拟</span>
+      <span class="val strong" id="val-thermal">—</span>
+    </div>
+    <div class="row" id="row-ppm">
+      <span class="lbl" data-i18n="adv_ppm_simulate">PPM 模拟</span>
+      <span class="val strong" id="val-ppm">—</span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="adv_limit_inflow">限流</span>
+      <span class="sw" id="sw-limit"></span>
+    </div>
+    <div class="row" id="row-reset">
+      <span class="lbl danger" data-i18n="reset">重置全部设置</span>
+      <span class="val">›</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════ Tab 2：电池信息 ══════════ -->
+<div class="pane" id="pane-battery">
+
+  <div class="card">
+    <div class="row">
+      <span class="lbl" data-i18n="CurrentCapacity">当前电量</span>
+      <span class="bar"><i id="bar-cap"></i><span id="txt-cap">—</span></span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="Health">健康度</span>
+      <span class="bar"><i id="bar-health"></i><span id="txt-health">—</span></span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="Temperature">温度</span>
+      <span class="bar"><i id="bar-temp"></i><span id="txt-temp">—</span></span>
+    </div>
+    <div class="row">
+      <span class="lbl" data-i18n="IsCharging">正在充电</span>
+      <span class="sw" id="sw-charging"></span>
+    </div>
+    <div class="hint" data-i18n="charge_btn_desc"></div>
+    <div class="row">
+      <span class="lbl" data-i18n="BatteryInstalled">电池已安装</span>
+      <span class="sw accent" id="sw-installed"></span>
+    </div>
+  </div>
+
+  <div class="sect-title" data-i18n="sec_params">电池参数</div>
+  <div class="card">
+    <div class="row"><span class="lbl" data-i18n="CycleCount">循环次数</span><span class="val strong" id="v-cycle">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="DesignCapacity">设计容量</span><span class="val strong" id="v-design">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="NominalChargeCapacity">实际容量</span><span class="val strong" id="v-nominal">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="Amperage">电流</span><span class="val strong" id="v-amp">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="BootVoltage">开机电压</span><span class="val strong" id="v-bootv">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="Voltage">电压</span><span class="val strong" id="v-volt">—</span></div>
+    <div class="row"><span class="lbl" data-i18n="Serial">序列号</span><span class="val" id="v-serial">—</span></div>
+  </div>
+
+  <div class="foot" id="foot-update"></div>
+</div>
+
+<!-- 通用选择弹层 -->
+<div class="sheet" id="sheet">
+  <div class="sheet-box">
+    <div class="sheet-title" id="sheet-title"></div>
+    <div class="sheet-list" id="sheet-list"></div>
+    <div class="sheet-cancel" data-i18n="cancel">取消</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

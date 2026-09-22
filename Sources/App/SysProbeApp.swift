@@ -8,6 +8,9 @@ struct SysProbeApp: App {
     @StateObject private var monitor = PowerMonitor()
     @StateObject private var hardware = HardwareMonitor()
     @StateObject private var optimizer = MemoryOptimizer()
+    /// 充电控制。它管着 1230 端口上那个守护进程的存活，以及从它那里读回来的
+    /// 配置与电池读数 —— 见 `ChargeControlService`。
+    @StateObject private var charge = ChargeControlService()
 
     init() {
         // 语言要在第一帧之前就位。`AppFont` 与 `Strings.text` 读的是
@@ -26,6 +29,7 @@ struct SysProbeApp: App {
                 .environmentObject(monitor)
                 .environmentObject(hardware)
                 .environmentObject(optimizer)
+                .environmentObject(charge)
                 // 转场（启动第一帧、切分页、弹／收设置页）里若有一帧还没画上内容，
                 // 露出来的就是窗口底色。铺一层画布色，省得闪出系统白／系统黑。
                 .background(Color.mwCanvas.ignoresSafeArea())

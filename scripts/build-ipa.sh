@@ -45,6 +45,16 @@ overrides=()
 [ -z "${CURRENT_PROJECT_VERSION:-}" ] || overrides+=("CURRENT_PROJECT_VERSION=$CURRENT_PROJECT_VERSION")
 echo "==> Version ${MARKETING_VERSION:-(project file)} build ${CURRENT_PROJECT_VERSION:-(project file)}"
 
+# 充电守护进程。
+#
+# **刻意不放在 Sources/ 里当普通资源** —— 那样 Xcode 会去猜一个没有扩展名的
+# Mach-O 是什么类型，而且本地没下载过时 XcodeGen 会因为路径不存在直接失败。
+# 它由这个脚本在打包阶段直接拷进 .app，见下面的 Packaging 一段。
+#
+# 先取再构建：下载失败（网络、上游删了 release、校验值对不上）应该在这里就炸，
+# 而不是等 xcodebuild 跑完十分钟之后才报。
+bash scripts/fetch-daemon.sh
+
 # 生成 .xcodeproj。仓库里不提交工程文件，避免手写 pbxproj 出错；
 # 每次构建都由 project.yml 重新生成，保证与目录结构一致。
 if ! command -v xcodegen >/dev/null 2>&1; then
@@ -86,6 +96,18 @@ rm -rf "$BUILD_DIR/Payload"
 mkdir -p "$BUILD_DIR/Payload" "$EXPORT_DIR"
 cp -R "$APP" "$BUILD_DIR/Payload/"
 rm -rf "$BUILD_DIR/Payload/$SCHEME.app/_CodeSignature"
+
+# 充电守护进程放进包根目录。
+#
+# 位置不是随便定的：它对**裸可执行文件**调 `NSBundle.mainBundle.bundlePath`，
+# 而裸可执行的 mainBundle 就是它所在的那个目录。放在 PlugIns/ 或 Resources/
+# 底下都会让它的 web root 指错地方 —— 而它不会报错，只是所有静态请求 404。
+# 放在包根目录，它和 `www/` 才在同一层。
+cp Sources/ChargeControl/Resources/ChargeLimiterDaemon "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"
+# zip 保留执行位，装到设备上才起得来。上游已经 strip 过，这里不再动它 ——
+# 二次 strip 没有好处，反而会改掉校验值。
+chmod 755 "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"
+
 # 链接器会把每个目标文件的绝对路径记进符号表（N_OSO），-file-prefix-map 覆盖不到，
 # 剥掉调试与本地符号即可去掉。dSYM 仍留在 DerivedData 里备用。
 xcrun strip -S -x "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME"
@@ -95,6 +117,37 @@ while IFS= read -r -d '' appex; do
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
   xcrun strip -S -x "$appex/$executable"
 done < <(find "$BUILD_DIR/Payload/$SCHEME.app" -name '*.appex' -type d -print0)
+
+# ── 签名 ────────────────────────────────────────────────────────────────────
+#
+# 这个包**必须**带 entitlements 才能工作，所以构建时就要签一次 —— 尽管它是个
+# 「未签名 ipa」。
+#
+# 原因：TrollStore 安装时会**保留** IPA 里已经存在的 entitlements。而充电控制
+# 要 `posix_spawn` 一个 root 子进程，靠的正是 Support/SysProbe.entitlements 里的
+# `platform-application` / `persona-mgmt` / `no-sandbox` / `no-container`。
+# 少了它们，包照样能装、界面照样能开、开关照样能点，但**充电一点都停不下来**，
+# 而且不会有任何报错 —— 这是整个集成里最难从代码侧看出来的失败模式。
+#
+# 用 `ldid -S`（ad-hoc 签名 + 指定 entitlements）而不是 `codesign`：
+# `codesign` 要一个可用的签名身份，而这里本来就不该有身份 —— 侧载包的最终签名
+# 由用户在设备上做（巨魔 / AltStore / SideStore / Sideloadly）。
+#
+# 顺序是 strip 之后才签，反过来会被 strip 作废。
+#
+# **扩展不签。** 它现在没有 entitlements、跑得好好的，就别动它 —— 这一条不是
+# 省事，是「不要在没有设备可测的情况下改动已经在工作的东西」。
+ENTITLEMENTS="Support/SysProbe.entitlements"
+if ! command -v ldid >/dev/null 2>&1; then
+  echo "==> ldid not found, installing"
+  brew install ldid
+fi
+for binary in "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME" \
+              "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"; do
+  ldid -S"$ENTITLEMENTS" "$binary"
+done
+echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS"
+
 # 包名带上版本号：`SysProbe-0.0.6.ipa`。取不到版本号时退回 `unsigned` ——
 # 宁可叫 `SysProbe-unsigned.ipa`，也不要出现 `SysProbe-.ipa` 这种残名。
 IPA_NAME="$SCHEME-${MARKETING_VERSION:-unsigned}.ipa"
@@ -126,6 +179,55 @@ if grep -ral "$HOME" "$work" >/dev/null 2>&1; then
   echo "::warning::the ipa still references the build machine's home directory"
   grep -ral "$HOME" "$work" | sed 's/^/  /'
 fi
+
+# ── 充电控制 ────────────────────────────────────────────────────────────────
+#
+# 下面这几条守的全部是**静默失败**：包能装、界面能开、开关能点，
+# 但充电一点都停不下来，而且哪里都不会报错。所以逐条在这里卡死。
+daemon="$app_dir/ChargeLimiterDaemon"
+if [ ! -f "$daemon" ]; then
+  echo "::error::ChargeLimiterDaemon is missing from the app bundle. The charge control page would open and its switches would move, but nothing would ever stop charging."
+  exit 1
+fi
+if [ ! -x "$daemon" ]; then
+  echo "::error::ChargeLimiterDaemon is in the bundle but not executable. posix_spawn would fail, the daemon would never start, and the page would just sit there."
+  exit 1
+fi
+echo "  daemon     : ChargeLimiterDaemon ($(wc -c < "$daemon" | tr -d ' ') bytes, executable)"
+
+# 守护进程的 web root。它读的是 `NSBundle.mainBundle.bundlePath + "/www"` ——
+# 对一个裸可执行文件来说 mainBundle 就是它所在的目录。所以 `www/` 必须与它同级，
+# 且**目录名本身**是契约。被展平到包根目录的话，所有静态请求 404，且无任何报错。
+if [ ! -f "$app_dir/www/index.html" ]; then
+  echo "::error::www/index.html is missing from the app bundle. The daemon serves its web interface from bundlePath + \"/www\"; if the folder got flattened, every static request 404s and nothing says so."
+  exit 1
+fi
+echo "  web root   : www/ ($(ls "$app_dir/www" | tr '\n' ' '))"
+
+# entitlements。`ldid -e` 打出来的就是签名里那份 plist。
+#
+# 主 App 与守护进程**都要有**：App 侧靠 persona-mgmt / no-sandbox / no-container
+# 才 spawn 得动一个 root 子进程；守护进程侧靠 powersource-write 才写得进 IOPMPS。
+main_binary="$app_dir/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_dir/Info.plist")"
+for target in "$main_binary" "$daemon"; do
+  entitlements="$(ldid -e "$target" 2>/dev/null || true)"
+  if [ -z "$entitlements" ]; then
+    echo "::error::$(basename "$target") carries no entitlements at all. TrollStore preserves whatever the ipa carries, so this would install and run but never be able to control charging."
+    exit 1
+  fi
+  for key in platform-application \
+             com.apple.private.persona-mgmt \
+             com.apple.private.security.no-sandbox \
+             com.apple.private.security.no-container \
+             com.apple.private.powersource-write; do
+    if ! printf '%s' "$entitlements" | grep -q "$key"; then
+      echo "::error::$(basename "$target") is missing the '$key' entitlement. Without it charging silently never stops — the UI looks fine the whole time."
+      exit 1
+    fi
+  done
+  echo "  entitlements: $(basename "$target") ok"
+done
+
 rm -rf "$work"
 
 echo

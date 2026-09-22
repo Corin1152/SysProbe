@@ -18,3 +18,9 @@ xcuserdata/
 # Swift Package Manager（当前未使用，留给以后）
 .build/
 .swiftpm/
+
+# 充电守护进程。由 scripts/fetch-daemon.sh 在构建时从上游 Release 下载并校验 sha256。
+#
+# **不要把它提交进来。** ChargeLimiter 是 GPL-3.0，而本仓库是 Apache-2.0 且公开 ——
+# 提交这个二进制等于在分发一个 GPL 作品，会把整个仓库拖进 copyleft。
+Sources/ChargeControl/Resources/ChargeLimiterDaemon

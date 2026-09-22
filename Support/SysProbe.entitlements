@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  SysProbe 主 App 的 entitlements。
+
+	  由 CI（`.github/workflows/build.yml`）用 `ldid -S` 签进 SysProbe.app 的主
+	  可执行文件；TrollStore 安装时会**保留** IPA 里已经存在的 entitlements，
+	  所以它们最终会原样生效。包根目录里的 ChargeLimiterDaemon 用的是同一份文件。
+
+	  ══════════════════════════════════════════════════════════════════════════
+	  这份清单的出处
+	  ══════════════════════════════════════════════════════════════════════════
+
+	  逐条抄自 ChargeLimiter 1.7 自己签名用的那份（`ChargeLimiter.app/ChargeLimiter`
+	  与 `ChargeLimiterDaemon` 里嵌的是**同一份**），只改了两个键：
+	  `application-identifier` 换成 SysProbe 的，去掉了 `get-task-allow`。
+
+	  刻意**不**做「按需裁剪」。这些条目里有相当一部分是为已经删掉的功能准备的
+	  （浮窗、飞行模式/蓝牙/亮度联动、历史统计），看着多余 —— 但 `daemon.mm` 在
+	  `serve()` 里仍然会调 `isBlueEnable()` / `isLPMEnable()` / `isSmartChargeEnable()`
+	  去初始化状态，少一条就可能让守护进程在启动时就崩掉。而它崩掉的症状是
+	  「1230 端口没人听」—— 跟「守护进程没被打进包」长得一模一样，极难区分。
+	  这套组合已经在 iPhone X / iOS 16.5.1 / TrollStore 上验证过能真正停充，
+	  就不要在没设备可测的情况下动它。
+
+	  ══════════════════════════════════════════════════════════════════════════
+	  为什么主 App 需要「脱离沙箱」这一组
+	  ══════════════════════════════════════════════════════════════════════════
+
+	  本 App 要 `posix_spawn` 一个 **root** 子进程（充电守护进程）：
+
+	    · `com.apple.private.persona-mgmt` —— 没它 `posix_spawnattr_set_persona_np`
+	      就失败，子进程只能以 mobile 身份跑；
+	    · `com.apple.private.security.no-sandbox` —— 普通 App 的沙箱里**根本没有
+	      `process-exec` 权限**，不脱沙箱连 `posix_spawn` 都调不动；
+	    · `com.apple.private.security.no-container` —— 子进程会继承父进程的容器限制，
+	      不脱容器的话守护进程写不了 `/var/root/aldente.conf`。
+
+	  副作用必须记下来，因为它反直觉：**脱了沙箱，一部分权限反而变紧** ——
+	  原来靠沙箱隐式授予的 IOKit 访问没了，得靠 `iokit-user-client-class` 显式补回来。
+	  这就是下面那条 `IOUserClient` 例外存在的原因，不是抄漏了。
+
+	  另一个副作用是 WKWebView 用不了（它要求 `container-required`）。这正是充电页
+	  用 SwiftUI 而不是网页的原因，见 `ChargeControlView` 类型头上的说明。
+	-->
+
+	<!-- ── 平台与沙箱 ─────────────────────────────────────────────────────── -->
+	<key>platform-application</key>
+	<true/>
+	<key>application-identifier</key>
+	<string>com.corin.sysprobe</string>
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.security.no-container</key>
+	<true/>
+	<key>com.apple.private.security.container-manager</key>
+	<true/>
+	<key>com.apple.private.MobileContainerManager.allowed</key>
+	<true/>
+	<key>com.apple.private.persona-mgmt</key>
+	<true/>
+	<key>com.apple.private.memorystatus</key>
+	<true/>
+	<key>com.apple.runningboard.process-state</key>
+	<true/>
+
+	<!-- ── 文件系统 ───────────────────────────────────────────────────────── -->
+	<!--
+	  绝对路径读写例外。守护进程的配置在 /var/root/aldente.conf（沿用 AlDente 的路径，
+	  所以本 App、ChargeLimiter、AlDente 共用同一份阈值设置），日志在同目录下。
+	  主 App 自己不需要写那儿 —— 它一律走 HTTP 问守护进程 —— 但这份清单是
+	  与守护进程共用的，所以条目留在这里。
+	-->
+	<key>com.apple.security.exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+	<key>com.apple.private.security.storage.AppBundles</key>
+	<true/>
+	<key>com.apple.private.security.storage.AppDataContainers</key>
+	<true/>
+
+	<!-- ── 电源：真正停充靠的就是这几条 ───────────────────────────────────── -->
+	<!--
+	  daemon.mm 对 IOPMPS / AppleSmartBattery 服务调 IORegistryEntrySetCFProperties，
+	  把 ExternalConnected 改成 false —— 系统据此认为「外部电源断了」，于是停止充电。
+	  这是整个移植里唯一真正起作用的一步，缺一条都只会「界面正常但充不停」。
+	-->
+	<key>com.apple.private.powersource-read</key>
+	<true/>
+	<key>com.apple.private.powersource-write</key>
+	<true/>
+	<key>com.apple.private.powersource-write-all</key>
+	<true/>
+	<key>com.apple.private.applesmartbattery-smcdatastream</key>
+	<true/>
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOUserClient</string>
+	</array>
+
+	<!-- ── 通知：「行为」选到「通知」时由守护进程发本地推送 ───────────────── -->
+	<key>SBAppUsesLocalNotifications</key>
+	<true/>
+	<key>com.apple.private.usernotifications.bundle-identifiers</key>
+	<true/>
+	<key>com.apple.usernotification.proxy</key>
+	<true/>
+	<key>com.apple.localnotification.schedulingproxy</key>
+	<true/>
+	<key>com.apple.usernotification.notificationregistrarproxy</key>
+	<true/>
+	<key>com.apple.usernotification.notificationschedulerproxy</key>
+	<true/>
+
+	<!-- ── 守护进程启动时要读的系统状态 ───────────────────────────────────── -->
+	<!--
+	  serve() 里会调 isBlueEnable() / isLPMEnable() / isSmartChargeEnable() 做初始化。
+	  对应的功能（飞行模式联动、低电量模式联动、SmartBattery）界面已经去掉了，
+	  但初始化这一步还在，权限也一并留着。
+	-->
+	<key>com.apple.springboard.launchapplications</key>
+	<true/>
+	<key>com.apple.SystemConfiguration.SCPreferences-write-access</key>
+	<array>
+		<string>preferences.plist</string>
+		<string>com.apple.radios.plist</string>
+		<string>com.apple.jetsam.plist</string>
+	</array>
+	<key>com.apple.coreduetd.allow</key>
+	<true/>
+	<key>com.apple.coreduetd.batterysaver.allow</key>
+	<true/>
+	<key>com.apple.coreduetd.context</key>
+	<true/>
+	<key>com.apple.backboard.displaybrightness</key>
+	<true/>
+	<key>com.apple.bluetooth.system</key>
+	<true/>
+	<key>com.apple.powerd.lowpowermode.allow</key>
+	<true/>
+	<key>com.apple.wifi.manager-access</key>
+	<true/>
+	<key>com.apple.Pasteboard.background-access</key>
+	<true/>
+	<key>com.apple.springboard.accessibility-window-hosting</key>
+	<true/>
+</dict>
+</plist>

@@ -37,12 +37,33 @@ targets:
     sources:
       - path: Sources/App
       - path: Sources/Shared
+      # 充电控制：守护进程的启动与看门狗（ChargeSpawn.c / ChargeControlService.swift）、
+      # HTTP 桥（ChargeBridge.swift）、界面（ChargeControlView.swift）。
+      #
+      # `Resources` 排除掉、下面单独作为 folder 引用加进来 —— 见那一段的说明。
+      - path: Sources/ChargeControl
+        excludes:
+          - "Resources"
+          - "Resources/**"
+      # 守护进程托管的网页界面。
+      #
+      # **必须是 `type: folder`（蓝色文件夹引用）**，不能让它当普通资源被展平：
+      # 守护进程读的是 `NSBundle.mainBundle.bundlePath + "/www"`，也就是说
+      # `SysProbe.app/www/` 这个层级本身是契约的一部分。按普通资源加进来，里面的
+      # `index.html` / `css/` / `js/` 会被平铺到包根目录，`www` 这个目录名就没了，
+      # 守护进程的 GET 处理器指向一个不存在的路径 —— 而它**不会报错**，
+      # 只是所有静态请求 404。
+      #
+      # 这一层同时是 App 之外的一道保险：界面出问题时，在 Safari 里打开
+      # `http://127.0.0.1:1230` 依然能手动停充（设置页里有这个地址）。
+      - path: Sources/ChargeControl/Resources/www
+        type: folder
     settings:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.7"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "0.0.8"
+        CURRENT_PROJECT_VERSION: "8"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -100,8 +121,8 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.7"
-        CURRENT_PROJECT_VERSION: "7"
+        MARKETING_VERSION: "0.0.8"
+        CURRENT_PROJECT_VERSION: "8"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

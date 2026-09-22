@@ -1,17 +1,19 @@
 # SysProbe
 
-iPhone 硬件信息 + 充电功率/适配器读数工具。三屏结构：
+iPhone 硬件信息 + 充电功率/适配器读数工具。四屏结构：
 
 | 屏 | 内容 |
 |---|---|
 | **Hardware** | CPU（型号/核心数/主频/实时占用/每核负载）、内存（分项占用 + 优化）、存储、网络（连着 Wi-Fi 就看 Wi-Fi，断了才显示蜂窝）、系统版本 |
 | **Power** | 充电功率大环、电芯电压/电流/温度、供电路径与转换效率、本次充电累计 |
 | **Adapter** | 适配器实际/额定功率、握手信息、广播供电规格（PDO）、实时供电轨、通路电阻 |
+| **Charge** | 充电控制（启停阈值、温度限制、高级项）与电池信息（健康度、循环次数、容量、电压电流） |
 
 外加一个**负一屏 Today Extension**，1 秒刷新，展示功率与适配器读数。
+（负一屏**不含**充电控制 —— 它只需要看数，不需要开关。）
 
-三屏右上角各有一个齿轮，进入同一个设置页（界面语言、充电时保持常亮、电池能量估算、
-诊断信息、致谢）。入口与面板都挂在视图树的根上，不归任何一页所有 —— 面板挂在分页里的话，
+四屏右上角各有一个齿轮，进入同一个设置页（界面语言、诊断信息、致谢）。
+入口与面板都挂在视图树的根上，不归任何一页所有 —— 面板挂在分页里的话，
 切语言时整棵树换 identity，会把面板连同自己一起关掉。
 
 ## 安装
@@ -22,6 +24,10 @@ iPhone 硬件信息 + 充电功率/适配器读数工具。三屏结构：
 - AltStore / SideStore / Sideloadly / Xcode 均可
 
 需要 iPhone，iOS 16.2 或更高。
+
+**用巨魔以外的工具侧载时，请确认它保留了包里的 entitlements。** Charge 屏要
+`posix_spawn` 一个 root 子进程，靠的就是它们；丢了的话包照样能装、界面照样能开、
+开关照样能点，但充电**一点都停不下来**，而且不会有任何报错。详见「充电控制」一节。
 
 ## 图标
 
@@ -42,12 +48,78 @@ python scripts/make-appicon.py Sources/App/Assets.xcassets/AppIcon.appiconset
 以及 `project.yml` 里的 `ASSETCATALOG_COMPILER_APPICON_NAME` 必须设 —— 不设的话
 catalog 照编，但图标不会写进 `Info.plist`，装上去就是个白方块，构建一声不吭。
 
+## 充电控制
+
+移植自 [ChargeLimiter](https://github.com/lich4/ChargeLimiter) 1.7（作者 lich4，**GPL-3.0**）。
+
+### 它是怎么工作的
+
+包根目录下有两个东西：
+
+```
+SysProbe.app/
+├── SysProbe                 ← 主 App
+├── ChargeLimiterDaemon      ← 守护进程（独立可执行文件）
+└── www/                     ← 守护进程托管的网页界面
+```
+
+App 一启动就检查 `127.0.0.1:1230`，没人监听就用 `posix_spawn` 把守护进程以 **root**
+身份拉起来（`Sources/ChargeControl/ChargeSpawn.c`）。守护进程绑上端口，对外只暴露一条
+接口：`POST /bridge`，body 是 `{"api": "...", ...}`，响应 `{"status": 0, "data": {...}}`。
+
+真正停充的是守护进程对 IOPMPS 服务调 `IORegistryEntrySetCFProperties`，把
+`ExternalConnected` 改成 false —— 系统据此认为外部电源断了，于是停止充电。
+**这一步必须 root**，所以整条链上 `platform-application` / `persona-mgmt` /
+`no-sandbox` / `no-container` / `powersource-write` 缺一不可。
+
+### App 被划掉之后还管不管用
+
+**管用。** 守护进程是独立进程，`main` 里对 TrollStore 环境显式
+`signal(SIGHUP, SIG_IGN)` + `signal(SIGTERM, SIG_IGN)`，系统拿它没办法；
+它自己挂在一条独立的 `NSRunLoop` 上，与 App 的生死无关。App 侧那个 10 秒一次的
+看门狗只负责「发现它不在了就重新拉起来」，不是它的生命线。
+
+### 为什么界面是 SwiftUI 而不是网页
+
+移植前评估过「把 web 前端改造成 SysProbe 的样子再塞进 WebView」，也照那个思路写了一份
+（就是随包发布的 `www/`）。真到落地时两个 WebView 都用不了：
+
+- **WKWebView**：本 App 必须带 `com.apple.private.security.no-container`（要 spawn
+  root 子进程），而 iOS 16 起 WKWebView 要求 `container-required`，两者互斥 ——
+  这是 ChargeLimiter 作者自己在 `ui.mm` 里写下的结论；
+- **UIWebView**：iOS 26 SDK 已把它从公开 API 里去掉，而 CI 跑在 Xcode 26 上，
+  编译都过不去。它没有替代品：这个 App 的场景就是不能用 WKWebView。
+
+所以 Charge 屏是原生 SwiftUI（`Sources/ChargeControl/ChargeControlView.swift`），
+复用 App 自己的 `Panel` / `BarRow` / 配色与字体。`www/` 仍然随包发布，有两个用处：
+它是守护进程的 web root（删掉只会多一种失败模式），同时也是一道保险 ——
+界面出问题时，在 Safari 里打开 `http://127.0.0.1:1230` 依然能手动停充。
+设置页的诊断区里有这个地址。
+
+### 几个要记住的点
+
+- **配置存在 `/var/root/aldente.conf`**（沿用 AlDente 的路径），所以本 App、
+  ChargeLimiter、AlDente 共用同一份阈值设置。换用哪个都不会丢配置。
+- **别和 ChargeLimiter 同时装。** 两个守护进程抢同一个 1230 端口，先起来的那个赢。
+- **守护进程的二进制不在这个仓库里。** ChargeLimiter 是 GPL-3.0，而本仓库是
+  Apache-2.0 且公开 —— 提交它等于在分发一个 GPL 作品，会把整个仓库拖进 copyleft。
+  它由 `scripts/fetch-daemon.sh` 在构建时从上游 Release 下载并校验 sha256。
+- 本地直接 `xcodebuild`（不走 `scripts/build-ipa.sh`）时包里**没有**守护进程，
+  Charge 屏会显示一句「这一版里没有充电控制服务」并停用所有开关。
+
 ## 为什么只能侧载
 
 Power 与 Adapter 两屏的读数来自 Apple 的**私有 IOKit 接口**（`AppleSmartBattery`、
-`IOPSCopyExternalPowerAdapterDetails`、`HID` 传感器服务等）。全部是只读访问，
-没有任何写入，也不需要任何私有 entitlement —— 但私有 API 意味着它**永远无法通过
-App Store 审核**。
+`IOPSCopyExternalPowerAdapterDetails`、`HID` 传感器服务等）。这几屏是**只读**的，
+不需要任何私有 entitlement —— 但私有 API 意味着它**永远无法通过 App Store 审核**。
+
+Charge 屏更进一步：它要 spawn 一个 root 子进程，并且真的往 IORegistry 里写。
+这需要 `Support/SysProbe.entitlements` 里那一组私有 entitlement，也就只能是侧载
+（巨魔 / AltStore / SideStore / Sideloadly）。
+
+副作用有两个，都反直觉，都写在 entitlements 文件的注释里：**脱了沙箱，一部分权限
+反而变紧**（原来靠沙箱隐式授予的 IOKit 访问没了，得靠 `iokit-user-client-class`
+显式补回来）；以及 **WKWebView 用不了**（它要求 `container-required`）。
 
 ## 负一屏为什么能 1 秒刷新
 
@@ -303,11 +375,24 @@ iOS 不允许任何 App 释放别的 App 的内存 —— 内存由内核按进�
 ## 构建
 
 ```bash
-brew install xcodegen
+brew install xcodegen ldid
 bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-<版本号>.ipa
 ```
 
 工程文件（`.xcodeproj`）不入库，每次构建由 `project.yml` 重新生成。
+
+构建分三步，顺序有讲究：
+
+1. `scripts/fetch-daemon.sh` —— 从上游 Release 下载 ChargeLimiter 的守护进程，
+   校验 sha256，落到 `Sources/ChargeControl/Resources/`（该文件被 `.gitignore` 忽略）。
+   **放在最前面**：下载失败该在这里就炸，而不是等 `xcodebuild` 跑完十分钟才报。
+2. `xcodegen` + `xcodebuild` —— 正常出未签名的 .app。
+3. 打包 + **`ldid -S` 签名** —— 把守护进程拷进包根目录，然后给主 App 与守护进程
+   签上 `Support/SysProbe.entitlements`。顺序是 strip 之后才签，反过来会被 strip 作废。
+
+第 3 步是这个包里唯一「未签名 ipa 却要签名」的地方：TrollStore 安装时会**保留**
+IPA 里已有的 entitlements，所以它们必须在构建时就签进去。扩展（`.appex`）**不签** ——
+它现在没有 entitlements、跑得好好的，就不要在没有设备可测的情况下动它。
 
 **工具链要求：Xcode 26 / Swift 6.2 或更新。** 代码里把 `nonisolated` 标注在类型与扩展
 声明上（`nonisolated struct` / `nonisolated extension`），并依赖
@@ -315,10 +400,13 @@ bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-<版本号>.ip
 错误会出现在编译深处且不点名真正原因，所以 CI 第一步就明确检查。
 
 CI 在 GitHub Actions 的 macOS runner 上跑同一套步骤，推送到 `main` 即构建，
-打 `v*` tag 会额外发布 Release。构建完还会断言两件容易静默失败的事：内嵌的 `.appex`
+打 `v*` tag 会额外发布 Release。构建完还会断言几件容易静默失败的事：内嵌的 `.appex`
 确实是 `com.apple.widget-extension`（万一退化成 WidgetKit，界面照样能装能显示，但刷新会
-悄悄掉到 5 分钟以上且不报任何错），以及图标确实接上了（`CFBundleIconName` 指向 `AppIcon`、
-`Assets.car` 存在、bundle 根目录有图标 PNG，另加一条对源 asset set 槽位完整性的检查）。
+悄悄掉到 5 分钟以上且不报任何错），图标确实接上了（`CFBundleIconName` 指向 `AppIcon`、
+`Assets.car` 存在、bundle 根目录有图标 PNG，另加一条对源 asset set 槽位完整性的检查），
+以及充电控制那三样 —— 守护进程在不在且可执行、`www/` 有没有被展平成普通资源、
+主 App 与守护进程的 entitlements 全不全。三条守的都是同一类失败：**包能装、界面能开、
+开关能点，但充电一点都停不下来，而且哪里都不报错。**
 
 顺带记一个坑：**不要断言 actool 输出了哪几个倍率**。Xcode 26 / iOS 26 SDK 只吐一张规范化
 的图标 PNG（`AppIcon60x60@2x.png`），其余倍率交给 `Assets.car`，这是新版图标管线而不是缺陷 ——
@@ -328,4 +416,10 @@ CI 在 GitHub Actions 的 macOS runner 上跑同一套步骤，推送到 `main` 
 
 Power / Adapter 两屏的取数层与设计系统移植自
 [MiniWatts](https://github.com/ResistanceTo/MiniWatts)（Apache License 2.0）。
+
+充电控制移植自 [ChargeLimiter](https://github.com/lich4/ChargeLimiter)
+（作者 lich4，**GNU GPL v3**）。其守护进程二进制**不包含在本仓库中** ——
+由 `scripts/fetch-daemon.sh` 在构建时从上游 Release 下载，仓库里只有下载地址与校验值。
+前端界面（`Sources/ChargeControl/Resources/www/`）为 SysProbe 自行重写。
+
 详见 `LICENSE` 与 `NOTICE`。

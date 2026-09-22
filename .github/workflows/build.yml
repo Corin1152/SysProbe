@@ -51,6 +51,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen || brew upgrade xcodegen
 
+      # 用来给主 App 与充电守护进程签 entitlements（见 scripts/build-ipa.sh）。
+      # 脚本里也有兜底安装，这里显式装一次只是让日志更干净、失败更早。
+      - name: Install ldid
+        run: brew install ldid || brew upgrade ldid
+
       - name: Take the version from the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: echo "MARKETING_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -298,6 +303,58 @@ jobs:
           find "$app" -name '*.lproj' | sed "s|$work/||" | sort | sed 's/^/  /'
           rm -rf "$work"
 
+      # 充电控制这一块，构建脚本已经把「守护进程在不在、可不可执行、www 有没有被展平、
+      # entitlements 全不全」全查过了（见 scripts/build-ipa.sh 末尾）。这里只补三件
+      # **脚本查不到、但同样会静默失效**的事：源头配置有没有被改坏。
+      - name: Check the charge control wiring
+        run: |
+          # 1) entitlements 文件必须能解析。它由 ldid 直接吃，格式错的话 ldid 会报错 ——
+          #    但如果哪天有人把它改成一份「合法但没内容」的 plist，签名会成功、
+          #    包也能装，只是充电永远不生效。
+          plutil -lint Support/SysProbe.entitlements
+          for key in platform-application \
+                     com.apple.private.persona-mgmt \
+                     com.apple.private.security.no-sandbox \
+                     com.apple.private.security.no-container \
+                     com.apple.private.powersource-write \
+                     com.apple.security.iokit-user-client-class; do
+            if ! plutil -p Support/SysProbe.entitlements | grep -q "$key"; then
+              echo "::error::Support/SysProbe.entitlements no longer declares '$key'."
+              exit 1
+            fi
+          done
+          echo "entitlements look complete"
+
+          # 2) `www/` 必须仍然是 folder 引用。
+          #
+          #    这是最容易被「顺手整理」掉的一行：`type: folder` 看起来多余，删掉之后
+          #    XcodeGen 照样生成工程、构建照样全绿，只是 `www` 这个目录名在包里没了，
+          #    守护进程的 web root 指向一个不存在的路径 —— 所有静态请求 404，
+          #    没有任何报错。（构建脚本会兜住这个症状，但那时候报的是「www 不见了」，
+          #    指不到这一行。）
+          if ! grep -A2 'Sources/ChargeControl/Resources/www' project.yml | grep -q 'type: folder'; then
+            echo "::error::Sources/ChargeControl/Resources/www is no longer a folder reference in project.yml. Without it the folder gets flattened into the bundle root, the daemon's web root stops existing, and every static request 404s silently."
+            exit 1
+          fi
+          echo "www is still a folder reference"
+
+          # 3) 前端与 Swift 客户端必须认同一组 api 名字。
+          #
+          #    这些名字来自守护进程的 `handleReq`，而那一边是 GPL、不在本仓库里，
+          #    所以只能在这里钉一份清单。改错了的症状是「某个开关点了没反应」，
+          #    且不报任何错。
+          #
+          #    清单只含**两边都在用**的 5 个。`set_inflow_status` 与 `get_statistics`
+          #    守护进程仍然提供，但移植后的界面已经没有对应功能，两边都不调用它们 ——
+          #    列进来只会让这条断言无缘无故地红。
+          for api in get_conf set_conf reset_conf get_bat_info set_charge_status; do
+            grep -q "\"$api\"" Sources/ChargeControl/ChargeBridge.swift || {
+              echo "::error::ChargeBridge.swift no longer calls the '$api' api."; exit 1; }
+            grep -q "'$api'" Sources/ChargeControl/Resources/www/js/app.js || {
+              echo "::error::www/js/app.js no longer calls the '$api' api."; exit 1; }
+          done
+          echo "bridge api names line up"
+
       - name: Upload ipa
         uses: actions/upload-artifact@v4
         with:
@@ -322,3 +379,15 @@ jobs:
           generate_release_notes: true
           body: |
             未签名构建 —— 安装前请用自己的凭证签名（巨魔 / AltStore / SideStore / Sideloadly）。
+
+            这个包带 entitlements（`platform-application` / `persona-mgmt` / `no-sandbox` /
+            `no-container` 等），因为充电控制需要 `posix_spawn` 一个 root 子进程。
+            巨魔安装时会保留它们；用其它工具侧载的话请确认工具没有把它们丢掉，
+            否则**充电控制会看起来能用、实际不生效**。
+
+            ---
+
+            充电控制部分移植自 [ChargeLimiter](https://github.com/lich4/ChargeLimiter) 1.7，
+            作者 lich4，以 **GPL-3.0** 发布。其守护进程二进制**不包含在本仓库中**，
+            由构建脚本在打包时从上游 Release 下载并校验 sha256（见
+            `scripts/fetch-daemon.sh`）。前端界面为 SysProbe 自行重写。

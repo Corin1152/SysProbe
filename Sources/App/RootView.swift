@@ -68,6 +68,9 @@ struct RootView: View {
             AdapterView(onOpenSettings: openSettings)
                 .tabItem { Label("Adapter", systemImage: "powerplug.fill") }
                 .tag(2)
+            ChargeControlView(onOpenSettings: openSettings)
+                .tabItem { Label("Charging", systemImage: "battery.100.bolt") }
+                .tag(3)
         }
         .tint(.mwAccent)
         .id(app.language)
@@ -82,6 +85,12 @@ struct RootView: View {
 struct MonitorLifecycle: View {
     @EnvironmentObject private var monitor: PowerMonitor
     @EnvironmentObject private var hardware: HardwareMonitor
+    /// 充电守护进程的看门狗也挂在这儿。
+    ///
+    /// 放在这里而不是 `ChargeControlView.onAppear`：那个页面要用户点进去才出现，
+    /// 而守护进程该在 App 一启动就确保活着 —— 用户装了这个 App 是为了让它一直管着
+    /// 充电，不是为了每次打开都先点一下「充电」分页。
+    @EnvironmentObject private var charge: ChargeControlService
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -89,6 +98,7 @@ struct MonitorLifecycle: View {
             .onAppear {
                 monitor.start()
                 hardware.start()
+                charge.start()
             }
             // iOS 16: the two-parameter `onChange(of:initial:)` is iOS 17-only, so the
             // first run is done explicitly in `onAppear`.
@@ -97,9 +107,13 @@ struct MonitorLifecycle: View {
                 case .active:
                     monitor.start()
                     hardware.start()
+                    charge.start()
                 case .background:
                     monitor.pause()
                     hardware.pause()
+                    // 只是停掉这边的定时器。守护进程是独立进程，App 退到后台
+                    // 乃至被划掉都不影响它 —— 见 `ChargeControlService` 类型头上的说明。
+                    charge.pause()
                 default:
                     break
                 }

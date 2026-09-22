@@ -35,5 +35,23 @@
 			</array>
 		</dict>
 	</array>
+
+	<!-- 充电控制页要访问 http://127.0.0.1:1230/bridge（守护进程的本地 HTTP 接口）。
+	     ATS 默认拦 http；这里只放开**本地**这一条，不做 NSAllowsArbitraryLoads ——
+	     那是 ChargeLimiter 原版的做法，它把整个 App 的明文请求全开了，
+	     而本 App 除了这个回环地址之外没有任何网络访问。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>

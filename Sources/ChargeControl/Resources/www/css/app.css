@@ -1,0 +1,126 @@
+/* ══════════════════════════════════════════════════════════
+   ChargeLimiter 前端 · 重写版样式
+   ──────────────────────────────────────────────────────────
+   色值取自 SysProbe 的 Theme.swift（浅色端 / 深色端成对）。
+
+   刻意避开的东西 —— 因为跑在 UIWebView 上（无 JIT）：
+     · backdrop-filter（毛玻璃）   · 大面积 box-shadow / 渐变
+     · transform / transition 动画  · 自定义字体
+   只用纯色、边框、圆角，滚动与点击才跟得上手。
+   ══════════════════════════════════════════════════════════ */
+
+:root{
+  --canvas:#eef1f6; --canvas-top:#f7f9fc; --card:#ffffff;
+  --stroke:rgba(10,10,10,.08);
+  --ink:#1b1f24; --ink2:#4a5560; --muted:#60687a;
+  --accent:#0086b3; --battery:#0e9b57; --loss:#b86a00;
+  --danger:#c5342b;
+  --t-cold:#2c7be5; --t-cool:#0e9b57; --t-warm:#b08900; --t-hot:#b86a00; --t-veryhot:#c5342b;
+  --track:#d6dbe3; --bar-bg:#e8ebf0;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --canvas:#06070a; --canvas-top:#0c1018; --card:#14171f;
+    --stroke:rgba(255,255,255,.08);
+    --ink:#e8ecf4; --ink2:#b9c3d4; --muted:#8c93a6;
+    --accent:#35dfff; --battery:#3fe08c; --loss:#ffb443;
+    --danger:#ff6058;
+    --t-cold:#4da3ff; --t-cool:#3fe08c; --t-warm:#f2d14b; --t-hot:#ffa340; --t-veryhot:#ff6058;
+    --track:#2a3040; --bar-bg:#232838;
+  }
+}
+
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--canvas); color:var(--ink);
+  font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;
+  font-size:15px; line-height:1.5;
+  padding-bottom:34px;
+  -webkit-text-size-adjust:100%;
+}
+
+/* ── 标签栏 ─────────────────────────────── */
+.tabs{display:flex; position:sticky; top:0; z-index:5;
+  background:var(--canvas-top); border-bottom:1px solid var(--stroke)}
+.tab{flex:1; text-align:center; padding:12px 0; font-size:14.5px; color:var(--muted)}
+.tab.on{color:var(--accent); font-weight:600; box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* ── 分页 ───────────────────────────────── */
+.pane{display:none; padding:0 14px}
+.pane.on{display:block}
+
+.sect-title{font-size:12px; font-weight:600; letter-spacing:.6px;
+  color:var(--muted); margin:16px 4px 7px}
+
+/* ── 卡片与行 ───────────────────────────── */
+.card{background:var(--card); border:1px solid var(--stroke);
+  border-radius:14px; padding:2px 15px; margin-bottom:12px}
+.row{display:flex; align-items:center; gap:12px;
+  padding:12px 0; border-bottom:1px solid var(--stroke); min-height:44px}
+.row:last-child, .row.nb{border-bottom:none}
+.row.nb{padding-bottom:2px}
+.lbl{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.val{color:var(--muted); font-size:14px; text-align:right;
+  max-width:52%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.val.strong{color:var(--ink); font-weight:500}
+.val.accent{color:var(--accent)}
+.val.battery{color:var(--battery)}
+.danger{color:var(--danger)}
+.hint{font-size:12px; color:var(--muted); padding:0 0 11px; line-height:1.5}
+.foot{font-size:11.5px; color:var(--muted); text-align:center; padding:14px 0 4px}
+
+/* ── 开关（纯 CSS，无动画以省开销）───────── */
+.sw{width:50px; height:30px; border-radius:15px; background:var(--track);
+  position:relative; flex:0 0 auto}
+.sw::after{content:""; position:absolute; top:2px; left:2px;
+  width:26px; height:26px; border-radius:50%; background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.sw.on{background:var(--battery)}
+.sw.on::after{left:22px}
+.sw.on.accent{background:var(--accent)}
+.sw.dis{opacity:.45}
+
+/* ── 滑块 ───────────────────────────────── */
+.slider{padding:2px 0 12px}
+input[type=range]{-webkit-appearance:none; width:100%; height:4px;
+  border-radius:2px; background:var(--track); outline:none; margin:14px 0 6px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+  width:22px; height:22px; border-radius:50%; background:#fff;
+  border:1px solid rgba(0,0,0,.12); box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.ticks{display:flex; justify-content:space-between;
+  font-size:10.5px; color:var(--muted)}
+
+/* ── 进度条 ─────────────────────────────── */
+.bar{height:22px; border-radius:11px; background:var(--bar-bg);
+  overflow:hidden; position:relative; flex:0 0 140px}
+.bar i{display:block; height:100%; width:0; background:var(--battery)}
+.bar span{position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; font-size:12px; font-weight:600; color:#fff;
+  text-shadow:0 1px 2px rgba(0,0,0,.3)}
+
+/* ── 选择弹层 ───────────────────────────── */
+.sheet{position:fixed; inset:0; background:rgba(0,0,0,.35);
+  display:none; align-items:flex-end; z-index:20}
+.sheet.on{display:flex}
+.sheet-box{width:100%; background:var(--card);
+  border-radius:16px 16px 0 0; padding:8px 0 6px}
+.sheet-title{text-align:center; font-size:13px; color:var(--muted); padding:10px 16px}
+.sheet-list{max-height:52vh; overflow-y:auto; -webkit-overflow-scrolling:touch}
+.sheet-item{padding:13px 20px; font-size:15.5px; border-top:1px solid var(--stroke);
+  display:flex; align-items:center; justify-content:space-between}
+.sheet-item .tick{color:var(--accent); font-weight:600}
+.sheet-cancel{padding:14px 20px; text-align:center; font-size:15.5px;
+  color:var(--accent); border-top:6px solid var(--canvas); font-weight:500}
+
+/* ── 提示条 ─────────────────────────────── */
+.toast{position:fixed; left:50%; bottom:56px; transform:translateX(-50%);
+  background:rgba(0,0,0,.82); color:#fff; font-size:13.5px;
+  padding:9px 18px; border-radius:999px; opacity:0;
+  pointer-events:none; z-index:30}
+.toast.on{opacity:1}
+
+/* 断连提示（daemon 没起来时）*/
+.offline{margin:20px 14px; padding:16px 18px; border-radius:12px;
+  background:var(--card); border:1px solid var(--stroke);
+  color:var(--muted); font-size:13.5px; line-height:1.6}
