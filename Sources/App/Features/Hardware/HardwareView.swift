@@ -2,13 +2,15 @@ import SwiftUI
 
 /// 第一屏：设备硬件信息。
 struct HardwareView: View {
+    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
+    var onOpenSettings: @MainActor () -> Void
     @EnvironmentObject private var hardware: HardwareMonitor
     @EnvironmentObject private var optimizer: MemoryOptimizer
 
     private var snapshot: HardwareSnapshot { hardware.snapshot }
 
     var body: some View {
-        PageScaffold("Hardware", glow: .mwAccent) {
+        PageScaffold("Hardware", glow: .mwAccent, onOpenSettings: onOpenSettings) {
             devicePanel
             cpuPanel
             memoryPanel
@@ -62,11 +64,17 @@ struct HardwareView: View {
                     Metric(caption: "Physical cores",
                            value: "\(snapshot.cpu.physicalCores)",
                            size: 30)
-                    Metric(caption: "Max frequency",
+                    Metric(caption: "Frequency",
                            value: snapshot.cpu.frequencyMHz > 0 ? "\(snapshot.cpu.frequencyMHz)" : "—",
                            unit: snapshot.cpu.frequencyMHz > 0 ? "MHz" : nil,
                            size: 30)
                 }
+
+                // 数字下面把来源写清楚：iOS 不向 App 提供实时 CPU 频率，这里是芯片的
+                // 标称主频。不写这一句，这个数字会被当成实时读数。
+                Text("Frequency is the chip's rated clock. iOS gives apps no live CPU clock.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.mwMuted)
 
                 if !snapshot.cpu.perCore.isEmpty {
                     Divider().overlay(Color.mwCardStroke)
@@ -205,10 +213,14 @@ struct HardwareView: View {
     // MARK: 网络
 
     private var networkPanel: some View {
-        Panel("Network", systemImage: "wifi",
-              trailing: Text(verbatim: snapshot.network.interfaceName)) {
+        Panel("Network", systemImage: networkIcon, trailing: networkKindText) {
             VStack(alignment: .leading, spacing: 12) {
-                Metric(caption: "IPv4 address", value: snapshot.network.ipv4, size: 22)
+                // 接口名（`en0` / `pdp_ip0`）是技术细节，压在地址下面而不是占着面板右上角
+                // —— 那个位置留给「这条链路是 Wi-Fi 还是蜂窝」，那才是用户要判断的东西。
+                Metric(caption: "IPv4 address",
+                       value: snapshot.network.ipv4,
+                       footnote: Text(verbatim: snapshot.network.interfaceName),
+                       size: 22)
                 HStack(spacing: 14) {
                     Metric(caption: "Download",
                            value: Formatting.rate(snapshot.network.downloadBytesPerSecond),
@@ -228,6 +240,27 @@ struct HardwareView: View {
                            size: 18)
                 }
             }
+        }
+    }
+
+    /// 面板图标跟着链路走。
+    private var networkIcon: String {
+        switch snapshot.network.kind {
+        case .some(.wifi): return "wifi"
+        case .some(.cellular): return "antenna.radiowaves.left.and.right"
+        case .none: return "wifi.slash"
+        }
+    }
+
+    /// 右上角那颗小标签：连着 Wi-Fi 就是 Wi-Fi，断了才轮到蜂窝。
+    ///
+    /// 两个 `Text("…")` 字面量分开写，不合成一个三元表达式 —— 键要各自能查到译文。
+    /// 取值逻辑（含优先级）在 `HardwareMonitor.readNetwork`。
+    private var networkKindText: Text {
+        switch snapshot.network.kind {
+        case .some(.wifi): return Text("Wi-Fi")
+        case .some(.cellular): return Text("Cellular")
+        case .none: return Text(verbatim: "—")
         }
     }
 }

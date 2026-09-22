@@ -45,11 +45,9 @@ nonisolated extension Color {
     // identity — two of them built from the same two hex values are not equal. So
     // a `Color` produced by calling `mw` in a view body was a different value on
     // every evaluation even when the temperature had not moved, which defeated
-    // SwiftUI's equality checks: `Backdrop`'s `.animation(_:value: glow)` saw a
-    // new glow every second and restarted an 0.8 s full-screen `plusLighter`
-    // animation for a number that had not changed, and the heat map's blurred
-    // blend layer recomposited with it. Resolving each step once fixes both the
-    // per-frame allocation and the false inequality.
+    // SwiftUI's equality checks: the heat map's blurred blend layer recomposited
+    // every second for a number that had not changed. Resolving each step once
+    // fixes both the per-frame allocation and the false inequality.
     private static let mwTemperatureSteps = (
         cold: Color.mw(0x2C7BE5, 0x4DA3FF),
         cool: Color.mw(0x0E9B57, 0x3FE08C),
@@ -165,6 +163,20 @@ extension View {
     /// panel) could still overflow horizontally — every user of this modifier is a
     /// column of wrapping text, which sizes to the proposed width on its own, so in
     /// practice the pages lay out the same.
+    /// 设置面板的容器底色。
+    ///
+    /// `presentationBackground` 是 iOS 16.4 才有的。不设的话，面板容器用的是系统背景
+    /// 材质，弹入的第一帧露出来的是它，与画布差一截。16.2 / 16.3 上退回原样 —— 面板内部
+    /// 压的那层 `Color.mwCanvas` 已经兜住了内容区，差的是最外层那一帧。
+    @ViewBuilder
+    func mwSheetBackground() -> some View {
+        if #available(iOS 16.4, *) {
+            self.presentationBackground(Color.mwCanvas)
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder
     func mwContainerWidth() -> some View {
         if #available(iOS 17.0, *) {

@@ -18,7 +18,8 @@
 "CPU" = "CPU";
 "Usage" = "Usage";
 "Physical cores" = "Physical cores";
-"Max frequency" = "Max frequency";
+"Frequency" = "Frequency";
+"Frequency is the chip's rated clock. iOS gives apps no live CPU clock." = "Frequency is the chip's rated clock. iOS gives apps no live CPU clock.";
 "Per-core load" = "Per-core load";
 "Core %lld" = "Core %lld";
 "%lld cores" = "%lld cores";
@@ -44,6 +45,8 @@
 "Free" = "Free";
 "Capacity" = "Capacity";
 "Network" = "Network";
+"Wi-Fi" = "Wi-Fi";
+"Cellular" = "Cellular";
 "IPv4 address" = "IPv4 address";
 "Download" = "Download";
 "Upload" = "Upload";
@@ -172,9 +175,6 @@
 "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges." = "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges.";
 "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which." = "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which.";
 "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting." = "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.";
-"Charging options" = "Charging options";
-"Keep the screen awake while charging" = "Keep the screen awake while charging";
-"The one-second tick stops when the screen locks, so a whole charge cannot be recorded with it off." = "The one-second tick stops when the screen locks, so a whole charge cannot be recorded with it off.";
 "Battery energy" = "Battery energy";
 "Used to turn a %/h slope into watts for the discharge estimate. Ignored when the pack capacity is readable from IOKit." = "Used to turn a %/h slope into watts for the discharge estimate. Ignored when the pack capacity is readable from IOKit.";
 "Estimate" = "Estimate";

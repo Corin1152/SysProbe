@@ -11,41 +11,51 @@ struct Backdrop: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [.mwCanvasTop, .mwCanvas],
-                           startPoint: .top,
-                           endPoint: .bottom)
+            // 最底下一层不透明画布色。上面的渐变本来就铺满，这一层是为了**兜住一帧**：
+            // 转场里若某一帧上层的 `Canvas` 还没画上，露出来的就是它，而不是窗口底色
+            // （浅色下白、深色下黑）—— 那才是「整屏闪一下」看起来的样子。
+            Color.mwCanvas
 
             Canvas { context, size in
-                var path = Path()
+                // 渐变、网格、发光全部画在**同一层**里。
+                //
+                // 这里以前是三个 SwiftUI 视图叠着，发光那层用 `.blendMode(.plusLighter)`。
+                // 那是整条链上最贵也最不稳的一环：SwiftUI 的 blend mode 底下是 Core
+                // Image 的合成滤镜，要额外一遍离屏渲染；而弹设置面板、切分页这些转场里
+                // UIKit 正在对整棵视图做变换，这一遍常常来不及，露出来就是一帧空白。
+                //
+                // `GraphicsContext.blendMode` 是 Core Graphics 自己的混合模式，画在同一个
+                // `Canvas` 里 —— 一层 CALayer、一次画完，没有额外的合成组。外观完全一致。
+                // 代价只有一个：`Canvas` 不参与隐式动画插值，发光换色（插电／无线／降频）
+                // 从 0.8 秒渐变变成直接切。
+                let canvas = Path(CGRect(origin: .zero, size: size))
+                context.fill(canvas, with: .linearGradient(
+                    Gradient(colors: [.mwCanvasTop, .mwCanvas]),
+                    startPoint: .zero,
+                    endPoint: CGPoint(x: 0, y: size.height)))
+
+                var grid = Path()
                 var x: CGFloat = 0
                 while x <= size.width {
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: size.height))
+                    grid.move(to: CGPoint(x: x, y: 0))
+                    grid.addLine(to: CGPoint(x: x, y: size.height))
                     x += spacing
                 }
                 var y: CGFloat = 0
                 while y <= size.height {
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: size.width, y: y))
+                    grid.move(to: CGPoint(x: 0, y: y))
+                    grid.addLine(to: CGPoint(x: size.width, y: y))
                     y += spacing
                 }
-                context.stroke(path, with: .color(.mwGrid), lineWidth: 0.5)
-            }
-            // 刻意**不加** `.drawingGroup()`。
-            //
-            // 它会把这一层渲进一张离屏纹理。而每次转场（启动第一帧、切分页、弹／收
-            // 设置页）SwiftUI 都可能把那张纹理丢掉重画，中间会有一帧是空的；配上
-            // 下面 `plusLighter` 的发光层在同一个合成组里，表现出来就是整屏闪一下。
-            //
-            // 性能上也不需要它：`Canvas` 本身已经是一层 CALayer，只有尺寸变化才会
-            // 重画，那 ~50 条网格线画一次就留在层里了。
+                context.stroke(grid, with: .color(.mwGrid), lineWidth: 0.5)
 
-            RadialGradient(colors: [glow.opacity(0.22 * glowIntensity), .clear],
-                           center: .init(x: 0.5, y: 0.18),
-                           startRadius: 0,
-                           endRadius: 420)
-                .blendMode(.plusLighter)
-                .animation(.easeInOut(duration: 0.8), value: glow)
+                context.blendMode = .plusLighter
+                context.fill(canvas, with: .radialGradient(
+                    Gradient(colors: [glow.opacity(0.22 * glowIntensity), .clear]),
+                    center: CGPoint(x: size.width * 0.5, y: size.height * 0.18),
+                    startRadius: 0,
+                    endRadius: 420))
+            }
         }
         .ignoresSafeArea()
     }

@@ -44,15 +44,6 @@ final class PowerMonitor: ObservableObject {
     /// the whole history with an empty array.
     @Published private(set) var isLoaded = false
 
-    /// Whether to hold the screen awake while the phone is plugged in.
-    ///
-    /// The screen locking is what used to end a charge session two minutes in — the
-    /// tick stops with the app, and a full charge could never be recorded. Applied
-    /// by `RootView`, which is where UIKit belongs; `Core` stays UI-free.
-    @Published var keepScreenAwakeWhileCharging: Bool {
-        didSet { UserDefaults.standard.set(keepScreenAwakeWhileCharging, forKey: Self.keepAwakeKey) }
-    }
-
     let thermal = ThermalMonitor()
 
     // The thermal verdict used to be observed through the nested `@Observable`
@@ -93,7 +84,6 @@ final class PowerMonitor: ObservableObject {
 
     private static let nominalCellVoltage = 3.87
     private static let wattHoursKey = "batteryWattHours"
-    private static let keepAwakeKey = "keepScreenAwakeWhileCharging"
     private static let liveWindow = 180
 
     private let battery = IOKitBattery()
@@ -124,9 +114,6 @@ final class PowerMonitor: ObservableObject {
         let defaults = UserDefaults.standard
         let stored = defaults.double(forKey: Self.wattHoursKey)
         configuredBatteryWattHours = stored > 0 ? stored : 15.0
-        // Defaults to on: recording a whole charge is the point of the History tab,
-        // and it cannot happen if the screen locks after thirty seconds.
-        keepScreenAwakeWhileCharging = defaults.object(forKey: Self.keepAwakeKey) as? Bool ?? true
         collectDiagnostics()
         Task { await loadStoredSessions() }
     }

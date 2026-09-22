@@ -1,8 +1,16 @@
 import SwiftUI
 
 struct DashboardView: View {
+    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
+    var onOpenSettings: @MainActor () -> Void
     @EnvironmentObject private var monitor: PowerMonitor
-    @EnvironmentObject private var app: AppState
+
+    /// 这一页是不是当前选中的分页。
+    ///
+    /// 以前读的是 `AppState.selectedTab`，但那意味着这一页得观察 `AppState` —— 于是
+    /// `showingSettings` 一变它也跟着重算，而那恰好是设置面板开始做呈现动画的那一帧。
+    /// 换成本地状态，由 `TabView` 的 `onAppear` / `onDisappear` 维护，观察面就干净了。
+    @State private var isVisible = false
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
@@ -11,7 +19,7 @@ struct DashboardView: View {
     // 同一个），面板由 `RootView` 持有（见 `AppState.showingSettings`）。
     // 面板挂在分页里会在语言切换重建分页时被一起关掉，所以必须提到树根上。
     var body: some View {
-        PageScaffold("Power", glow: glowColor) {
+        PageScaffold("Power", glow: glowColor, onOpenSettings: onOpenSettings) {
             heroPanel
             if monitor.thermalState.isThrottling { throttleBanner }
             batteryPanel
@@ -20,6 +28,8 @@ struct DashboardView: View {
             sessionPanel
             if !monitor.sensorsAvailable { sensorNote }
         }
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
     }
 
     private var glowColor: Color {
@@ -212,7 +222,7 @@ struct DashboardView: View {
                 // 没在看这一页时只占位、不建图：`TabView` 会把切走的分页留在视图树里，
                 // 采样一发布这张图就跟着重算 —— 它是重渲染里最贵的一块。占位高度与图
                 // 一致（`LivePowerChart` 默认 130），切回来时布局不跳。
-                if app.selectedTab == 1 {
+                if isVisible {
                     LivePowerChart(samples: monitor.live)
                 } else {
                     Color.clear.frame(height: 130)

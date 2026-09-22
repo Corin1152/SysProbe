@@ -18,7 +18,8 @@
 "CPU" = "CPU";
 "Usage" = "占用";
 "Physical cores" = "物理核心";
-"Max frequency" = "最高频率";
+"Frequency" = "频率";
+"Frequency is the chip's rated clock. iOS gives apps no live CPU clock." = "频率为芯片的标称主频。iOS 不向 App 提供实时的 CPU 频率。";
 "Per-core load" = "每核负载";
 "Core %lld" = "核心 %lld";
 "%lld cores" = "%lld 核";
@@ -44,6 +45,8 @@
 "Free" = "剩余";
 "Capacity" = "容量";
 "Network" = "网络";
+"Wi-Fi" = "无线局域网";
+"Cellular" = "蜂窝网络";
 "IPv4 address" = "IPv4 地址";
 "Download" = "下载";
 "Upload" = "上传";
@@ -172,9 +175,6 @@
 "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges." = "对偏长或偏细的线缆来说是正常水平。会以发热的形式损失一点功率，但在当前电流下不太会影响充电速度。";
 "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which." = "对充电路径来说偏高。线太细或太长、插头磨损、接触松动都会是这样。换一根线插在同一只充电器上，就能分辨到底是哪种。";
 "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting." = "立即对全 App 生效。负一屏小组件跟随系统语言 —— 它跑在独立进程里，读不到这个设置。";
-"Charging options" = "充电选项";
-"Keep the screen awake while charging" = "充电时保持屏幕常亮";
-"The one-second tick stops when the screen locks, so a whole charge cannot be recorded with it off." = "锁屏后秒级采样会停止，关掉它就无法完整记录一整次充电。";
 "Battery energy" = "电池能量";
 "Used to turn a %/h slope into watts for the discharge estimate. Ignored when the pack capacity is readable from IOKit." = "用于把「百分比／小时」的斜率换算成放电估算的瓦数。能从 IOKit 读到电池容量时忽略此项。";
 "Estimate" = "估算";

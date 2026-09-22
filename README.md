@@ -4,7 +4,7 @@ iPhone 硬件信息 + 充电功率/适配器读数工具。三屏结构：
 
 | 屏 | 内容 |
 |---|---|
-| **Hardware** | CPU（型号/核心数/实时占用/每核负载）、内存（分项占用 + 优化）、存储、网络、系统版本 |
+| **Hardware** | CPU（型号/核心数/主频/实时占用/每核负载）、内存（分项占用 + 优化）、存储、网络（连着 Wi-Fi 就看 Wi-Fi，断了才显示蜂窝）、系统版本 |
 | **Power** | 充电功率大环、电芯电压/电流/温度、供电路径与转换效率、本次充电累计 |
 | **Adapter** | 适配器实际/额定功率、握手信息、广播供电规格（PDO）、实时供电轨、通路电阻 |
 
@@ -127,21 +127,44 @@ App Store 审核**。
 最后，功率页的曲线只在**这一页被选中时**才真正构建：`TabView` 会把切走的分页留在视图树里，
 采样一发布那张图就跟着重算。没在看的时候用等高占位顶住，切回来时布局不跳。
 
+## CPU 频率这一项
+
+**iOS 不给沙箱 App 实时频率。** 之前读的是 `sysctl hw.cpufrequency_max`，那是 macOS
+（Intel）专有的键，iOS 真机上恒返回失败 —— 所以界面一直显示「—」。网上流传很广的那段
+`sysctl(mib, 2, &results, ...)` 取 `HW_CPU_FREQ` 是早期 iOS 的遗留代码，Apple 后来出于
+安全考虑把主频这个内核变量对沙箱关掉了。
+
+沙箱里能拿到的是「这台机器装的是哪颗芯片、它标称跑多少」，所以这一栏按机型查表
+（`HardwareMonitor.clocks`，覆盖 A9–A18 共 11 颗芯片）。认不出来的机型显示「—」，
+不编数字。界面上写的也是「频率」而不是「最高频率」，并在数字下面注明了来源。
+
 ## 闪屏
 
-启动、切分页、进／出设置页时曾各闪一下。四处结构性成因：
+启动、切分页、进／出设置页时曾各闪一下。逐条排查出来的结构性成因：
 
 - **启动屏底色。** `UILaunchScreen_Generation` 生成的启动屏用系统背景色（浅色下白、
   深色下黑），与画布（`#EEF1F6` / `#06070A`）差一截，第一帧就跳一下。补了一张
   `LaunchBackground` 颜色资源（`Sources/App/Assets.xcassets/`），并把它写进
   `Support/SysProbe-Info.plist` 的 `UILaunchScreen.UIColorName`。
-- **设置页底色。** 设置页原先是裸 `Form`，用的是系统分组背景，与画布的冷色调不是一回事，
-  弹入／退出时整屏底色跳一次。现在铺上同一张 `Backdrop`（配 `.scrollContentBackground(.hidden)`），
-  转场前后同底。
-- **根视图每秒重算。** `RootView` 的 `body` 里是整棵 `TabView` 加一个 sheet 修饰符，而它
-  订阅了每秒发布一次的 `PowerMonitor`（`shouldStayAwake` 要读插电状态）—— 于是整棵树连带
-  面板修饰符每秒重建一次。采样与「常亮」的生命周期拆进了 `MonitorLifecycle`：一个零尺寸
-  视图，订阅不再传染给 `RootView`。
+- **`Backdrop` 里的 `.blendMode(.plusLighter)`。** 发光层走的是 SwiftUI 的混合模式，
+  底下是 Core Image 的合成滤镜，要额外一遍离屏渲染；而弹设置面板、切分页这些转场里
+  UIKit 正在对整棵视图做变换，这一遍常常来不及，露出来就是一帧空白。现在整张背景
+  （渐变 + 网格 + 发光）画在**同一个 `Canvas`** 里，发光用 `GraphicsContext.blendMode`
+  —— Core Graphics 自己的混合模式，一层 CALayer、一次画完，没有额外的合成组。
+  唯一的代价是发光换色不再有 0.8 秒渐变（`Canvas` 不参与隐式动画插值）。
+- **画布底色兜底。** `Backdrop`、每个分页、设置面板、`RootView` 最底层都压了一层不透明的
+  `Color.mwCanvas`。转场里任何一帧上层还没画上内容，露出来的都是画布色，而不是窗口底色。
+- **设置面板的容器底色。** 面板用 `presentationBackground`（iOS 16.4+）设成画布色；
+  面板内部的画布改成 `Form` 的**兄弟节点**而不是它的 `.background` ——
+  `NavigationStack` 自己的底色是系统分组色，只铺 `Form` 的话导航栏那一条露出来的还是它。
+- **根视图每秒重算。** `RootView` 的 `body` 里是整棵 `TabView` 加一个 sheet 修饰符，
+  而它曾订阅每秒发布一次的 `PowerMonitor` —— 整棵树连带面板修饰符每秒重建一次。
+  采样的生命周期拆进了 `MonitorLifecycle`：一个零尺寸视图，订阅不再传染给 `RootView`。
+- **齿轮按钮不再观察 `AppState`。** `PageScaffold` 原先是 `@EnvironmentObject AppState`，
+  于是 `showingSettings` 一变，三个分页（各自一棵 `NavigationStack` + `ScrollView` +
+  面板树）会在**同一帧**各重算一次 —— 而这一帧恰好就是设置面板开始做呈现动画的那一帧。
+  现在改成把「打开设置」当一个闭包传下去，只有 `RootView` 需要观察那个状态；
+  功率页判断「自己是不是当前分页」也换成了本地状态。
 - **`Backdrop` 的 `.drawingGroup()`。** 它把网格层渲进一张离屏纹理，而每次转场 SwiftUI
   都可能把那张纹理丢掉重画，中间会有一帧是空的。网格只有 ~50 条线，`Canvas` 本身就是一层
   CALayer、只有尺寸变化才重画，`.drawingGroup()` 去掉即可。
