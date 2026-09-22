@@ -8,6 +8,17 @@
 #
 # 注意：仓库里保存的可执行位可能丢失（例如通过 API 推送），所以 CI 与文档一律用
 # `bash scripts/build-ipa.sh` 调用，不要依赖 `./`。
+#
+# 另：**本文件必须是 LF 行尾。** Windows 上用 Python 脚本改文件时，
+# `Path.write_text(text)` 不指定 `newline` 会把每个 `\n` 写成 `\r\n`；
+# 到了 macOS 上就是 `set -euo pipefail` 被劈成两行：
+#
+#     scripts/build-ipa.sh: line 11: set: pipefail
+#     : invalid option name
+#
+# 报错完全指不到行尾，极易误判成语法问题。`.gitattributes` 里的 `eol=lf` 只约束
+# **git 自己**（add / checkout），管不到走 Git Data API 的推送脚本 —— 那个直接读
+# 工作区原始字节。所以推送前那道 LF 规范化是必要的，别去掉。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
