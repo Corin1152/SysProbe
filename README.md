@@ -64,10 +64,19 @@ App Store 审核**。
 
 都是**静默**的：构建全绿、界面正常安装，只有真机上才看得出来。CI 里有断言卡住其中几条。
 
-**按验证成本从低到高排**，别凭直觉挑一个最显眼的差异当根因 —— 我在这上面连续判断错过
-两次（先怪 principal class 与 NotificationCenter 分类，再怪 SwiftUI 运行时），两次都
-不是根因。
+**按验证成本从低到高排**，别凭直觉挑一个最显眼的差异当根因 —— 我在这个 bug 上绕了
+七八轮（换 bundle id、脱 SwiftUI、最小化启动路径、加 dlopen……），最后是**崩溃日志**
+一次定位的。
 
+- **扩展必须链 `NotificationCenter.framework`。** 这是真根因。系统在建立扩展的 XPC
+  连接时，会按 `NSExtensionPointIdentifier` 找出这个扩展该用哪个 `NSExtensionContext`
+  子类 —— 对 `com.apple.widget-extension` 就是 `NCWidgetExtensionContext`，它实现在
+  `NotificationCenter.framework` 里。库不在 → 类找不到 → 扩展当场 trap
+  （`EXC_BREAKPOINT`）。**这个时机早于系统实例化我们的视图控制器**，所以应用自己的
+  代码一行都不会执行 —— 连 `init` 都跑不到。`project.yml` 里因此显式写了
+  `-framework NotificationCenter`：`import NotificationCenter` 只在 Swift 侧做类型
+  检查，**不引用符号就不会触发 autolinking**，而 `NCWidgetProviding` 的成员全是可选的，
+  实现它不需要协议元数据，于是从来没人要求链这个库。
 - **启动路径上不能有 IO。** 传统扩展的内存预算与启动 watchdog 都远小于主 App。
   `PowerMonitor` 这类对象的构造会 `dlopen` 框架、枚举 IOKit 服务、读文件系统 ——
   在主 App 里是几十毫秒，在扩展里就可能被 watchdog 掐掉。现在 `viewDidLoad` 只做三件
