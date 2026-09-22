@@ -199,7 +199,6 @@ struct DashboardView: View {
                            value: String(format: "%.0f", snapshot.conversionEfficiency ?? 0),
                            unit: "%",
                            tint: efficiencyTint,
-                           footnote: Text("cell watts ÷ charger watts"),
                            size: 22)
                 }
                 if let input = snapshot.inputWatts, input > 0.2, let battery = snapshot.batteryWatts, battery > 0 {

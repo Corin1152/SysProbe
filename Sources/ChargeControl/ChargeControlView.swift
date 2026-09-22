@@ -29,8 +29,10 @@ struct ChargeControlView: View {
     @State private var page = 0
 
     var body: some View {
-        PageScaffold("Charge", glow: .mwBattery, onOpenSettings: onOpenSettings) {
-            Picker("Charge", selection: $page) {
+        // 标题与下面那个 `Picker` 都用 "Smart charge" 这个键。**不能复用 "Charging"** ——
+        // 那个键还被功率页的状态词与电池信息页的「Charging」面板标题用着，改它会连累那两处。
+        PageScaffold("Smart charge", glow: .mwBattery, onOpenSettings: onOpenSettings) {
+            Picker("Smart charge", selection: $page) {
                 Text("Charge control").tag(0)
                 Text("Battery info").tag(1)
             }
@@ -126,21 +128,29 @@ private struct ChargeControlPanels: View {
                 ToggleRow("Temperature control",
                           isOn: Binding(get: { charge.config.enableTemperature },
                                         set: { charge.setTemperatureControl($0) }))
-                ThresholdSlider(title: "Stop charging above (°C)",
-                                value: charge.config.temperatureAbove,
-                                range: 20...45,
-                                unit: "°",
-                                tint: .mwLoss,
-                                onChange: { charge.setTemperatureAbove($0) })
-                ThresholdSlider(title: "Resume charging below (°C)",
-                                value: charge.config.temperatureBelow,
-                                range: 10...40,
-                                unit: "°",
-                                tint: .mwAccent,
-                                onChange: { charge.setTemperatureBelow($0) })
+
+                // 两个阈值只在总开关打开时可调，所以套一层单独的 `VStack` 再禁用它。
+                //
+                // **`.disabled()` 会向整棵子树传播** —— 早先把它套在最外层那个 `VStack` 上，
+                // 结果连上面那个总开关自己也一起被禁掉了；而它默认是关的，于是永远打不开，
+                // 整块看上去就是「点了没反应」。这类错误不会报任何编译或运行错误。
+                VStack(spacing: 16) {
+                    ThresholdSlider(title: "Stop charging above (°C)",
+                                    value: charge.config.temperatureAbove,
+                                    range: 20...45,
+                                    unit: "°",
+                                    tint: .mwLoss,
+                                    onChange: { charge.setTemperatureAbove($0) })
+                    ThresholdSlider(title: "Resume charging below (°C)",
+                                    value: charge.config.temperatureBelow,
+                                    range: 10...40,
+                                    unit: "°",
+                                    tint: .mwAccent,
+                                    onChange: { charge.setTemperatureBelow($0) })
+                }
+                .disabled(!charge.config.enableTemperature)
+                .opacity(charge.config.enableTemperature ? 1 : 0.5)
             }
-            .disabled(!charge.config.enableTemperature)
-            .opacity(charge.config.enableTemperature ? 1 : 0.5)
         }
 
         Panel("Advanced", systemImage: "slider.horizontal.3") {

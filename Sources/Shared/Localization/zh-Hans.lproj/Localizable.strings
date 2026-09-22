@@ -77,7 +77,6 @@
 "Into battery" = "进入电池";
 "Lost as heat" = "热损耗";
 "Efficiency" = "转换效率";
-"cell watts ÷ charger watts" = "电芯功率 ÷ 充电器功率";
 "stored in cell" = "存入电芯";
 "system load + losses" = "系统负载 + 损耗";
 "Charging wirelessly. The charge IC exposes the coil's voltage but no current to pair with it, so the power coming in cannot be measured — only what reaches the cell. The figure the charger reports about itself is a ceiling, not a reading, and does not move." = "正在无线充电。充电 IC 只暴露线圈电压，没有可与之相乘的电流，因此输入功率无法测得，只有进入电芯的那部分能测。充电器自报的数字是上限而非实测，不会变动。";
@@ -193,7 +192,7 @@
 "%@ used · %@ free" = "已用 %@ · 剩余 %@";
 
 /* ── 充电控制（移植自 ChargeLimiter）───────────────────────────────── */
-"Charge" = "充电";
+"Smart charge" = "智充";
 "Charge control" = "充电控制";
 "Battery info" = "电池信息";
 "Basics" = "基础";

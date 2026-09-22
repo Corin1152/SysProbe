@@ -43,8 +43,11 @@ nonisolated struct ChargeConfig: Equatable {
     var chargeBelow = 20
     var chargeAbove = 80
     var enableTemperature = false
-    var temperatureAbove = 40
-    var temperatureBelow = 35
+    /// 两个默认值与守护进程 `initConf` 里的一致（`charge_temp_above` = 35、
+    /// `charge_temp_below` = 10）。不一致的话，守护进程没起来时界面会显示一组
+    /// 并不是它实际在用的值 —— 用户会照着那个数去理解「现在设的是多少」。
+    var temperatureAbove = 35
+    var temperatureBelow = 10
     var preferSmartBattery = false
     var predictiveInhibit = false
     var disableInflow = false

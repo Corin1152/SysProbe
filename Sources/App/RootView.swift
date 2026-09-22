@@ -69,7 +69,9 @@ struct RootView: View {
                 .tabItem { Label("Adapter", systemImage: "powerplug.fill") }
                 .tag(2)
             ChargeControlView(onOpenSettings: openSettings)
-                .tabItem { Label("Charging", systemImage: "battery.100.bolt") }
+                // 键用 "Smart charge" 而不是 "Charging"：后者是功率页的状态词，
+                // 也用在电池信息页的面板标题上，共用一个键会把那两处一起改掉。
+                .tabItem { Label("Smart charge", systemImage: "battery.100.bolt") }
                 .tag(3)
         }
         .tint(.mwAccent)

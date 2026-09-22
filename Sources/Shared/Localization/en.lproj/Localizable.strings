@@ -77,7 +77,6 @@
 "Into battery" = "Into battery";
 "Lost as heat" = "Lost as heat";
 "Efficiency" = "Efficiency";
-"cell watts ÷ charger watts" = "cell watts ÷ charger watts";
 "stored in cell" = "stored in cell";
 "system load + losses" = "system load + losses";
 "Charging wirelessly. The charge IC exposes the coil's voltage but no current to pair with it, so the power coming in cannot be measured — only what reaches the cell. The figure the charger reports about itself is a ceiling, not a reading, and does not move." = "Charging wirelessly. The charge IC exposes the coil's voltage but no current to pair with it, so the power coming in cannot be measured — only what reaches the cell. The figure the charger reports about itself is a ceiling, not a reading, and does not move.";
@@ -193,7 +192,7 @@
 "%@ used · %@ free" = "%@ used · %@ free";
 
 /* ── 充电控制（移植自 ChargeLimiter）───────────────────────────────── */
-"Charge" = "Charge";
+"Smart charge" = "Smart charge";
 "Charge control" = "Charge control";
 "Battery info" = "Battery info";
 "Basics" = "Basics";
