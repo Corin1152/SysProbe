@@ -95,6 +95,20 @@ jobs:
           appex="$(ls -d "$app"/PlugIns/*.appex | head -1)"
           binary="$appex/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
 
+          # 在二进制里找一个字符串。
+          #
+          # 刻意不用 `grep -a`：它把二进制当**文本**，而文本按 `\n` 字节分行 —— 字符串池
+          # 里的字面量未必恰好落在两个换行之间，会漏报（上一轮就因此误报「appex 里没有
+          # sysprobe://open」）。`tr '\n' '\0'` 再 grep 也试过，`tr` 对 NUL 的处理因实现
+          # 而异，不赌。`python3` 是 runner 上确定有的（本地化断言就在用），子串查找不受
+          # 分行影响。
+          # 必须写成**单行**：`run: |` 块里的内容会保留相对缩进，多行 Python 的第二行
+          # 落到第 0 列就等于提前结束了 YAML 块，整份工作流会解析失败（试过，报了
+          # "could not find expected ':'"）。
+          has_string() {
+            python3 -c 'import sys; sys.exit(0 if sys.argv[2].encode() in open(sys.argv[1], "rb").read() else 1)' "$1" "$2"
+          }
+
           # 1) principal class 必须是**显式的 ObjC 名字**，不能是「模块名.类名」。
           #    后者要靠模块名在运行期被解析成类；解析不到就找不到类，负一屏「无法载入」。
           #    显式 `@objc(...)` 名字是逐字注册进 ObjC 运行时的，不依赖模块名。
@@ -106,7 +120,7 @@ jobs:
               exit 1
               ;;
           esac
-          if ! grep -qa -- "$principal" "$binary"; then
+          if ! has_string "$binary" "$principal"; then
             echo "::error::'$principal' does not appear in the appex binary — the class is not exposed to the ObjC runtime, so the extension cannot be instantiated."
             exit 1
           fi
@@ -118,8 +132,8 @@ jobs:
           #    库不在，分类就没注册，直接调就是 unrecognized selector：扩展在 viewDidLoad
           #    里当场崩掉，负一屏显示「无法载入」。
           #    所以：只要用了这个选择器，就必须同时把框架 dlopen 进来。
-          if grep -qa "setWidgetLargestAvailableDisplayMode:" "$binary" \
-             && ! grep -qa "NotificationCenter.framework" "$binary"; then
+          if has_string "$binary" "setWidgetLargestAvailableDisplayMode:" \
+             && ! has_string "$binary" "NotificationCenter.framework"; then
             echo "::error::the appex calls setWidgetLargestAvailableDisplayMode: but never loads NotificationCenter.framework. On device the category is unregistered, so the extension crashes in viewDidLoad and the Today view shows \"Unable to Load\"."
             exit 1
           fi
@@ -151,7 +165,15 @@ jobs:
             echo "::error::the host app does not register the 'sysprobe' URL scheme. Tapping the widget calls extensionContext.open(\"sysprobe://open\") and would fail silently."
             exit 1
           fi
-          if ! grep -qa "sysprobe://open" "$binary"; then
+          # 这里查**源码**而不是产物二进制 —— 上一轮在二进制里找它，报「找不到」，
+          # 而它其实在。原因值得记下来：`sysprobe://open` 正好 15 个字符，落在 Swift
+          # 的 small-string 优化上限（≤15 字节的 ASCII 字面量）内，那种字面量会被
+          # 编码进指令流，**不进 `__cstring` 段**，所以 `grep` 二进制永远找不到它。
+          # 对照：`SysProbeTodayViewController`（26 字符）与
+          # `NotificationCenter.framework`（26 字符）都查得到，恰好都超过 15。
+          #
+          # 主 App 注册 scheme 那一条仍然查产物 —— 那是 plist 里的键，确定在。
+          if ! grep -q "sysprobe://open" Sources/TodayExt/TodayViewController.swift; then
             echo "::error::the appex never builds the 'sysprobe://open' URL, so tapping the widget cannot open the app."
             exit 1
           fi
