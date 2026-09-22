@@ -108,14 +108,18 @@ targets:
         # `NSExtensionContext` 子类 —— 对 `com.apple.widget-extension` 来说就是
         # **`NCWidgetExtensionContext`，它实现在 NotificationCenter.framework 里**。
         #
-        # 而 appex 原来没链这个库：链接器把它当「没被用到」dead-strip 掉了
-        # （本工程的 appex 同样因此丢掉过 Charts.framework）。库不在 → 类找不到 →
-        # `EXC_BREAKPOINT`。**这个时机早于 `NSExtensionMain` 实例化我们的 VC**，
-        # 所以连 `init` 都跑不到 —— 这正是「启动轨迹是空的」的原因。
+        # 而 appex 原来根本没链这个库 —— 不是被 dead-strip 掉的，是**从来就没人要求链它**：
+        # `import NotificationCenter` 只在 Swift 侧做类型检查，只有真正引用到符号时才会
+        # 触发 autolinking，而我们一个符号都没引用（`NCWidgetProviding` 全成员可选，
+        # 实现它不需要协议元数据）。库不在 → 类找不到 → `EXC_BREAKPOINT`。
+        # **这个时机早于 `NSExtensionMain` 实例化我们的 VC**，所以连 `init` 都跑不到 ——
+        # 这正是「启动轨迹是空的」的原因。
         #
-        # `-no_dead_strip_dylibs` 是关键：只写 `-framework NotificationCenter` 不够，
-        # 没有符号引用照样会被丢掉。CPU-X 的 appex 链了这个库，它就能正常工作。
-        OTHER_LDFLAGS: -Wl,-no_dead_strip_dylibs -framework NotificationCenter
+        # 显式写 `-framework` 就够了：ld64 的 `-dead_strip_dylibs` 默认不开（链接命令行里
+        # 只有 `-dead_strip`），所以不存在「链接了又被丢掉」的问题。
+        # 注意别写成 `-Wl,-no_dead_strip_dylibs` —— **ld64 没有这个选项**，会直接报
+        # `ld: unknown options`。CPU-X 的 appex 链了这个库，它就能正常工作。
+        OTHER_LDFLAGS: -framework NotificationCenter
 
 schemes:
   SysProbe:

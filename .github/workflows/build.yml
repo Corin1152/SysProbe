@@ -190,10 +190,12 @@ jobs:
           #    NotificationCenter.framework 里。库不在，类找不到，当场 EXC_BREAKPOINT；
           #    而这个时机**早于** NSExtensionMain 实例化我们的 VC，所以连 init 都跑不到。
           #
-          #    链接器会把这个「没被用到」的库 dead-strip 掉（本工程的 appex 同样因此
-          #    丢掉过 Charts.framework），所以 project.yml 里配了 `-no_dead_strip_dylibs`。
-          #    这条断言保证那个配置真的生效 —— 它一旦失效，症状是「构建全绿、真机
-          #    无法载入」，且**应用自己的代码一行都不会执行**，极难从代码侧看出来。
+          #    appex 原来根本没链这个库 —— 不是被 dead-strip 掉的，是**从来就没人要求链它**：
+          #    `import NotificationCenter` 只在 Swift 侧做类型检查，只有真正引用到符号时
+          #    才会触发 autolinking，而我们一个符号都没引用。所以 project.yml 里显式写了
+          #    `-framework NotificationCenter`。这条断言保证那个配置真的生效 —— 它一旦
+          #    失效，症状是「构建全绿、真机无法载入」，且**应用自己的代码一行都不会执行**，
+          #    极难从代码侧看出来。
           if ! otool -L "$binary" | grep -q "NotificationCenter.framework"; then
             echo "::error::the appex does not link NotificationCenter.framework. Without it NCWidgetExtensionContext is missing, so the extension traps in +[EXConcreteExtensionContextVendor _extensionContextClass] before NSExtensionMain instantiates the view controller — the Today view shows \"Unable to Load\" and none of the app's own code runs."
             exit 1
