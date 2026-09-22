@@ -188,3 +188,6 @@
 "Rated" = "额定";
 "%lld services" = "%lld 项服务";
 "Reading sensors…" = "正在读取传感器…";
+"App version" = "App 版本";
+"Widget" = "负一屏组件";
+"not bundled" = "未打进包";

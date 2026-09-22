@@ -188,3 +188,6 @@
 "Rated" = "Rated";
 "%lld services" = "%lld services";
 "Reading sensors…" = "Reading sensors…";
+"App version" = "App version";
+"Widget" = "Widget";
+"not bundled" = "not bundled";

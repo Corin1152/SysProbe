@@ -59,6 +59,10 @@ struct SettingsView: View {
                                        value: Strings.text(monitor.sensorsAvailable
                                                            ? "available"
                                                            : "unavailable"))
+                        // 版本与扩展摘要。排查负一屏问题时，第一步就是确认装的是哪一版、
+                        // 扩展有没有被打进包 —— 这两行显示的就是**这一版**的真实内容。
+                        LabeledContent("App version", value: AppInfo.version)
+                        LabeledContent("Widget", value: AppInfo.widgetSummary)
                         ForEach(monitor.diagnostics, id: \.self) { line in
                             Text(verbatim: line)
                                 .font(.footnote)
