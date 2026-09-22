@@ -19,6 +19,13 @@ import Foundation
 //  `@MainActor` 的 `ChargeControlService` 在 Swift 6 下直接编译不过（而本工程
 //  `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，所有类型默认就是主 actor 隔离的）。
 //  所以解析在**非隔离**的这一层里做完，只把 `Sendable` 的结构体送回去。
+//
+//  ## 为什么这一层也不碰 `LocalizedStringKey`
+//
+//  本文件只 `import Foundation` —— 桥接层不该依赖 SwiftUI（同 `SensorCatalog`，
+//  那边整层也是为这个把 `LocalizedStringKey` 换成了 `String`）。所以下面那几个
+//  枚举的 `title` / `detail` 返回 `String`，译文由 `Strings.text` 查表得到；
+//  调用点 `Text(mode.title)` 拿到的是已经译好的字符串，不会二次查表。
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// 守护进程暴露的一份配置。
@@ -91,17 +98,32 @@ nonisolated enum ChargeMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    /// 译文由 `Strings.text` 直接查表得到，返回 `String`。
+    ///
+    /// 这里一度返回 `LocalizedStringKey`，那是个**编译期就过不去**的写法，而且报错
+    /// 指向的地方看不出根因：本文件只 `import Foundation`，`LocalizedStringKey` 是
+    /// SwiftUI 的类型，于是 `title` 成了错误类型 → `Identifiable` 一致性判不出来 →
+    /// 下游 `ChargeControlView` 里的 `ForEach(ChargeMode.allCases)` 只好退而选中
+    /// SwiftUI 那个 `Binding<C>` 重载，`mode` 被当成 `Binding<ChargeMode>`，
+    /// `Text(mode.title)` 就成了 `Text<Binding<Subject>>` —— 一屏全是「无法推断泛型」
+    /// 之类的错，真正的原因却在另一个文件里。
+    ///
+    /// 本层是**桥接层**，本来就不该依赖 SwiftUI（`SensorCatalog` 那一层是同样的处理，
+    /// 理由也一样）。改回 `String` 之后，调用点 `Text(mode.title)` 走的是
+    /// `Text(verbatim:)` 那条路 —— 拿到的**已经是译文**，不会二次查表。
+    var title: String {
         switch self {
-        case .chargeOnPlug: "Charge on plug"
-        case .edgeTrigger: "Threshold trigger"
+        case .chargeOnPlug: return Strings.text("Charge on plug")
+        case .edgeTrigger: return Strings.text("Threshold trigger")
         }
     }
 
-    var detail: LocalizedStringKey {
+    var detail: String {
         switch self {
-        case .chargeOnPlug: "Charging starts as soon as power is connected and stops at the upper threshold."
-        case .edgeTrigger: "Charging only starts once the level falls below the lower threshold."
+        case .chargeOnPlug:
+            return Strings.text("Charging starts as soon as power is connected and stops at the upper threshold.")
+        case .edgeTrigger:
+            return Strings.text("Charging only starts once the level falls below the lower threshold.")
         }
     }
 }
@@ -112,16 +134,16 @@ nonisolated enum CuffMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
         // 原版这一档叫 "Nominal"，但那个键在本工程里已经被热状态（`Nominal` = 正常）占了。
         // 文案表的键就是英文原文，不能有两条同名的，所以这里换个词 —— 语义一样，
         // 而且避免了两处不相干的功能共用一条译文（改一处会牵动另一处）。
-        case .off: "Off"
-        case .nominal: "Standard"
-        case .light: "Light"
-        case .moderate: "Moderate"
-        case .heavy: "Heavy"
+        case .off: return Strings.text("Off")
+        case .nominal: return Strings.text("Standard")
+        case .light: return Strings.text("Light")
+        case .moderate: return Strings.text("Moderate")
+        case .heavy: return Strings.text("Heavy")
         }
     }
 }
@@ -133,10 +155,10 @@ nonisolated enum ChargeAction: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
-        case .none: "None"
-        case .notify: "Notification"
+        case .none: return Strings.text("None")
+        case .notify: return Strings.text("Notification")
         }
     }
 }
