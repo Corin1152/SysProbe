@@ -51,7 +51,19 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 收起态以下的高度下限。
     private let minimumHeight: CGFloat = 110
 
+    /// 启动轨迹的第一个点。
+    ///
+    /// 这是**最早**能插进代码的地方 —— dyld 加载与 ObjC 类注册都在它之前完成，
+    /// 所以轨迹里能看到 `init`，就等于「进程起来了、类也注册了」。
+    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+        TodayTrace.mark("init")
+        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
     override func viewDidLoad() {
+        TodayTrace.mark("viewDidLoad:begin")
         super.viewDidLoad()
 
         // 这一段就是「扩展能加载」的全部条件。保持它又短又安全。
@@ -64,16 +76,21 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         view.backgroundColor = .clear
         installPlaceholder()
         preferredContentSize = CGSize(width: 0, height: minimumHeight)
+
+        // 走到这里，扩展已经「加载成功」了 —— 系统不会再显示「无法载入」。
+        TodayTrace.mark("viewDidLoad:end")
     }
 
     // MARK: 生命周期
 
     override func viewDidAppear(_ animated: Bool) {
+        TodayTrace.mark("viewDidAppear:begin")
         super.viewDidAppear(animated)
         installContentIfNeeded()
         // `PowerMonitor.start()` 就是一个 1 秒的重采样循环，和 CPU-X 里那个
         // NSTimer 等价：进程活着就一直在跑。重复调用是幂等的。
         monitor?.start()
+        TodayTrace.mark("viewDidAppear:end")
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -110,10 +127,19 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         guard !didInstallContent else { return }
         didInstallContent = true
 
+        // 分步打点：这几步各自会碰不同的系统资源（dlopen 框架、IOKit、视图树），
+        // 哪一步没走完，轨迹就停在哪一步的名字上。
+        TodayTrace.mark("expandedMode")
         enableExpandedDisplayMode()
 
+        TodayTrace.mark("monitor:begin")
         let monitor = PowerMonitor()
+        TodayTrace.mark("monitor:end")
+
+        TodayTrace.mark("widget:begin")
         let widget = TodayWidgetView()
+        TodayTrace.mark("widget:end")
+
         widget.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(widget)
         NSLayoutConstraint.activate([
@@ -246,5 +272,49 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 高度已经按内容算好（见 `updatePreferredHeight`），模式切换时无需再调整。
     nonisolated func widgetActiveDisplayModeDidChange(_ activeDisplayMode: NCWidgetDisplayMode,
                                                       withMaximumSize maxSize: CGSize) {
+    }
+}
+
+// MARK: - 启动轨迹
+
+/// 扩展的启动轨迹，写进**剪贴板**。
+///
+/// ## 为什么是剪贴板
+///
+/// 扩展与外界只有这一条通道：
+///
+/// - 没有 App Group entitlement，写文件主 App 读不到；
+/// - 崩溃若发生在 `viewDidLoad` 之前，界面上什么都显示不出来（系统直接显示「无法载入」）；
+/// - 用户的电脑是 Windows，没有 Mac 的 Console.app 可看设备日志。
+///
+/// 剪贴板是唯一「扩展能写、用户能读」的地方。随便找个输入框粘一下就能看到进程走到了
+/// 哪一步 —— 比让用户去翻「设置 → 隐私 → 分析与改进 → 分析数据」里那一长串快得多。
+///
+/// ## 怎么读
+///
+/// 轨迹是**累加**的，粘出来的是完整路径。停在哪一步，问题就在它的下一步：
+///
+/// - 什么都没有 → 进程根本没起来（dyld 或系统层），与代码无关
+/// - 停在 `viewDidLoad:begin` → `AppLanguage.current` 或 `installPlaceholder()`
+/// - 停在 `viewDidAppear:begin` → `enableExpandedDisplayMode()` 或 `PowerMonitor()`
+/// - 停在 `monitor:begin` → `PowerMonitor` 的构造（IOKit / HID / 文件系统）
+///
+/// **定位完就该把它摘掉** —— 它会覆盖用户的剪贴板。
+///
+/// 刻意不写 `nonisolated`：工程默认主 actor 隔离，而 `UIPasteboard` 也是主 actor
+/// 隔离的，保持默认才不用在两个隔离域之间绕。
+enum TodayTrace {
+
+    /// 已经走过的点。只在扩展进程里、只从主线程写。
+    private static var stages: [String] = []
+
+    static func mark(_ stage: String) {
+        stages.append(stage)
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        UIPasteboard.general.string = """
+        SysProbe widget trace
+        \(stamp)
+        \(stages.joined(separator: " → "))
+        """
     }
 }
