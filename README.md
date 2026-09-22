@@ -17,7 +17,26 @@ iPhone 硬件信息 + 充电功率/适配器读数工具。三屏结构：
 - **巨魔（TrollStore）**：直接把 ipa 拖进去装
 - AltStore / SideStore / Sideloadly / Xcode 均可
 
-需要 iPhone，iOS 16.0 或更高。
+需要 iPhone，iOS 16.2 或更高。
+
+## 图标
+
+蓝底白齿轮，配色取自参考图（`#6E97FD` → `#4574F5` 的极轻竖向渐变，中间调 `#4C7CF8`），
+造型走 iOS 16 设置图标那一路：厚实的梯形齿、圆角齿顶与齿根圆角、明显的中孔。
+
+素材是**脚本生成**的，不是手工画的位图 —— 改配色或改齿轮比例只要动
+`scripts/make-appicon.py` 顶部的常量，然后重跑：
+
+```bash
+python scripts/make-appicon.py Sources/App/Assets.xcassets/AppIcon.appiconset
+```
+
+它会写出 9 张 PNG（20/29/40/60 的 @2x@3x + 1024 marketing）和 `Contents.json`。
+想顺手出一张带圆角的主屏效果图，再加第二个参数给个输出路径即可。
+
+两个容易踩的点：主图是**满幅正方形、不带圆角、不带 alpha**（圆角由系统裁），
+以及 `project.yml` 里的 `ASSETCATALOG_COMPILER_APPICON_NAME` 必须设 —— 不设的话
+catalog 照编，但图标不会写进 `Info.plist`，装上去就是个白方块，构建一声不吭。
 
 ## 为什么只能侧载
 
@@ -63,9 +82,10 @@ bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-unsigned.ipa
 错误会出现在编译深处且不点名真正原因，所以 CI 第一步就明确检查。
 
 CI 在 GitHub Actions 的 macOS runner 上跑同一套步骤，推送到 `main` 即构建，
-打 `v*` tag 会额外发布 Release。构建完还会断言内嵌的 `.appex` 确实是
-`com.apple.widget-extension`：万一它退化成 WidgetKit，界面照样能装能显示，但刷新会悄悄
-掉到 5 分钟以上且不报任何错。
+打 `v*` tag 会额外发布 Release。构建完还会断言两件容易静默失败的事：内嵌的 `.appex`
+确实是 `com.apple.widget-extension`（万一退化成 WidgetKit，界面照样能装能显示，但刷新会
+悄悄掉到 5 分钟以上且不报任何错），以及图标确实进了包（`CFBundleIconName` 指向 `AppIcon`、
+bundle 根目录有 actool 渲染出的 60x60 @2x/@3x PNG）。
 
 ## 授权与致谢
 

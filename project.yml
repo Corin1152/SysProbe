@@ -47,6 +47,10 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # 图标来自 Sources/App/Assets.xcassets，由 scripts/make-appicon.py 生成。
+        # 不设这一项，actool 会编译整个 catalog 但不会把图标写进 Info.plist 的
+        # CFBundleIcons —— 装上去就是个白方块，而且构建不会报任何错。
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: TodayExtension
         embed: true

@@ -100,6 +100,12 @@ for appex in "$app_dir"/PlugIns/*.appex; do
   [ -d "$appex" ] || continue
   echo "  extension  : $(basename "$appex") -> $(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex/Info.plist")"
 done
+# 图标：Info.plist 里的 CFBundleIconName 必须指到 AppIcon，并且 bundle 根目录要真的
+# 躺着 actool 渲染出来的 PNG。只有 Assets.car 是不够的 —— 主屏读的是那几个 PNG。
+echo "  icon name  : $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$app_dir/Info.plist" 2>/dev/null || echo '-')"
+icon_files=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles' "$app_dir/Info.plist" 2>/dev/null | tr -d ' ' | tr '\n' ',' || true)
+echo "  icon files : ${icon_files:--}"
+echo "  icon PNGs  : $(cd "$app_dir" && ls AppIcon*.png 2>/dev/null | tr '\n' ' ' || true)"
 # 未签名包不该带上构建机的任何路径。`-I` 会跳过二进制文件，而路径恰恰藏在二进制里，
 # 所以这里用 `-a` 把二进制当文本扫。
 if grep -ral "$HOME" "$work" >/dev/null 2>&1; then

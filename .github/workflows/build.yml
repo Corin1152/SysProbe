@@ -85,6 +85,42 @@ jobs:
           fi
           rm -rf "$work"
 
+      # 图标漏掉是静默失败：构建全绿、装上去是个白方块，而且只有真机才看得出来。
+      # 所以在这里把「Info.plist 指到 AppIcon」和「bundle 根目录有渲染好的 PNG」
+      # 两件事都卡住 —— 只检查 Assets.car 存在是不够的。
+      - name: Check the app icon is in the bundle
+        run: |
+          work=$(mktemp -d)
+          unzip -q build/export/SysProbe-unsigned.ipa -d "$work"
+          app="$(ls -d "$work"/Payload/*.app)"
+
+          icon_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$app/Info.plist" 2>/dev/null || echo "")
+          echo "CFBundleIconName: ${icon_name:-<missing>}"
+          if [ "$icon_name" != "AppIcon" ]; then
+            echo "::error::CFBundleIconName is '${icon_name:-<missing>}', expected 'AppIcon'. The icon would show as a blank tile. Is ASSETCATALOG_COMPILER_APPICON_NAME set?"
+            exit 1
+          fi
+
+          if [ ! -f "$app/Assets.car" ]; then
+            echo "::error::Assets.car is missing from the app bundle. The asset catalog was not compiled in."
+            exit 1
+          fi
+
+          echo "png at bundle root:"
+          ls "$app"/*.png 2>/dev/null | sed 's/^/  /' || echo "  <none>"
+
+          # actool 的输出文件名以图标集名字开头（AppIcon60x60@2x.png 之类），
+          # 这里用通配匹配尺寸部分，不去赌前缀。主屏 @2x 与 @3x 都必须在，
+          # iPhone X 走的是 @2x。
+          for want in '*60x60@2x.png' '*60x60@3x.png'; do
+            if ! ls "$app"/$want >/dev/null 2>&1; then
+              echo "::error::No ${want#\*} at the bundle root. actool must emit these alongside Assets.car, otherwise SpringBoard cannot draw the home screen icon."
+              exit 1
+            fi
+          done
+          echo "icon present: 60x60 @2x + @3x"
+          rm -rf "$work"
+
       - name: Upload ipa
         uses: actions/upload-artifact@v4
         with:
