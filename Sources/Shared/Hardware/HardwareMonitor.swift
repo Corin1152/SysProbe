@@ -85,8 +85,6 @@ final class HardwareMonitor: ObservableObject {
     private var previousCounters: [String: (rx: UInt64, tx: UInt64, date: Date)] = [:]
     private var lastInterface: String?
 
-    private static let pageSize: UInt64 = UInt64(vm_kernel_page_size)
-
     func start() {
         guard task == nil else { return }
         refresh()
@@ -196,7 +194,7 @@ final class HardwareMonitor: ObservableObject {
         }
         guard result == KERN_SUCCESS else { return stats }
 
-        let page = pageSize
+        let page = systemPageSize()
         stats.free = UInt64(vmStats.free_count) &* page
         stats.active = UInt64(vmStats.active_count) &* page
         stats.inactive = UInt64(vmStats.inactive_count) &* page
@@ -247,14 +245,14 @@ final class HardwareMonitor: ObservableObject {
             guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
             guard let address = entry.pointee.ifa_addr,
                   address.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let name = String(cString: entry.pointee.ifa_name)
+            let name = nullTerminatedString(at: entry.pointee.ifa_name)
             // 只要真实的网络接口，跳过虚拟隧道
             guard name.hasPrefix("en") || name.hasPrefix("pdp_ip") else { continue }
 
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(address, socklen_t(address.pointee.sa_len),
                            &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let ipv4 = String(cString: host)
+                let ipv4 = nullTerminatedString(host)
                 var rx: UInt64 = 0
                 var tx: UInt64 = 0
                 if let data = entry.pointee.ifa_data {
@@ -310,7 +308,7 @@ final class HardwareMonitor: ObservableObject {
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buffer)
+        return nullTerminatedString(buffer)
     }
 
     private static func sysctlInt(_ name: String) -> Int? {

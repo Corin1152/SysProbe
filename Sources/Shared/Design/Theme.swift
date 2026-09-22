@@ -136,7 +136,10 @@ extension View {
     @ViewBuilder
     func mwContainerWidth() -> some View {
         if #available(iOS 17.0, *) {
-            self.mwContainerWidth()
+            // 注意：这里一度写成了 `self.mwContainerWidth()`，也就是调用自己 ——
+            // 编译器只给一句 "function call causes an infinite recursion" 警告，
+            // 真跑到 iOS 17 上会直接栈溢出。必须是 `containerRelativeFrame`。
+            self.containerRelativeFrame(.horizontal)
         } else {
             self.frame(maxWidth: .infinity)
         }

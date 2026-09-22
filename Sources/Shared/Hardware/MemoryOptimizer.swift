@@ -139,7 +139,7 @@ nonisolated private enum MemoryReclaimer {
             }
         }
         guard result == KERN_SUCCESS else { return 0 }
-        let page = UInt64(vm_kernel_page_size)
+        let page = systemPageSize()
         return (UInt64(stats.free_count) &+ UInt64(stats.inactive_count)) &* page
     }
 }
