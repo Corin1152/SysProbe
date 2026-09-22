@@ -11,7 +11,7 @@ struct PowerRing: View {
     let fullScale: Double
     /// Optional: with no reading at all the dial says so itself, and a caption
     /// underneath would only repeat it.
-    let caption: LocalizedStringResource?
+    let caption: LocalizedStringKey?
     var tint: Color = .mwAccent
     var size: CGFloat = 232
 
@@ -21,12 +21,21 @@ struct PowerRing: View {
 
     private var inputFraction: CGFloat {
         guard fullScale > 0, let inputWatts else { return 0 }
-        return CGFloat(min(max(inputWatts / fullScale, 0), 1))
+        return Self.quantise(CGFloat(min(max(inputWatts / fullScale, 0), 1)))
     }
 
     private var batteryFraction: CGFloat {
         guard fullScale > 0, let batteryWatts, batteryWatts > 0 else { return 0 }
-        return CGFloat(min(max(batteryWatts / fullScale, 0), 1))
+        return Self.quantise(CGFloat(min(max(batteryWatts / fullScale, 0), 1)))
+    }
+
+    /// 量化到 0.5% 一档。
+    ///
+    /// 两条弧带着 0.45 秒的隐式动画，而瓦数每秒都在零点几瓦上抖 —— 换算成满量程的
+    /// 比例是千分之几。不量化的话动画每一秒都会被打断重来，表盘于是长期处在
+    /// 「一直在动」的状态：看不出差别，却一直在占渲染。半格以内不动就干净了。
+    private static func quantise(_ fraction: CGFloat) -> CGFloat {
+        (fraction * 200).rounded() / 200
     }
 
     var body: some View {
@@ -87,17 +96,17 @@ struct PowerRing: View {
                         .mwReadout(size: 52, weight: .semibold, rolling: true)
                         .foregroundStyle(tint)
                     Text(verbatim: "W")
-                        .font(.system(size: 20, weight: .medium, design: .rounded))
+                        .font(AppFont.text(20, weight: .medium))
                         .foregroundStyle(Color.mwMuted)
                 }
             } else {
                 Text("no reading")
-                    .font(.system(size: 22, weight: .medium, design: .rounded))
+                    .font(AppFont.text(22, weight: .medium))
                     .foregroundStyle(Color.mwMuted.opacity(0.6))
             }
             if let caption {
                 Text(caption)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(AppFont.text(12, weight: .medium))
                     .foregroundStyle(Color.mwMuted)
                     .multilineTextAlignment(.center)
             }

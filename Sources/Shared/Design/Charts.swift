@@ -12,28 +12,46 @@ struct LivePowerChart: View {
         return max(peak * 1.25, 5)
     }
 
+    /// 画到图上的点数。原始序列最多 180 个（三分钟 × 一秒），全量交给 Swift Charts
+    /// 就是 180 点 × 3 个标记 = 540 个 mark，而这张图每秒都要重算 —— 它是整棵视图树
+    /// 里最贵的一块重渲染。抽稀到 72 个点，在 130 点高的图里肉眼看不出区别。
+    private static let resolution = 72
+
+    /// 抽稀但保峰值：每个桶取最大值，尖峰不会被抹掉（等距抽样会）。
+    private var plotted: [LiveSample] {
+        guard samples.count > Self.resolution else { return samples }
+        let bucket = Double(samples.count) / Double(Self.resolution)
+        return (0..<Self.resolution).compactMap { index in
+            let start = Int(Double(index) * bucket)
+            let end = max(start + 1, Int(Double(index + 1) * bucket))
+            return samples[start..<min(end, samples.count)].max { $0.inputWatts < $1.inputWatts }
+        }
+    }
+
     var body: some View {
+        // 三个并列的 `ForEach` 会把同一批点走三遍，每遍都要重新求一次值与坐标；
+        // 合成一个之后每个点只走一次。渐变与 series 名也提到循环外，别每个点新建一个。
+        let inputSeries = Strings.text("From charger")
+        let batterySeries = Strings.text("Into battery")
+        let areaStyle = LinearGradient(colors: [Color.mwAccent.opacity(0.45),
+                                               Color.mwAccent.opacity(0.02)],
+                                       startPoint: .top,
+                                       endPoint: .bottom)
         Chart {
-            ForEach(samples) { sample in
+            ForEach(plotted) { sample in
                 AreaMark(x: .value("Time", sample.date),
                          y: .value("Watts", sample.inputWatts))
-                    .foregroundStyle(LinearGradient(colors: [Color.mwAccent.opacity(0.45), Color.mwAccent.opacity(0.02)],
-                                                    startPoint: .top,
-                                                    endPoint: .bottom))
+                    .foregroundStyle(areaStyle)
                     .interpolationMethod(.monotone)
-            }
-            ForEach(samples) { sample in
                 LineMark(x: .value("Time", sample.date),
                          y: .value("Watts", sample.inputWatts),
-                         series: .value("Series", String(localized: "From charger")))
+                         series: .value("Series", inputSeries))
                     .foregroundStyle(Color.mwAccent)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineJoin: .round))
                     .interpolationMethod(.monotone)
-            }
-            ForEach(samples) { sample in
                 LineMark(x: .value("Time", sample.date),
                          y: .value("Watts", sample.batteryWatts),
-                         series: .value("Series", String(localized: "Into battery")))
+                         series: .value("Series", batterySeries))
                     .foregroundStyle(Color.mwBattery)
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     .interpolationMethod(.monotone)

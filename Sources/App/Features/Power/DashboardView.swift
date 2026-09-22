@@ -2,13 +2,16 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject private var monitor: PowerMonitor
-    @State private var showingSettings = false
+    @EnvironmentObject private var app: AppState
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
 
+    // 设置入口与设置面板都不在这一页：齿轮由 `PageScaffold` 给（三个分页共用
+    // 同一个），面板由 `RootView` 持有（见 `AppState.showingSettings`）。
+    // 面板挂在分页里会在语言切换重建分页时被一起关掉，所以必须提到树根上。
     var body: some View {
-        PageScaffold("Power", glow: glowColor, toolbar: AnyView(toolbarButtons)) {
+        PageScaffold("Power", glow: glowColor) {
             heroPanel
             if monitor.thermalState.isThrottling { throttleBanner }
             batteryPanel
@@ -17,18 +20,12 @@ struct DashboardView: View {
             sessionPanel
             if !monitor.sensorsAvailable { sensorNote }
         }
-        .sheet(isPresented: $showingSettings) { SettingsView() }
     }
 
     private var glowColor: Color {
         if monitor.thermalState.isThrottling { return .mwDanger }
         if snapshot.isWirelessInput { return .mwWireless }
         return plugged ? .mwAccent : .mwLoss
-    }
-
-    private var toolbarButtons: some View {
-        Button { showingSettings = true } label: { Image(systemName: "gearshape") }
-            .tint(.mwAccent)
     }
 
     // MARK: Hero
@@ -94,18 +91,24 @@ struct DashboardView: View {
         Panel {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "thermometer.high")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(AppFont.text(18, weight: .semibold))
                     .foregroundStyle(Color.mwDanger)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Thermal throttling active")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(AppFont.text(14, weight: .semibold))
                     Text(monitor.thermalState.chargingEffect)
                         .font(.caption)
                         .foregroundStyle(Color.mwMuted)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("\(Text(monitor.thermalState.title)) for \(Formatting.duration(Date.now.timeIntervalSince(monitor.thermalStateSince)))")
-                        .mwMono(size: 10)
-                        .foregroundStyle(Color.mwMuted)
+                    // 拆成两段而不是把 `Text` 嵌进插值：嵌进去的键会是
+                    // `%@ for %@` 且其中一个参数是 `Text`，格式串怎么解析没有
+                    // 保证；拆开后只是一句带 `%@` 的普通文案，中文语序也顺。
+                    HStack(spacing: 4) {
+                        Text(monitor.thermalState.title)
+                        Text("for \(Formatting.duration(Date.now.timeIntervalSince(monitor.thermalStateSince)))")
+                    }
+                    .mwMono(size: 10)
+                    .foregroundStyle(Color.mwMuted)
                 }
             }
         }
@@ -157,7 +160,13 @@ struct DashboardView: View {
 
     private var breakdownPanel: some View {
         Panel("Power path", systemImage: "arrow.triangle.branch",
-              trailing: snapshot.adapterUtilisation.map { Text("\(Int($0 * 100))% of adapter") }) {
+              // 百分号先落成 `String` 再插值，于是键是 `%@ of adapter` 而不是
+              // `%lld% of adapter` —— 后者会把一个字面量 `%` 塞进格式串里，
+              // 交给 `String(format:)` 解析是未定义行为。文案表也按 `%@` 写。
+              trailing: snapshot.adapterUtilisation.map { utilisation in
+                  let percent = "\(Int(utilisation * 100))%"
+                  return Text("\(percent) of adapter")
+              }) {
             VStack(spacing: 12) {
                 HStack(alignment: .top, spacing: 10) {
                     Metric(caption: "From charger",
@@ -200,7 +209,14 @@ struct DashboardView: View {
         Panel("Last 3 minutes", systemImage: "waveform.path.ecg",
               trailing: Text("\(monitor.live.count) samples")) {
             VStack(alignment: .leading, spacing: 8) {
-                LivePowerChart(samples: monitor.live)
+                // 没在看这一页时只占位、不建图：`TabView` 会把切走的分页留在视图树里，
+                // 采样一发布这张图就跟着重算 —— 它是重渲染里最贵的一块。占位高度与图
+                // 一致（`LivePowerChart` 默认 130），切回来时布局不跳。
+                if app.selectedTab == 1 {
+                    LivePowerChart(samples: monitor.live)
+                } else {
+                    Color.clear.frame(height: 130)
+                }
                 HStack(spacing: 14) {
                     LegendDot(color: .mwAccent, text: "From charger")
                     LegendDot(color: .mwBattery, text: "Into battery", dashed: true)
@@ -278,7 +294,7 @@ struct PowerFlowBar: View {
 
 struct LegendDot: View {
     let color: Color
-    let text: LocalizedStringResource
+    let text: LocalizedStringKey
     var dashed: Bool = false
 
     var body: some View {

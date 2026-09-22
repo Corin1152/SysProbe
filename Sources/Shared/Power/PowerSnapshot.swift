@@ -227,7 +227,7 @@ nonisolated struct PowerSnapshot {
 
     var holdIsInferred: Bool { chargeStatusText == nil && isChargingOnHold }
 
-    var statusText: LocalizedStringResource {
+    var statusText: LocalizedStringKey {
         if isChargingOnHold { return "Charging on hold" }
         if fullyCharged && externalConnected { return "Full" }
         if isCharging { return isFinishingCharge ? "Finishing charge" : "Charging" }

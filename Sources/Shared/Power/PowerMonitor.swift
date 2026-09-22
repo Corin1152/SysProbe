@@ -101,8 +101,10 @@ final class PowerMonitor: ObservableObject {
     private let resistance = PathResistanceMeter()
     private let store = SessionStore()
 
-    private var task: Task<Void, Never>?
+    private var ticker: AnyCancellable?
     private var tick = 0
+    /// 实时曲线的原始序列。`live` 是它的发布副本，落盘频率低一半（见 `appendLive`）。
+    private var samples: [LiveSample] = []
     private var lastSampleWrite: Date = .distantPast
     private var lastPersist: Date = .distantPast
     private var lastExternalConnected: Bool?
@@ -155,15 +157,23 @@ final class PowerMonitor: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
-        guard task == nil else { return }
+        guard ticker == nil else { return }
         refresh()
-        task = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                self?.refresh()
+        // 用挂在 `.default` 模式上的 `Timer`，而不是 `Task.sleep`。
+        //
+        // `Task.sleep` 的续体跑在 MainActor 的执行器上，**不受 run loop 模式影响**，
+        // 所以滚动的整段时间里它照样每秒醒来一次：读一轮 IORegistry 与 HID 传感器，
+        // 再把整棵视图树重算一遍（含一张 180 点的 Swift Charts）。十几到几十毫秒
+        // 砸进正在滚动的那一帧里，就是能看见的卡顿。
+        //
+        // `Timer` 只挂在 `.default` 上（**不是** `.common`），而 UIScrollView 一开始
+        // 拖动就会把 run loop 切到 tracking 模式 —— 采样于是在整个滚动手势期间自动
+        // 让路，手指一松立刻接上。这不是降低刷新率：不滚动时仍然是一秒一拍。
+        ticker = Timer.publish(every: 1, on: .main, in: .default)
+            .autoconnect()
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
             }
-        }
     }
 
     /// Stops the tick but leaves any open session open.
@@ -176,8 +186,8 @@ final class PowerMonitor: ObservableObject {
     /// resumed session reports honest totals and `integratedSeconds` records how much of
     /// the wall clock was actually watched.
     func pause() {
-        task?.cancel()
-        task = nil
+        ticker?.cancel()
+        ticker = nil
         persist()
     }
 
@@ -231,9 +241,15 @@ final class PowerMonitor: ObservableObject {
                                 inputWatts: snapshot.inputWatts ?? 0,
                                 batteryWatts: snapshot.batteryWatts ?? 0,
                                 hottestTemperature: snapshot.hottestSensor?.value)
-        live.append(sample)
-        if live.count > Self.liveWindow {
-            live.removeFirst(live.count - Self.liveWindow)
+        samples.append(sample)
+        if samples.count > Self.liveWindow {
+            samples.removeFirst(samples.count - Self.liveWindow)
+        }
+        // 曲线两秒落一次就够：它是三分钟的滚动窗口，一秒与两秒在视觉上分不出来，
+        // 但 Swift Charts 的重算成本直接减半 —— 而这一项正是重渲染里最贵的一块。
+        // 采样本身仍是每秒一个，窗口长度和 `live.count` 都不变。
+        if tick % 2 == 0 || live.isEmpty {
+            live = samples
         }
     }
 
@@ -412,14 +428,14 @@ final class PowerMonitor: ObservableObject {
     /// to carry a `primaryWatts` that answered a simpler version of the same
     /// question, which nothing called, while `DashboardView` open-coded this. One
     /// answer, in the layer that can actually give it.
-    var headline: (watts: Double, caption: LocalizedStringResource)? {
+    var headline: (watts: Double, caption: LocalizedStringKey)? {
         if snapshot.externalConnected {
             if let watts = snapshot.inputWatts {
                 // Written out rather than as a ternary in the tuple. The string
                 // extractor took only the first branch there — "from charger" never
                 // reached the catalog and the dial's caption fell back to English on
-                // every wired charge. `Text` and `LocalizedStringResource` literals
-                // want to be at their own return site.
+                // every wired charge. `Text` and `LocalizedStringKey` literals want
+                // to be at their own return site.
                 if snapshot.isWirelessInput { return (watts, "from MagSafe") }
                 return (watts, "from charger")
             }

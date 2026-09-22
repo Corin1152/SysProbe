@@ -44,10 +44,12 @@ struct HardwareView: View {
     // MARK: CPU
 
     private var cpuPanel: some View {
-        Panel("CPU", systemImage: "cpu", trailing: Text(verbatim: "\(snapshot.cpu.logicalCores) cores")) {
+        // 计数是文案的一部分（"8 cores" / "8 核"），所以走本地化插值而不是 verbatim；
+        // 芯片型号是硬件名，照原样显示。
+        Panel("CPU", systemImage: "cpu", trailing: Text("\(snapshot.cpu.logicalCores) cores")) {
             VStack(alignment: .leading, spacing: 12) {
                 Text(verbatim: snapshot.cpu.model)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(AppFont.text(13, weight: .medium))
                     .foregroundStyle(Color.mwMuted)
                     .lineLimit(2)
 
@@ -76,7 +78,7 @@ struct HardwareView: View {
                                              count: columns),
                               spacing: 8) {
                         ForEach(Array(snapshot.cpu.perCore.enumerated()), id: \.offset) { index, load in
-                            BarRow(title: Text(verbatim: "Core \(index)"),
+                            BarRow(title: Text("Core \(index)"),
                                    detail: Formatting.percent(load * 100) + "%",
                                    fraction: load,
                                    tint: .mwPower(load * 100))
@@ -158,8 +160,9 @@ struct HardwareView: View {
                            size: 18)
                 }
             case .failed(let reason):
-                EmptyNote(text: LocalizedStringResource(stringLiteral: reason),
-                          systemImage: "exclamationmark.triangle")
+                // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
+                // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
+                EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
             case .idle:
                 EmptyNote(text: "Allocates a large block of memory to force the system to reclaim cached pages, then releases it. It also clears this app's own caches. iOS does not let any app free another app's memory — the kernel does that itself — so treat this as a nudge, not a guarantee.")
             }
@@ -171,7 +174,7 @@ struct HardwareView: View {
                     Image(systemName: "wand.and.stars")
                     Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
                 }
-                .font(.system(size: 14, weight: .semibold))
+                .font(AppFont.text(14, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
             }

@@ -35,7 +35,7 @@ final class ThermalMonitor {
 }
 
 extension ProcessInfo.ThermalState {
-    var title: LocalizedStringResource {
+    var title: LocalizedStringKey {
         switch self {
         case .nominal: return "Nominal"
         case .fair: return "Fair"
@@ -46,7 +46,7 @@ extension ProcessInfo.ThermalState {
     }
 
     /// What the state means for charging specifically.
-    var chargingEffect: LocalizedStringResource {
+    var chargingEffect: LocalizedStringKey {
         switch self {
         case .nominal: return "No thermal limit on charge current."
         case .fair: return "Warming up. Charge current may be trimmed."

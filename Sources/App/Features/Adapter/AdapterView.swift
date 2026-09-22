@@ -34,16 +34,16 @@ struct AdapterView: View {
                         .mwReadout(size: snapshot.inputWatts == nil ? 30 : 44)
                         .foregroundStyle(snapshot.inputWatts == nil ? Color.mwMuted.opacity(0.55) : Color.mwAccent)
                     Text(verbatim: "W")
-                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .font(AppFont.text(18, weight: .medium))
                         .foregroundStyle(Color.mwMuted)
                     Text("of")
-                        .font(.system(size: 14))
+                        .font(AppFont.text(14))
                         .foregroundStyle(Color.mwMuted)
                         .padding(.horizontal, 2)
                     Text(snapshot.adapterRatedWatts.map { String(format: "%.0f", $0) } ?? "—")
                         .mwReadout(size: 26)
                     Text("W rated")
-                        .font(.system(size: 13))
+                        .font(AppFont.text(13))
                         .foregroundStyle(Color.mwMuted)
                 }
 
@@ -70,7 +70,7 @@ struct AdapterView: View {
     /// The interesting question on this page is why the phone is not pulling the
     /// full rating, so the most likely explanation is spelled out rather than left
     /// for the user to infer from four separate numbers.
-    private var headroomReason: LocalizedStringResource? {
+    private var headroomReason: LocalizedStringKey? {
         guard let utilisation = snapshot.adapterUtilisation, utilisation < 0.75 else { return nil }
         if monitor.thermalState.isThrottling {
             return "Well under the adapter's rating while the system is thermally throttling — the ceiling right now is heat, not the charger."
@@ -147,7 +147,7 @@ struct AdapterView: View {
                     let (voltage, current, tint) = (rail.voltage, rail.current, rail.tint)
                     HStack {
                         Text(rail.name)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(AppFont.text(13, weight: .medium))
                         Spacer()
                         Text(voltage.map { String(format: "%.2f V", $0) } ?? "—")
                             .mwMono(size: 12)
@@ -267,7 +267,7 @@ struct AdapterView: View {
     private var sagBanner: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12))
+                .font(AppFont.text(12))
                 .foregroundStyle(Color.mwDanger)
             Text("The rail is collapsing under load. The phone is taking well under what the charger offered, and the voltage at the port is far below what was negotiated — the current is being held down to stop it falling further. Try another cable on this charger: if the drop shrinks, it was the cable.")
                 .font(.caption)
@@ -320,7 +320,7 @@ struct AdapterView: View {
         }
     }
 
-    private func resistanceVerdict(_ milliohms: Double) -> LocalizedStringResource {
+    private func resistanceVerdict(_ milliohms: Double) -> LocalizedStringKey {
         switch milliohms {
         case ..<200:
             "Low. Nothing in this connection is holding the charge back."
@@ -333,10 +333,10 @@ struct AdapterView: View {
 }
 
 /// One row of the live-rails table. A named type rather than a tuple so the label
-/// can be a `LocalizedStringResource` and the row can carry its own identity.
+/// can be a `LocalizedStringKey` and the row can carry its own identity.
 private struct RailRow: Identifiable {
     let id: String
-    let name: LocalizedStringResource
+    let name: LocalizedStringKey
     let voltage: Double?
     let current: Double?
     let tint: Color
@@ -349,7 +349,7 @@ struct ProfileRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 13))
+                .font(AppFont.text(13))
                 .foregroundStyle(isActive ? Color.mwAccent : Color.mwMuted.opacity(0.5))
             Text(verbatim: profile.label)
                 .mwMono(size: 13, weight: isActive ? .semibold : .regular)
@@ -382,7 +382,7 @@ struct DetailRow: View {
     let value: String?
 
     /// A translated label.
-    init(label: LocalizedStringResource, value: String?) {
+    init(label: LocalizedStringKey, value: String?) {
         self.label = Text(label)
         self.value = value
     }
@@ -394,11 +394,11 @@ struct DetailRow: View {
     }
 
     /// The transport a charge arrived over. Copy, but it is a *value* rather than a
-    /// label, so it is resolved to a `String` here. Two separate `String(localized:)`
-    /// calls rather than one wrapped around a ternary: the extractor reads literals
-    /// at the call site, not through a branch.
+    /// label, so it is resolved to a `String` here. `Strings.text` rather than
+    /// `String(localized:)`: 后者的解析路径不经过被替换掉的那个 `Bundle` 方法，
+    /// 切了语言也不会跟着变。
     static func transportName(wireless: Bool) -> String {
-        wireless ? String(localized: "Wireless") : String(localized: "USB-C")
+        Strings.text(wireless ? "Wireless" : "USB-C")
     }
 
     /// Nested IOKit dictionaries arrive as long multi-line strings; those get their
@@ -414,7 +414,7 @@ struct DetailRow: View {
                 if isLong {
                     VStack(alignment: .leading, spacing: 3) {
                         label
-                            .font(.system(size: 13))
+                            .font(AppFont.text(13))
                             .foregroundStyle(Color.mwMuted)
                         Text(verbatim: value)
                             .mwMono(size: 11)
@@ -425,7 +425,7 @@ struct DetailRow: View {
                 } else {
                     HStack(alignment: .firstTextBaseline) {
                         label
-                            .font(.system(size: 13))
+                            .font(AppFont.text(13))
                             .foregroundStyle(Color.mwMuted)
                         Spacer(minLength: 12)
                         Text(verbatim: value)

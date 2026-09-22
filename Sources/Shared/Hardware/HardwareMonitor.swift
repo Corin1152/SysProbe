@@ -80,26 +80,29 @@ struct HardwareSnapshot: Hashable {
 final class HardwareMonitor: ObservableObject {
     @Published private(set) var snapshot = HardwareSnapshot()
 
-    private var task: Task<Void, Never>?
+    private var ticker: AnyCancellable?
     private var previousTicks: [UInt64] = []
     private var previousCounters: [String: (rx: UInt64, tx: UInt64, date: Date)] = [:]
     private var lastInterface: String?
+    /// 存储容量上一次真正去问文件系统的时间。见 `refresh`。
+    private var lastStorageRead: Date = .distantPast
+    private var cachedStorage = StorageStats()
 
     func start() {
-        guard task == nil else { return }
+        guard ticker == nil else { return }
         refresh()
-        task = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                self?.refresh()
+        // 与 `PowerMonitor.start` 同样的理由：挂在 `.default` 模式上的 `Timer` 会在
+        // 滚动期间自动让路，`Task.sleep` 不会。详见那边的注释。
+        ticker = Timer.publish(every: 1, on: .main, in: .default)
+            .autoconnect()
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
             }
-        }
     }
 
     func pause() {
-        task?.cancel()
-        task = nil
+        ticker?.cancel()
+        ticker = nil
     }
 
     func refresh() {
@@ -107,7 +110,13 @@ final class HardwareMonitor: ObservableObject {
         next.date = .now
         next.cpu = Self.readCPU(previous: &previousTicks)
         next.memory = Self.readMemory()
-        next.storage = Self.readStorage()
+        // 容量一次查询是一次文件系统往返，而数字几分钟都不会变。十秒问一次足够，
+        // 中间直接复用上次的结果。
+        if next.date.timeIntervalSince(lastStorageRead) > 10 {
+            cachedStorage = Self.readStorage()
+            lastStorageRead = next.date
+        }
+        next.storage = cachedStorage
         next.network = Self.readNetwork(previous: &previousCounters, lastInterface: &lastInterface)
         next.system = Self.readSystem()
         snapshot = next
@@ -115,14 +124,26 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: CPU
 
-    private static func readCPU(previous: inout [UInt64]) -> CPUStats {
-        var stats = CPUStats()
-        stats.model = cpuName(machine: sysctlString("hw.machine") ?? "")
-        stats.physicalCores = sysctlInt("hw.physicalcpu") ?? 0
-        stats.logicalCores = sysctlInt("hw.logicalcpu") ?? 0
+    /// 型号名、核心数、最高频率。
+    ///
+    /// 这些出厂就定死，一秒读一次 sysctl 是纯浪费 —— 每读一次是四次 `sysctlbyname`
+    /// 加一次查表，而值永远一样。第一次用到时读一遍就够。
+    private static let cpuIdentity: (model: String, physicalCores: Int, logicalCores: Int, frequencyMHz: Int) = {
+        let machine = sysctlString("hw.machine") ?? ""
         // iOS 沙箱不暴露 `hw.cpufrequency*`，读不到就留 0，界面按「—」显示。
         // 编一个数字出来比留空更糟。
-        stats.frequencyMHz = sysctlInt("hw.cpufrequency_max").map { $0 / 1_000_000 } ?? 0
+        return (cpuName(machine: machine),
+                sysctlInt("hw.physicalcpu") ?? 0,
+                sysctlInt("hw.logicalcpu") ?? 0,
+                sysctlInt("hw.cpufrequency_max").map { $0 / 1_000_000 } ?? 0)
+    }()
+
+    private static func readCPU(previous: inout [UInt64]) -> CPUStats {
+        var stats = CPUStats()
+        stats.model = cpuIdentity.model
+        stats.physicalCores = cpuIdentity.physicalCores
+        stats.logicalCores = cpuIdentity.logicalCores
+        stats.frequencyMHz = cpuIdentity.frequencyMHz
 
         var cpuInfo: processor_info_array_t?
         var infoCount: mach_msg_type_number_t = 0
@@ -290,14 +311,20 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: 系统
 
-    private static func readSystem() -> SystemStats {
+    /// 机型、系统版本、内核版本、物理内存 —— 同样是一秒读一次而从不改变的东西。
+    private static let systemIdentity: SystemStats = {
         var stats = SystemStats()
         stats.deviceName = UIDevice.current.name
         stats.modelIdentifier = machineIdentifier()
         stats.systemVersion = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
         stats.kernelVersion = sysctlString("kern.osrelease") ?? "—"
-        stats.uptime = ProcessInfo.processInfo.systemUptime
         stats.physicalMemory = ProcessInfo.processInfo.physicalMemory
+        return stats
+    }()
+
+    private static func readSystem() -> SystemStats {
+        var stats = systemIdentity
+        stats.uptime = ProcessInfo.processInfo.systemUptime
         return stats
     }
 

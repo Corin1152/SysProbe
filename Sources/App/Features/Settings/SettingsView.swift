@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 设置页。只保留与功率采样有关的开关，以及移植来源的署名。
+/// 设置页。语言、与功率采样有关的开关，以及移植来源的署名。
 struct SettingsView: View {
     @EnvironmentObject private var monitor: PowerMonitor
+    @EnvironmentObject private var app: AppState
     @Environment(\.dismiss) private var dismiss
 
     @State private var wattHoursText: String = ""
@@ -11,10 +12,29 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("Language", selection: $app.language) {
+                        // 语言名一律用该语言自己的写法，且不参与翻译 —— 把「简体中文」
+                        // 翻成 "Simplified Chinese" 之后，只会中文的人反而找不到它。
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(verbatim: language.endonym).tag(language)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } header: {
+                    Text("Language")
+                } footer: {
+                    Text("Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.")
+                }
+
+                Section {
                     Toggle("Keep the screen awake while charging",
                            isOn: $monitor.keepScreenAwakeWhileCharging)
                 } header: {
-                    Text("Charging")
+                    // 刻意不叫 "Charging"：那个键已经被充电状态那颗 Pill 占了
+                    // （"Charging" → 充电中），一个键只能有一条译文，复用会把
+                    // 分区标题写成「充电中」。
+                    Text("Charging options")
                 } footer: {
                     Text("The one-second tick stops when the screen locks, so a whole charge cannot be recorded with it off.")
                 }
@@ -39,7 +59,12 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("Device", value: monitor.deviceModelIdentifier)
-                    LabeledContent("Sensors", value: monitor.sensorsAvailable ? "available" : "unavailable")
+                    // `Strings.text` 而不是 `String(localized:)`：后者的解析路径不
+                    // 经过被替换掉的那个 `Bundle` 方法，切了语言也不会变。
+                    LabeledContent("Sensors",
+                                   value: Strings.text(monitor.sensorsAvailable
+                                                       ? "available"
+                                                       : "unavailable"))
                     ForEach(monitor.diagnostics, id: \.self) { line in
                         Text(verbatim: line)
                             .font(.footnote)

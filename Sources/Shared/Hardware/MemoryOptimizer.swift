@@ -93,7 +93,11 @@ final class MemoryOptimizer: ObservableObject {
                 guard let self else { return }
                 self.lastRun = .now
                 if totalAllocated == 0 {
-                    self.phase = .failed(reason: stoppedEarlyFlag ? "可用内存过低，未执行分配" : "无法分配内存")
+                    // 存英文键而不是已经翻好的中文：文案表按英文键索引，
+                    // 在这里翻就等于把语言写死在后台线程上。
+                    self.phase = .failed(reason: stoppedEarlyFlag
+                                         ? "Available memory was too low, so nothing was allocated."
+                                         : "Could not allocate memory.")
                 } else {
                     self.phase = .finished(before: before, after: after)
                 }

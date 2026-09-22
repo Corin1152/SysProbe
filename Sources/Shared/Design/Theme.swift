@@ -95,12 +95,44 @@ nonisolated enum Theme {
     }
 }
 
+/// 字体。全 App 的字形都从这里出，语言一换就整体跟着换。
+///
+/// 中文下刻意**不**请求 `.rounded`：iOS 的 SF Rounded 只有拉丁字形，汉字会掉回苹方 SC，
+/// 结果是同一行里数字圆润、汉字方正，字重与基线也对不齐。改用系统默认设计后，拉丁走
+/// SF Pro、汉字走苹方 SC —— 这是 Apple 自己配好的一条字形链，中英混排才是一套字。
+///
+/// 字距同理：拉丁全大写配字距是仪表面板的味道，汉字加同样的字距只会显得散。
+nonisolated enum AppFont {
+
+    /// 正文、标题、读数。中文下退回系统默认设计。
+    static func text(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.system(size: size,
+                    weight: weight,
+                    design: LocalizedBundle.language.prefersRoundedDesign ? .rounded : .default)
+    }
+
+    /// 等宽。这个不随语言变 —— 它管的是数字对齐，而中文下要用到等宽的地方本来就只有数字。
+    static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.system(size: size, weight: weight, design: .monospaced)
+    }
+
+    /// 微标签的字距。
+    static var captionTracking: CGFloat {
+        LocalizedBundle.language.prefersRoundedDesign ? 0.9 : 0.3
+    }
+
+    /// 微标签是否转大写。汉字没有大小写，转了也白转。
+    static var captionUppercases: Bool {
+        LocalizedBundle.language.prefersRoundedDesign
+    }
+}
+
 extension View {
     /// The uppercase, tracked micro-label used above every readout.
     func mwCaption() -> some View {
-        font(.system(size: 11, weight: .semibold, design: .rounded))
-            .textCase(.uppercase)
-            .tracking(0.9)
+        font(AppFont.text(11, weight: .semibold))
+            .textCase(AppFont.captionUppercases ? Text.Case.uppercase : nil)
+            .tracking(AppFont.captionTracking)
             .foregroundStyle(Color.mwMuted)
     }
 
@@ -112,13 +144,13 @@ extension View {
     /// second is both restless to look at and a steady render cost for nothing.
     /// The hero number on the dial turns it on; the rest snap.
     func mwReadout(size: CGFloat, weight: Font.Weight = .semibold, rolling: Bool = false) -> some View {
-        font(.system(size: size, weight: weight, design: .rounded))
+        font(AppFont.text(size, weight: weight))
             .monospacedDigit()
             .contentTransition(rolling ? .numericText() : .identity)
     }
 
     func mwMono(size: CGFloat = 13, weight: Font.Weight = .regular) -> some View {
-        font(.system(size: size, weight: weight, design: .monospaced))
+        font(AppFont.mono(size, weight: weight))
     }
 }
 

@@ -21,7 +21,7 @@ nonisolated enum ThermalZone: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: LocalizedStringResource {
+    var title: LocalizedStringKey {
         switch self {
         case .battery: return "Battery"
         case .charger: return "Charge IC"
@@ -84,7 +84,7 @@ nonisolated enum ThermalZone: String, CaseIterable, Identifiable {
 
 nonisolated enum SensorCatalog {
     /// Human labels for the sensors we understand. Everything else keeps its raw name.
-    private static let labels: [String: LocalizedStringResource] = [
+    private static let labels: [String: String] = [
         "Charger VQ0u": "USB-C input voltage",
         "Charger IQ0u": "USB-C input current",
         "Charger VQ1u": "Wireless input voltage",
@@ -100,8 +100,8 @@ nonisolated enum SensorCatalog {
     /// The translated label for a sensor we recognise, or nil for one we do not.
     /// Callers show the hardware name itself in that case — `Charger VQ0u` is not
     /// copy, and must never reach the string catalog as a lookup key.
-    static func label(for name: String) -> LocalizedStringResource? {
-        labels[name]
+    static func label(for name: String) -> LocalizedStringKey? {
+        labels[name].map(LocalizedStringKey.init)
     }
 
     /// Sorts a sensor name into a zone by whole words rather than by substring.

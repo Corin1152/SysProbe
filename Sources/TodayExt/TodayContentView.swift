@@ -92,8 +92,10 @@ struct TodayContentView: View {
 
     private var pathPanel: some View {
         Panel("Power path", systemImage: "arrow.triangle.branch",
-              trailing: snapshot.adapterUtilisation.map {
-                  Text(verbatim: "\(Formatting.percent($0 * 100))% of adapter")
+              // 同上：百分号作为参数传入，键才是 `%@ of adapter`。
+              trailing: snapshot.adapterUtilisation.map { utilisation in
+                  let percent = "\(Formatting.percent(utilisation * 100))%"
+                  return Text("\(percent) of adapter")
               }) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 14) {
@@ -163,7 +165,7 @@ struct TodayContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: profile.index == snapshot.negotiatedProfile?.index
                                   ? "largecircle.fill.circle" : "circle")
-                                .font(.system(size: 11))
+                                .font(AppFont.text(11))
                                 .foregroundStyle(profile.index == snapshot.negotiatedProfile?.index
                                                  ? Color.mwAccent : Color.mwMuted)
                             Text(verbatim: profile.label)
@@ -194,14 +196,14 @@ struct TodayContentView: View {
         }
     }
 
-    private func detailRow(_ label: LocalizedStringResource, _ value: String) -> some View {
+    private func detailRow(_ label: LocalizedStringKey, _ value: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 13))
+                .font(AppFont.text(13))
                 .foregroundStyle(Color.mwMuted)
             Spacer(minLength: 8)
             Text(verbatim: value)
-                .font(.system(size: 13, weight: .medium))
+                .font(AppFont.text(13, weight: .medium))
                 .lineLimit(1)
         }
     }

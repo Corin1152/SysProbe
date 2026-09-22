@@ -41,8 +41,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
@@ -65,12 +65,15 @@ targets:
       - path: Sources/TodayExt
       - path: Sources/Shared/Power
       - path: Sources/Shared/Design
+      # 扩展也要文案表与 `Bundle.main` 的替身：`Theme.AppFont` 依赖语言、
+      # `Backdrop` 那几个组件依赖 `LocalizedStringKey`。
+      - path: Sources/Shared/Localization
     settings:
       base:
         PRODUCT_NAME: TodayExtension
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.today
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

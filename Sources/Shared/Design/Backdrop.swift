@@ -50,7 +50,7 @@ struct Backdrop: View {
 
 /// A titled panel. Everything on every screen sits in one of these.
 struct Panel<Content: View>: View {
-    var title: LocalizedStringResource?
+    var title: LocalizedStringKey?
     var systemImage: String?
     /// Either translated copy — `Text("…")` — or a measured value that must never
     /// be looked up in the string catalog — `Text(verbatim:)`. Panels carry both:
@@ -59,7 +59,7 @@ struct Panel<Content: View>: View {
     var trailing: Text?
     @ViewBuilder var content: () -> Content
 
-    init(_ title: LocalizedStringResource? = nil,
+    init(_ title: LocalizedStringKey? = nil,
          systemImage: String? = nil,
          trailing: Text? = nil,
          @ViewBuilder content: @escaping () -> Content) {
@@ -75,7 +75,7 @@ struct Panel<Content: View>: View {
                 HStack(spacing: 6) {
                     if let systemImage {
                         Image(systemName: systemImage)
-                            .font(.system(size: 11, weight: .bold))
+                            .font(AppFont.text(11, weight: .bold))
                             .foregroundStyle(Color.mwMuted)
                     }
                     if let title {
@@ -106,7 +106,7 @@ struct Panel<Content: View>: View {
 
 /// Caption, number, unit. The building block of every panel.
 struct Metric: View {
-    let caption: LocalizedStringResource
+    let caption: LocalizedStringKey
     let value: String
     var unit: String?
     var tint: Color = .primary
@@ -129,7 +129,7 @@ struct Metric: View {
                     .foregroundStyle(isPlaceholder ? Color.mwMuted.opacity(0.55) : tint)
                 if let unit {
                     Text(unit)
-                        .font(.system(size: size * 0.48, weight: .medium, design: .rounded))
+                        .font(AppFont.text(size * 0.48, weight: .medium))
                         .foregroundStyle(Color.mwMuted)
                 }
             }
@@ -154,10 +154,10 @@ struct Pill: View {
     var body: some View {
         HStack(spacing: 4) {
             if let systemImage {
-                Image(systemName: systemImage).font(.system(size: 10, weight: .bold))
+                Image(systemName: systemImage).font(AppFont.text(10, weight: .bold))
             }
             text
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(AppFont.text(11, weight: .semibold))
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 9)
@@ -187,7 +187,7 @@ struct BarRow: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
                     title
-                        .font(.system(size: 13, weight: .medium))
+                        .font(AppFont.text(13, weight: .medium))
                         .lineLimit(1)
                     if let subtitle {
                         subtitle
@@ -221,13 +221,28 @@ struct BarRow: View {
 /// too, and the charts are shared with the Today extension — which does not compile
 /// the app's own sources.
 struct EmptyNote: View {
-    let text: LocalizedStringResource
+    let text: LocalizedStringKey
     var systemImage: String = "info.circle"
+
+    init(text: LocalizedStringKey, systemImage: String = "info.circle") {
+        self.text = text
+        self.systemImage = systemImage
+    }
+
+    /// 键在运行期才知道的场合（`MemoryOptimizer.Phase.failed` 的失败原因）。
+    ///
+    /// 先把文案查出来再塞进 `LocalizedStringKey`，两条路径都成立：这个 `init` 若是
+    /// 走了本地化查找，查的是一个查不到的中文串，回落即原文；若没走查找，原文本来
+    /// 就已经是译文。不必去赌 `LocalizedStringKey(String)` 解析不解析。
+    init(key: String, systemImage: String = "info.circle") {
+        self.text = LocalizedStringKey(Strings.text(key))
+        self.systemImage = systemImage
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
+                .font(AppFont.text(12, weight: .semibold))
                 .foregroundStyle(Color.mwMuted)
             Text(text)
                 .font(.footnote)
