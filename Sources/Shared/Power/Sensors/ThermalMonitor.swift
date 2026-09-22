@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Watches the system's own thermal verdict.
 ///

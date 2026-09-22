@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// One advertised USB-PD / HVC power profile from the adapter's menu.
 nonisolated struct PDProfile: Identifiable, Hashable {

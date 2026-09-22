@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 /// One point in the rolling live chart.
 nonisolated struct LiveSample: Identifiable, Hashable {

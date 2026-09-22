@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 
 /// Where in the phone a temperature sensor sits.
 ///
@@ -101,7 +102,7 @@ nonisolated enum SensorCatalog {
     /// Callers show the hardware name itself in that case — `Charger VQ0u` is not
     /// copy, and must never reach the string catalog as a lookup key.
     static func label(for name: String) -> LocalizedStringKey? {
-        labels[name].map(LocalizedStringKey.init)
+        labels[name].map { LocalizedStringKey($0) }
     }
 
     /// Sorts a sensor name into a zone by whole words rather than by substring.

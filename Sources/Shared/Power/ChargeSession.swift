@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// One point on a session's charge curve.
 nonisolated struct ChargeSample: Codable, Hashable, Identifiable {
