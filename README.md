@@ -60,10 +60,20 @@ App Store 审核**。
 传统扩展自 iOS 14 起被标记废弃、iOS 18 起被移除。**iPhone X 的系统封顶就是 iOS 16.x**，
 所以在这个目标上不存在保质期问题。
 
-### 两个会让它显示「无法载入」的坑
+### 三个会让它显示「无法载入」的坑
 
 都是**静默**的：构建全绿、界面正常安装，只有真机上才看得出来。CI 里各有一条断言卡住。
 
+- **这一屏不能碰 SwiftUI。** 这是真根因，而且一开始找错了两次方向（先修 principal
+  class、又修 NotificationCenter 分类，装上去都没用）。判据来自对比，不是推测 ——
+  拆开两边的 appex 数 SwiftUI 符号：我们 **181 个**，能正常工作的 CPU-X 是 **0 个**
+  （它是 storyboard + UIKit 控件）。传统扩展的内存预算与启动 watchdog 都远小于主 App，
+  appex 里只要有 SwiftUI 的东西，dyld 就会把 `SwiftUI.framework` 映射进来，再叠上
+  `UIHostingController` 那一整套视图运行时 —— 启动即被掐掉。所以这一屏是纯 UIKit 的
+  （`Sources/TodayExt/TodayWidgetView.swift`，环用 `CAShapeLayer`），取数层
+  `Shared/Power` 也去掉了 `LocalizedStringKey`（改用 `Strings.text` 直接返回 `String`，
+  译文来源是同一份 `.lproj`，不经过 SwiftUI）。**主 App 用 SwiftUI 完全没问题，
+  这个约束只属于扩展。**
 - **`NSExtensionPrincipalClass` 必须是显式的 ObjC 类名。** 写成「模块名.类名」
   （`TodayExtension.TodayViewController`）要靠模块名在运行期被解析成类，解析不到就找不到
   类 —— 负一屏显示「无法载入」。现在 `TodayViewController` 标了
@@ -77,6 +87,22 @@ App Store 审核**。
   修法是先把框架 `dlopen` 进来（分类随之注册），再先探响应性、后走 `method(for:)` 调用 ——
   选择器不在就安静跳过，退回收起态但内容照常显示，不会崩。能正常显示的 CPU-X，它的 appex
   是链了 NotificationCenter 的，而且根本不调这个 API。
+
+### 点一下打开主 App
+
+负一屏上点任意位置都会打开主 App，做法与 CPU-X 一致：
+
+- 主 App 注册一个自定义 URL scheme（`sysprobe`，见 `Support/SysProbe-Info.plist` 的
+  `CFBundleURLTypes`）。CPU-X 注册的是 `armcpuz`。这是个数组，`INFOPLIST_KEY_*` 表达
+  不了，所以和 `UILaunchScreen` 一样落在局部 plist 里。
+- 组件上挂一个 `UITapGestureRecognizer`，走
+  `extensionContext?.open(URL(string: "sysprobe://open")!, completionHandler: nil)`
+  —— 扩展里没有 `UIApplication`（那个 API 在 appex 上编译就过不去），
+  `extensionContext` 是唯一能唤起居主 App 的通道。
+- 主 App 侧 `.onOpenURL` 只把设置面板收起来；分页不重置，停在用户上次看的那一屏。
+
+CI 有两条断言卡住「静默失败」：主 App 必须注册了 `sysprobe`，且 appex 的源码里真的
+构造了那个 URL。缺任何一半都是点上去没反应、也没有任何报错。
 
 ## 语言
 
