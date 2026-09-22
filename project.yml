@@ -45,11 +45,14 @@ targets:
         CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
-        # 启动屏的底色。`UILaunchScreen` 这个键构建设置表达不了（它是个嵌套字典），
-        # 只能落成局部 plist —— 跟扩展那份 NSExtension 一样的处理。
-        # 不设的话启动屏用系统白（深色下是系统黑），与画布差一截，启动会闪一下。
+        # 启动屏的底色。`UILaunchScreen` 是个嵌套字典，构建设置表达不了，只能落成
+        # 局部 plist —— 跟扩展那份 NSExtension 一样的处理。不设的话启动屏用系统背景色
+        # （浅色下白、深色下黑），与画布差一截，启动会闪一下。
+        #
+        # 刻意**不**加 `INFOPLIST_KEY_UILaunchScreen_Generation`：实测它会多塞一个
+        # 未文档化的嵌套键（`UILaunchScreen.UILaunchScreen = {}`），而 `UIColorName`
+        # 本身已经是一份完整的启动屏定义。
         INFOPLIST_FILE: Support/SysProbe-Info.plist
-        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # 图标来自 Sources/App/Assets.xcassets，由 scripts/make-appicon.py 生成。
         # 不设这一项，actool 会编译整个 catalog 但不会把图标写进 Info.plist 的

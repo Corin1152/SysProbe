@@ -4,7 +4,11 @@
 <dict>
 	<!-- 只写构建设置表达不了的键。`GENERATE_INFOPLIST_FILE` 会把这份并进
 	     合成出来的整份 plist（扩展的 NSExtension 同理）。
-	     启动屏底色取画布的深色端，跟 `Backdrop` 的渐变对得上。 -->
+
+	     启动屏底色取画布的深色端，跟 `Backdrop` 的渐变对得上。
+	     `UIColorName` 就是 `UILaunchScreen` 的全部内容 —— 别再打开
+	     `INFOPLIST_KEY_UILaunchScreen_Generation`，那个设置会额外塞一个未文档化的
+	     嵌套键进来。 -->
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
