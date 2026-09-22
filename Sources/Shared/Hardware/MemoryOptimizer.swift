@@ -65,8 +65,12 @@ final class MemoryOptimizer: ObservableObject {
                 allocated &+= MemoryReclaimer.chunkBytes
 
                 let progress = cap == 0 ? 1 : min(1, Double(allocated) / Double(cap))
+                // 必须先把 `allocated` 拷成不可变的再送进 Task：直接捕获这个 `var`
+                // 会被 Swift 6 判成 "sending 'allocated' risks causing data races"，
+                // 因为外层循环还在改它。值类型拷贝是 Sendable，没问题。
+                let soFar = allocated
                 Task { @MainActor in
-                    self?.phase = .running(progress: progress, allocated: allocated)
+                    self?.phase = .running(progress: progress, allocated: soFar)
                 }
             }
 
@@ -81,11 +85,15 @@ final class MemoryOptimizer: ObservableObject {
             Thread.sleep(forTimeInterval: 0.25)
             let after = MemoryReclaimer.availableMemory()
 
+            // 同上：两个 `var` 先落成 `let` 再跨隔离域。
+            let totalAllocated = allocated
+            let stoppedEarlyFlag = stoppedEarly
+
             Task { @MainActor in
                 guard let self else { return }
                 self.lastRun = .now
-                if allocated == 0 {
-                    self.phase = .failed(reason: stoppedEarly ? "可用内存过低，未执行分配" : "无法分配内存")
+                if totalAllocated == 0 {
+                    self.phase = .failed(reason: stoppedEarlyFlag ? "可用内存过低，未执行分配" : "无法分配内存")
                 } else {
                     self.phase = .finished(before: before, after: after)
                 }
