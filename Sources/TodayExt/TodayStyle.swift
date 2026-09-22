@@ -29,7 +29,7 @@ nonisolated enum TodayStyle {
     static let danger = dynamic(0xC5342B, 0xFF6058)
     /// 无线 / MagSafe。
     static let wireless = dynamic(0x6B4EE6, 0xB49BFF)
-    static let muted = dynamic(0x60687A, 0x8C93A6)
+    static let muted = dynamic(0x3E4757, 0x9AA3B5)
     static let card = dynamic(0xFFFFFF, 0x14171F)
     static let stroke = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.08)
     /// 轨道底色（进度条、环的未填充部分）。
@@ -67,6 +67,15 @@ nonisolated enum TodayStyle {
         case ..<0.90: return loss
         default: return danger
         }
+    }
+
+    /// 存储条的颜色。
+    ///
+    /// 与 `loadTint` 的方向相反：那边是「占用越高越红」，这里是「**剩余**越少越红」——
+    /// 该被注意的是还剩多少，不是已经用了多少。所以阈值按剩余比例算，20% 是 iOS
+    /// 自己提示「存储空间不足」时常用的那道线。
+    static func storageTint(freeFraction: Double) -> UIColor {
+        freeFraction > 0.20 ? battery : danger
     }
 }
 

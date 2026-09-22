@@ -41,8 +41,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.6"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "0.0.7"
+        CURRENT_PROJECT_VERSION: "7"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -100,8 +100,8 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.6"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "0.0.7"
+        CURRENT_PROJECT_VERSION: "7"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

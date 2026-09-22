@@ -173,9 +173,6 @@
 "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges." = "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges.";
 "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which." = "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which.";
 "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting." = "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.";
-"Battery energy" = "Battery energy";
-"Used to turn a %/h slope into watts for the discharge estimate. Ignored when the pack capacity is readable from IOKit." = "Used to turn a %/h slope into watts for the discharge estimate. Ignored when the pack capacity is readable from IOKit.";
-"Estimate" = "Estimate";
 "available" = "available";
 "unavailable" = "unavailable";
 "loaded" = "loaded";
@@ -193,5 +190,4 @@
 "not bundled" = "not bundled";
 "Charger" = "Charger";
 "Input power" = "Input power";
-"%@ free" = "%@ free";
 "%@ used · %@ free" = "%@ used · %@ free";

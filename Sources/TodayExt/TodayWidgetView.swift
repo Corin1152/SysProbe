@@ -61,19 +61,27 @@ final class TodayWidgetView: UIView {
         row.alignment = .top
 
         root.axis = .vertical
-        root.spacing = 14
+        root.spacing = 18
         root.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(row)
         root.addArrangedSubview(storage)
         addSubview(root)
 
+        // 内容**垂直居中**，而不是贴上下边缘。
+        //
+        // 组件的实际高度由 `preferredContentSize` 定（对齐 CPU-X，约 118pt），比内容的
+        // 自然高度高出一截。原来上下贴边、中间只留一个 spacing，多出来的那截就全堆在
+        // 四组与存储条之间，看着空。改成居中后，多余空间平均分到上下两端，
+        // 中间只剩固定间距。
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: leadingAnchor,
                                           constant: Self.horizontalInset),
             root.trailingAnchor.constraint(equalTo: trailingAnchor,
                                            constant: -Self.horizontalInset),
-            root.topAnchor.constraint(equalTo: topAnchor),
-            root.bottomAnchor.constraint(equalTo: bottomAnchor),
+            root.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // 内容万一长得超过组件高度，这两个不等式保证它不会溢出到边界外。
+            root.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
+            root.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
     }
 
@@ -100,12 +108,15 @@ final class TodayWidgetView: UIView {
                          value: Formatting.number(hardware.memory.usage * 100),
                          unit: "%",
                          tint: TodayStyle.loadTint(hardware.memory.usage),
-                         footnote: Strings.text("%@ free", Formatting.bytes(hardware.memory.available)))
+                         // 只出容量，不带「空闲」二字 —— 这一格的位置本来就说明了它是剩余。
+                         footnote: Formatting.bytes(hardware.memory.available))
 
         chargerCell.apply(caption: Strings.text("Charger"),
                           value: Formatting.watts(power.inputWatts ?? 0),
                           unit: "W",
-                          tint: TodayStyle.accent,
+                          // 与电芯那组同色：两格都是功率读数，一个青一个绿会让人以为
+                          // 它们在表达不同的东西。
+                          tint: TodayStyle.battery,
                           footnote: Strings.text("Input power"))
 
         cellCell.apply(caption: Strings.text("Cell"),
@@ -130,22 +141,29 @@ final class TodayCellView: UIView {
     private let unitLabel = UILabel()
     private let footnoteLabel = UILabel()
 
+    // 字号集中在这里。`init` 里设一次，`apply` 里拼 attributedText 时还要再用一次 ——
+    // 两处各写一遍迟早会写岔。
+    private static let captionFont = TodayFont.text(12, weight: .semibold)
+    private static let valueFont = TodayFont.mono(12, weight: .semibold)
+    private static let unitFont = TodayFont.text(11, weight: .medium)
+    private static let footnoteFont = TodayFont.text(12)
+
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        captionLabel.font = TodayFont.text(11, weight: .semibold)
+        captionLabel.font = Self.captionFont
         captionLabel.textColor = TodayStyle.muted
         captionLabel.numberOfLines = 1
 
-        valueLabel.font = TodayFont.mono(11, weight: .semibold)
+        valueLabel.font = Self.valueFont
         valueLabel.adjustsFontSizeToFitWidth = true
         valueLabel.minimumScaleFactor = 0.6
         valueLabel.numberOfLines = 1
 
-        unitLabel.font = TodayFont.text(10, weight: .medium)
+        unitLabel.font = Self.unitFont
         unitLabel.textColor = TodayStyle.muted
 
-        footnoteLabel.font = TodayFont.text(11)
+        footnoteLabel.font = Self.footnoteFont
         footnoteLabel.textColor = TodayStyle.muted
         footnoteLabel.numberOfLines = 1
         footnoteLabel.adjustsFontSizeToFitWidth = true
@@ -177,7 +195,7 @@ final class TodayCellView: UIView {
         // 微标签：拉丁下转大写加字距，中文下原样（汉字没有大小写，加了只会显散）。
         let shown = TodayFont.captionUppercases ? caption.uppercased() : caption
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
-            .font: TodayFont.text(11, weight: .semibold),
+            .font: Self.captionFont,
             .foregroundColor: TodayStyle.muted,
             .kern: TodayFont.captionTracking,
         ])
@@ -205,17 +223,17 @@ final class TodayStorageView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        captionLabel.font = TodayFont.text(11, weight: .semibold)
+        captionLabel.font = TodayFont.text(12, weight: .semibold)
         captionLabel.textColor = TodayStyle.muted
 
-        detailLabel.font = TodayFont.mono(11)
+        detailLabel.font = TodayFont.mono(12)
         detailLabel.textColor = TodayStyle.muted
         detailLabel.textAlignment = .right
 
         track.backgroundColor = TodayStyle.track
         track.layer.cornerRadius = 2.5
         fill.layer.cornerRadius = 2.5
-        fill.backgroundColor = TodayStyle.accent
+        // 填充色不在这里定 —— 它取决于剩余容量，见 `apply` 与 `TodayStyle.storageTint`。
 
         let header = UIStackView(arrangedSubviews: [captionLabel, detailLabel])
         header.axis = .horizontal
@@ -256,13 +274,17 @@ final class TodayStorageView: UIView {
 
     func apply(used: UInt64, free: UInt64) {
         let total = used &+ free
-        fraction = total == 0 ? 0 : min(max(Double(used) / Double(total), 0), 1)
+        let usedFraction = total == 0 ? 0 : min(max(Double(used) / Double(total), 0), 1)
+        fraction = usedFraction
+
+        // 条子填的是「已用」，但**颜色看的是「剩余」** —— 该被注意的是还剩多少。
+        fill.backgroundColor = TodayStyle.storageTint(freeFraction: 1 - usedFraction)
 
         let shown = TodayFont.captionUppercases
             ? Strings.text("Storage").uppercased()
             : Strings.text("Storage")
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
-            .font: TodayFont.text(11, weight: .semibold),
+            .font: TodayFont.text(12, weight: .semibold),
             .foregroundColor: TodayStyle.muted,
             .kern: TodayFont.captionTracking,
         ])

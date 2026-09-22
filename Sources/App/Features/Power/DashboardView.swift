@@ -178,20 +178,25 @@ struct DashboardView: View {
                   return Text("\(percent) of adapter")
               }) {
             VStack(spacing: 12) {
+                // 四项读数在未插电时都按 **0** 显示，而不是「—」。
+                //
+                // 「—」在四格并排的面板里显得像「这一格坏了」；而 0 W / 0 % 是准确的
+                // 读数 —— 确实没有功率进来、确实没有损耗。电芯那格本来就是这个行为，
+                // 四格现在一致。
                 HStack(alignment: .top, spacing: 10) {
                     Metric(caption: "From charger",
-                           value: snapshot.inputWatts.map(Formatting.watts) ?? "—",
+                           value: Formatting.watts(snapshot.inputWatts ?? 0),
                            unit: "W", tint: .mwAccent, size: 22)
                     Metric(caption: "Into cell",
-                           value: snapshot.batteryWatts.map { Formatting.watts(max($0, 0)) } ?? "—",
+                           value: Formatting.watts(max(snapshot.batteryWatts ?? 0, 0)),
                            unit: "W", tint: .mwBattery, size: 22)
                 }
                 HStack(alignment: .top, spacing: 10) {
                     Metric(caption: "Lost as heat",
-                           value: snapshot.conversionLossWatts.map(Formatting.watts) ?? "—",
+                           value: Formatting.watts(snapshot.conversionLossWatts ?? 0),
                            unit: "W", tint: .mwLoss, size: 22)
                     Metric(caption: "Efficiency",
-                           value: snapshot.conversionEfficiency.map { String(format: "%.0f", $0) } ?? "—",
+                           value: String(format: "%.0f", snapshot.conversionEfficiency ?? 0),
                            unit: "%",
                            tint: efficiencyTint,
                            footnote: Text("cell watts ÷ charger watts"),
