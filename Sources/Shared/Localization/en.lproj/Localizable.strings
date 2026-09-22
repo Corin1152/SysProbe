@@ -19,7 +19,6 @@
 "Usage" = "Usage";
 "Physical cores" = "Physical cores";
 "Frequency" = "Frequency";
-"Frequency is the chip's rated clock. iOS gives apps no live CPU clock." = "Frequency is the chip's rated clock. iOS gives apps no live CPU clock.";
 "Per-core load" = "Per-core load";
 "Core %lld" = "Core %lld";
 "%lld cores" = "%lld cores";
@@ -38,7 +37,6 @@
 "Change" = "Change";
 "Optimising…" = "Optimising…";
 "Optimise memory" = "Optimise memory";
-"Allocates a large block of memory to force the system to reclaim cached pages, then releases it. It also clears this app's own caches. iOS does not let any app free another app's memory — the kernel does that itself — so treat this as a nudge, not a guarantee." = "Allocates a large block of memory to force the system to reclaim cached pages, then releases it. It also clears this app's own caches. iOS does not let any app free another app's memory — the kernel does that itself — so treat this as a nudge, not a guarantee.";
 "Available memory was too low, so nothing was allocated." = "Available memory was too low, so nothing was allocated.";
 "Could not allocate memory." = "Could not allocate memory.";
 "Storage" = "Storage";

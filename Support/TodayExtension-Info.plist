@@ -22,10 +22,11 @@
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widget-extension</string>
-		<!-- Swift 类的运行时名字是「模块名.类名」，模块名即 PRODUCT_MODULE_NAME，
-		     在本工程里等于 TodayExtension。 -->
+		<!-- 显式的 ObjC 类名，与 `TodayViewController` 上的 `@objc(...)` 一致。
+		     不用「模块名.类名」的形式：那要靠模块名在运行期被正确解析，
+		     而模块名一旦变了就找不到类，负一屏显示「无法载入」。 -->
 		<key>NSExtensionPrincipalClass</key>
-		<string>TodayExtension.TodayViewController</string>
+		<string>SysProbeTodayViewController</string>
 	</dict>
 </dict>
 </plist>

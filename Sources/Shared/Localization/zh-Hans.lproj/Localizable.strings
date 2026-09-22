@@ -19,7 +19,6 @@
 "Usage" = "占用";
 "Physical cores" = "物理核心";
 "Frequency" = "频率";
-"Frequency is the chip's rated clock. iOS gives apps no live CPU clock." = "频率为芯片的标称主频。iOS 不向 App 提供实时的 CPU 频率。";
 "Per-core load" = "每核负载";
 "Core %lld" = "核心 %lld";
 "%lld cores" = "%lld 核";
@@ -38,7 +37,6 @@
 "Change" = "变化";
 "Optimising…" = "优化中…";
 "Optimise memory" = "优化内存";
-"Allocates a large block of memory to force the system to reclaim cached pages, then releases it. It also clears this app's own caches. iOS does not let any app free another app's memory — the kernel does that itself — so treat this as a nudge, not a guarantee." = "短时间内申请一大块内存，把系统内存压力顶上去，逼内核回收缓存页，然后立刻释放；同时清掉本 App 自己的缓存。iOS 不允许任何 App 释放别的 App 的内存（那由内核负责），所以这是一次推动，不是保证。";
 "Available memory was too low, so nothing was allocated." = "可用内存过低，未执行分配";
 "Could not allocate memory." = "无法分配内存";
 "Storage" = "存储";

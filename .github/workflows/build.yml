@@ -85,6 +85,47 @@ jobs:
           fi
           rm -rf "$work"
 
+      # 负一屏显示「无法载入」的两个坑，都是**静默**的：构建全绿、界面正常安装，
+      # 只有真机上才看得出来。这里把它们卡死。
+      - name: Check the widget can actually load
+        run: |
+          work=$(mktemp -d)
+          unzip -q build/export/SysProbe-unsigned.ipa -d "$work"
+          app="$(ls -d "$work"/Payload/*.app)"
+          appex="$(ls -d "$app"/PlugIns/*.appex | head -1)"
+          binary="$appex/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
+
+          # 1) principal class 必须是**显式的 ObjC 名字**，不能是「模块名.类名」。
+          #    后者要靠模块名在运行期被解析成类；解析不到就找不到类，负一屏「无法载入」。
+          #    显式 `@objc(...)` 名字是逐字注册进 ObjC 运行时的，不依赖模块名。
+          principal=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPrincipalClass' "$appex/Info.plist")
+          echo "NSExtensionPrincipalClass: $principal"
+          case "$principal" in
+            *.*)
+              echo "::error::NSExtensionPrincipalClass '$principal' is module-qualified. Give the class an explicit @objc(...) name and put that bare name here."
+              exit 1
+              ;;
+          esac
+          if ! grep -qa -- "$principal" "$binary"; then
+            echo "::error::'$principal' does not appear in the appex binary — the class is not exposed to the ObjC runtime, so the extension cannot be instantiated."
+            exit 1
+          fi
+
+          # 2) `widgetLargestAvailableDisplayMode` 是 `NSExtensionContext` 的一个分类方法，
+          #    实现在 NotificationCenter.framework 里。iOS 26 SDK 把它的声明并进了 UIKit，
+          #    于是调用它只生成 objc_msgSend、**不产生任何链接依赖** —— 链接器会把那个库
+          #    当「没被用到」直接 dead-strip（本工程的 appex 就是这么丢掉 Charts 的）。
+          #    库不在，分类就没注册，直接调就是 unrecognized selector：扩展在 viewDidLoad
+          #    里当场崩掉，负一屏显示「无法载入」。
+          #    所以：只要用了这个选择器，就必须同时把框架 dlopen 进来。
+          if grep -qa "setWidgetLargestAvailableDisplayMode:" "$binary" \
+             && ! grep -qa "NotificationCenter.framework" "$binary"; then
+            echo "::error::the appex calls setWidgetLargestAvailableDisplayMode: but never loads NotificationCenter.framework. On device the category is unregistered, so the extension crashes in viewDidLoad and the Today view shows \"Unable to Load\"."
+            exit 1
+          fi
+          echo "widget load checks passed"
+          rm -rf "$work"
+
       # 图标漏掉是静默失败：构建全绿、装上去是个白方块，而且只有真机才看得出来。
       #
       # 注意别去断言 actool 吐了哪几个倍率 —— Xcode 26 / iOS 26 SDK 只输出**一张**

@@ -117,7 +117,9 @@ nonisolated final class SessionStore: @unchecked Sendable {
     static let sampleInterval: TimeInterval = 5
 
     private let url: URL
-    private let queue = DispatchQueue(label: "org.zhaohe.MiniWatts.sessions", qos: .utility)
+    // label 曾经是移植来源 MiniWatts 的原名（org.zhaohe.MiniWatts.sessions），
+    // 只在调试器里看得见，但不该留着别人的标识。
+    private let queue = DispatchQueue(label: "com.corin.sysprobe.sessions", qos: .utility)
     /// Guarded by `queue`. Holds at most the newest pending write.
     private var pending: [ChargeSession]?
 

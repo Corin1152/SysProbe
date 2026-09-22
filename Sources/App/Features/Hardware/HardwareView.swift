@@ -9,6 +9,16 @@ struct HardwareView: View {
 
     private var snapshot: HardwareSnapshot { hardware.snapshot }
 
+    /// 第一屏所有**读数**的字号。
+    ///
+    /// 原来这一页混着 18 / 20 / 22 / 28 / 30 五档，同一个面板里两个数字不一样大，
+    /// 看上去像是排版漏了。现在统一到一档，并把原来那几个偏大的缩下来 ——
+    /// 缩，不是把小的放大：18 pt 与别的页（功率、适配器）的行高也合得上。
+    ///
+    /// 标签（`mwCaption`，11 pt）、芯片型号那一行（13 pt）与内存优化那两行等宽日志
+    /// （`mwMono`，11 pt）是另一个层级，不在此列。
+    private static let valueSize: CGFloat = 18
+
     var body: some View {
         PageScaffold("Hardware", glow: .mwAccent, onOpenSettings: onOpenSettings) {
             devicePanel
@@ -16,6 +26,16 @@ struct HardwareView: View {
             memoryPanel
             storagePanel
             networkPanel
+        }
+        // 优化一结束就立刻重读一次内存。
+        //
+        // 面板本身是一秒一采的，而「可用」的峰值窗口只有那几秒 —— 等下一个整秒采样的
+        // 时候，数值已经开始落回去了，看起来就像什么都没发生。
+        .onChange(of: optimizer.phase) { phase in
+            switch phase {
+            case .finished, .failed: hardware.refresh()
+            default: break
+            }
         }
     }
 
@@ -26,18 +46,18 @@ struct HardwareView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Metric(caption: "Model",
                        value: snapshot.system.modelIdentifier,
-                       size: 20)
+                       size: Self.valueSize)
                 HStack(spacing: 14) {
-                    Metric(caption: "System", value: snapshot.system.systemVersion, size: 18)
-                    Metric(caption: "Kernel", value: snapshot.system.kernelVersion, size: 18)
+                    Metric(caption: "System", value: snapshot.system.systemVersion, size: Self.valueSize)
+                    Metric(caption: "Kernel", value: snapshot.system.kernelVersion, size: Self.valueSize)
                 }
                 HStack(spacing: 14) {
                     Metric(caption: "Uptime",
                            value: Formatting.duration(snapshot.system.uptime),
-                           size: 18)
+                           size: Self.valueSize)
                     Metric(caption: "Physical memory",
                            value: Formatting.bytes(snapshot.system.physicalMemory),
-                           size: 18)
+                           size: Self.valueSize)
                 }
             }
         }
@@ -60,21 +80,15 @@ struct HardwareView: View {
                            value: Formatting.percent(snapshot.cpu.usage * 100),
                            unit: "%",
                            tint: .mwPower(snapshot.cpu.usage * 100),
-                           size: 30)
+                           size: Self.valueSize)
                     Metric(caption: "Physical cores",
                            value: "\(snapshot.cpu.physicalCores)",
-                           size: 30)
+                           size: Self.valueSize)
                     Metric(caption: "Frequency",
                            value: snapshot.cpu.frequencyMHz > 0 ? "\(snapshot.cpu.frequencyMHz)" : "—",
                            unit: snapshot.cpu.frequencyMHz > 0 ? "MHz" : nil,
-                           size: 30)
+                           size: Self.valueSize)
                 }
-
-                // 数字下面把来源写清楚：iOS 不向 App 提供实时 CPU 频率，这里是芯片的
-                // 标称主频。不写这一句，这个数字会被当成实时读数。
-                Text("Frequency is the chip's rated clock. iOS gives apps no live CPU clock.")
-                    .font(.footnote)
-                    .foregroundStyle(Color.mwMuted)
 
                 if !snapshot.cpu.perCore.isEmpty {
                     Divider().overlay(Color.mwCardStroke)
@@ -107,16 +121,16 @@ struct HardwareView: View {
                     Metric(caption: "Used",
                            value: Formatting.bytes(snapshot.memory.used),
                            tint: .mwAccent,
-                           size: 30)
+                           size: Self.valueSize)
                     Metric(caption: "Available",
-                           value: Formatting.bytes(snapshot.memory.free &+ snapshot.memory.inactive),
+                           value: Formatting.bytes(snapshot.memory.available),
                            tint: .mwBattery,
-                           size: 30)
+                           size: Self.valueSize)
                     Metric(caption: "Pressure",
                            value: Formatting.percent(snapshot.memory.usage * 100),
                            unit: "%",
                            tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwMuted,
-                           size: 30)
+                           size: Self.valueSize)
                 }
 
                 BarRow(title: Text("Memory usage"),
@@ -125,9 +139,9 @@ struct HardwareView: View {
                        tint: .mwAccent)
 
                 HStack(spacing: 14) {
-                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: 18)
-                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: 18)
-                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: 18)
+                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: Self.valueSize)
+                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: Self.valueSize)
+                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: Self.valueSize)
                 }
 
                 Divider().overlay(Color.mwCardStroke)
@@ -160,19 +174,22 @@ struct HardwareView: View {
             case .finished(let before, let after):
                 let delta = Int64(after) - Int64(before)
                 HStack(spacing: 14) {
-                    Metric(caption: "Before", value: Formatting.bytes(before), size: 18)
-                    Metric(caption: "After", value: Formatting.bytes(after), size: 18)
+                    Metric(caption: "Before", value: Formatting.bytes(before), size: Self.valueSize)
+                    Metric(caption: "After", value: Formatting.bytes(after), size: Self.valueSize)
                     Metric(caption: delta >= 0 ? "Released" : "Change",
                            value: Formatting.bytes(UInt64(abs(delta))),
                            tint: delta >= 0 ? .mwBattery : .mwMuted,
-                           size: 18)
+                           size: Self.valueSize)
                 }
             case .failed(let reason):
                 // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
                 // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
                 EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
             case .idle:
-                EmptyNote(text: "Allocates a large block of memory to force the system to reclaim cached pages, then releases it. It also clears this app's own caches. iOS does not let any app free another app's memory — the kernel does that itself — so treat this as a nudge, not a guarantee.")
+                // 那段说明文字按用户要求去掉了：它把这块区域撑得很高，想说的其实只有
+                // 一句「这是一次推动，不是保证」。按钮标题加上下方的
+                // Before / After / Released，已经把做了什么、结果如何说清楚了。
+                EmptyView()
             }
 
             Button {
@@ -199,8 +216,8 @@ struct HardwareView: View {
               trailing: Text(verbatim: Formatting.bytes(snapshot.storage.total))) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
-                    Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: 28)
-                    Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: 28)
+                    Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: Self.valueSize)
+                    Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: Self.valueSize)
                 }
                 BarRow(title: Text("Capacity"),
                        detail: Formatting.percent(snapshot.storage.usage * 100) + "%",
@@ -220,24 +237,24 @@ struct HardwareView: View {
                 Metric(caption: "IPv4 address",
                        value: snapshot.network.ipv4,
                        footnote: Text(verbatim: snapshot.network.interfaceName),
-                       size: 22)
+                       size: Self.valueSize)
                 HStack(spacing: 14) {
                     Metric(caption: "Download",
                            value: Formatting.rate(snapshot.network.downloadBytesPerSecond),
                            tint: .mwAccent,
-                           size: 20)
+                           size: Self.valueSize)
                     Metric(caption: "Upload",
                            value: Formatting.rate(snapshot.network.uploadBytesPerSecond),
                            tint: .mwWireless,
-                           size: 20)
+                           size: Self.valueSize)
                 }
                 HStack(spacing: 14) {
                     Metric(caption: "Total received",
                            value: Formatting.bytes(snapshot.network.receivedBytes),
-                           size: 18)
+                           size: Self.valueSize)
                     Metric(caption: "Total sent",
                            value: Formatting.bytes(snapshot.network.sentBytes),
-                           size: 18)
+                           size: Self.valueSize)
                 }
             }
         }

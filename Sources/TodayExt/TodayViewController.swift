@@ -12,6 +12,13 @@ import NotificationCenter
 /// 代价是：滑走 / 锁屏后扩展会被挂起，刷新随之停止，此时由
 /// `widgetPerformUpdate` 提供一个快照。传统扩展自 iOS 14 起被标记废弃、
 /// iOS 18 起被移除 —— 而本机（iPhone X）的系统封顶就是 iOS 16.x，所以不受影响。
+///
+/// 类名显式暴露给 ObjC 运行时。`NSExtensionPrincipalClass` 要靠 `NSClassFromString`
+/// 找到这个类，而 Swift 给主模块里的类注册的运行时名字带着模块前缀
+/// （`TodayExtension.TodayViewController`）—— 一旦模块名变了、或系统那边按不带前缀的
+/// 名字查，就找不到类，负一屏显示「无法载入」。给一个显式的 `@objc(...)` 名字、
+/// plist 里用同一个字符串，这一层不确定性就没有了。
+@objc(SysProbeTodayViewController)
 final class TodayViewController: UIViewController, NCWidgetProviding {
 
     private let monitor = PowerMonitor()
@@ -34,9 +41,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
 
         view.backgroundColor = .clear
 
-        // 允许「展开 / 收起」两种形态：收起时系统只给一小条，展开时用
-        // `preferredContentSize`。不设这一句，负一屏就只有收起态，永远展不开。
-        extensionContext?.widgetLargestAvailableDisplayMode = .expanded
+        enableExpandedDisplayMode()
         preferredContentSize = CGSize(width: 0, height: minimumHeight)
 
         let host = UIHostingController(rootView: TodayContentView(monitor: monitor))
@@ -54,6 +59,53 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         host.didMove(toParent: self)
         hosting = host
     }
+
+    // MARK: 展开态
+
+    /// 打开「展开 / 收起」两种形态。
+    ///
+    /// 不设这一句，负一屏就只有收起态、永远展不开，内容会被压成一小条。
+    ///
+    /// **这里刻意不直接写 `extensionContext?.widgetLargestAvailableDisplayMode = .expanded`。**
+    /// 那个属性是 `NSExtensionContext` 的一个分类方法，实现在
+    /// **`NotificationCenter.framework`** 里；而 iOS 26 SDK 已经把它的声明并进了 UIKit，
+    /// 于是 Swift 调用它只生成 `objc_msgSend`、不产生任何链接依赖 —— 链接器看这个库
+    /// 「没被用到」，就把它从 appex 的加载列表里丢掉了（本工程的 appex 确实没有链
+    /// NotificationCenter；能正常显示的 CPU-X，那个 appex 是链了的）。
+    ///
+    /// 后果在真机上才显现：那个分类根本没注册，直接调就是 `unrecognized selector`
+    /// —— 扩展在 `viewDidLoad` 里当场崩掉，负一屏显示「无法载入」。
+    ///
+    /// 所以这里先把框架 `dlopen` 进来（分类随之注册），再**先探响应性、后走
+    /// `method(for:)` 直接调**：选择器在就设成展开态，不在就安静跳过
+    /// （小组件退回收起态，但内容照常显示，不会崩）。
+    private func enableExpandedDisplayMode() {
+        Self.loadNotificationCenter
+        let selector = NSSelectorFromString("setWidgetLargestAvailableDisplayMode:")
+        guard let context = extensionContext,
+              context.responds(to: selector),
+              let implementation = context.method(for: selector) else { return }
+        // `NCWidgetDisplayMode.expanded` 的原始值是 1。写成字面量是因为
+        // `NCWidgetDisplayMode` 同样来自那个可能没被加载的模块。
+        typealias Setter = @convention(c) (NSObject, Selector, Int) -> Void
+        unsafeBitCast(implementation, to: Setter.self)(context, selector, 1)
+    }
+
+    /// 把 `NotificationCenter.framework` 加载进本进程（懒执行，只做一次）。
+    ///
+    /// 为什么用 `dlopen` 而不是在 `project.yml` 里加 `-framework NotificationCenter`：
+    /// 链接器会做 `-dead_strip_dylibs` —— 本工程的 appex 就被它丢掉了用不到的
+    /// `Charts.framework`；而分类方法不是符号、引用不到，加了照样会被丢掉。
+    /// `dlopen` 绕开链接期，直接把库拉进来。
+    ///
+    /// 系统框架，允许 dlopen；`HIDSensors` 读 IOKit 用的也是同一招。
+    private static let loadNotificationCenter: Void = {
+        // 返回值显式丢掉：这个 `static let` 的类型是 `Void`（它只负责「加载」这个副作用），
+        // 而 `dlopen` 返回的是句柄。丢掉的那个句柄不该被 `dlclose` —— 分类注册在
+        // 进程生命期里都要在。
+        _ = dlopen("/System/Library/Frameworks/NotificationCenter.framework/NotificationCenter",
+                   RTLD_NOW)
+    }()
 
     // MARK: 尺寸
 

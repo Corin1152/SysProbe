@@ -9,9 +9,14 @@ struct CPUStats: Hashable {
     var model: String = "—"
     var physicalCores: Int = 0
     var logicalCores: Int = 0
-    /// 主频（MHz）。iOS 不给沙箱 App 实时频率，这里是芯片的标称最高主频；
-    /// 机型认不出来时为 0，界面显示「—」。
+    /// 界面显示的主频（MHz）。
+    ///
+    /// **是实测值**，见 `CPUFrequency` 与 `CPUFrequencyProbe.c`：iOS 不给沙箱 App 读
+    /// 主频的接口，所以在一段**周期数已知**的汇编循环上量时间反推。探针测不出、或结果
+    /// 落在可信窗口之外时，回落成机型表里的标称主频。机型认不出来时为 0，界面显示「—」。
     var frequencyMHz: Int = 0
+    /// 该机型芯片的标称主频（MHz）。只作参照与探针的校验基准，界面不直接显示。
+    var nominalFrequencyMHz: Int = 0
     /// 0…1，整体占用
     var usage: Double = 0
     /// 0…1，每个逻辑核的占用
@@ -25,8 +30,33 @@ struct MemoryStats: Hashable {
     var inactive: UInt64 = 0
     var compressed: UInt64 = 0
     var free: UInt64 = 0
-    /// 已用 = wired + active + compressed，和 iOS 自己的口径一致
-    var used: UInt64 { wired &+ active &+ compressed }
+    /// 内核随时可以丢弃的页（`purgeable_count`）。
+    var purgeable: UInt64 = 0
+    /// 预读进来、随时可以丢掉的页（`speculative_count`）。
+    var speculative: UInt64 = 0
+
+    /// 可用 = free + purgeable + speculative，也就是**内核此刻就能拿出来**给新分配的页。
+    ///
+    /// 刻意**不含 `inactive`** —— 这一条是这一版最重要的改动，值得写清楚。
+    ///
+    /// inactive 里的页多数确实可回收，但内核回收它们的同时就把 free 顶上去了：两者之和
+    /// 在「逼出缓存」前后几乎不变（我们交还的那几百兆进了 free，而被顶掉的缓存本来就
+    /// 在 inactive 里）。把它算进「可用」，优化前后读出来就是同一个数 ——
+    /// 那正是「优化完已用/可用都没变化」的由来。所以这里看的是**此刻真能用的页**，
+    /// 不是「理论上可回收的总量」。
+    ///
+    /// CPU-X 的内存清理报的也是 `Mem Free`（空闲内存），口径一致。
+    ///
+    /// `MemoryReclaimer.memoryPools()` 用的是同一套口径，两处必须一致，
+    /// 否则优化报出来的数字跟面板对不上。
+    var available: UInt64 { free &+ purgeable &+ speculative }
+
+    /// 已用 = 总量 − 可用。与「可用」互补，两者相加恒等于总量 ——
+    /// 这是「已用 / 可用」这一对指标在别处的一贯含义（macOS 活动监视器也是这么算的）。
+    ///
+    /// 下面 Wired / Active / Compressed 是**具名分项**，不是「已用」的全部：
+    /// 差额落在 inactive / speculative 上。三个具名分项不该被读成「已用」的构成。
+    var used: UInt64 { total > available ? total - available : 0 }
     var usage: Double {
         total == 0 ? 0 : min(1, Double(used) / Double(total))
     }
@@ -110,7 +140,7 @@ struct HardwareSnapshot: Hashable {
 /// - CPU 占用：`host_processor_info(PROCESSOR_CPU_LOAD_INFO)`，两次采样求差值
 /// - 内存分项：`host_statistics64(HOST_VM_INFO64)`
 /// - 存储容量：`URLResourceValues`
-/// - 网络吞吐：`getifaddrs` 的 `if_data` 字节计数，两次采样求速率
+/// - 网络吞吐：`sysctl(NET_RT_IFLIST2)` 的 64 位字节计数，两次采样求速率
 /// - 系统信息：`sysctl` / `uname` / `ProcessInfo`
 final class HardwareMonitor: ObservableObject {
     @Published private(set) var snapshot = HardwareSnapshot()
@@ -122,6 +152,14 @@ final class HardwareMonitor: ObservableObject {
     /// 存储容量上一次真正去问文件系统的时间。见 `refresh`。
     private var lastStorageRead: Date = .distantPast
     private var cachedStorage = StorageStats()
+    private var tick = 0
+    /// 实测主频（MHz）。`nil` 表示还没测到，界面回落成机型表的标称值。
+    private var measuredFrequencyMHz: Int?
+    /// 探针一次要占住一条核约 15–20 ms，同一时间只允许跑一次。
+    private var frequencyProbeInFlight = false
+    /// 探针跑的队列。它不碰 UI，只把最后那个 `Int?` 送回主 actor。
+    private let frequencyQueue = DispatchQueue(label: "com.corin.sysprobe.cpufrequency",
+                                               qos: .userInitiated)
 
     func start() {
         guard ticker == nil else { return }
@@ -141,9 +179,21 @@ final class HardwareMonitor: ObservableObject {
     }
 
     func refresh() {
+        tick += 1
+        // 实测主频每三秒一次。
+        //
+        // 探针要起线程、热身、再跑三轮计测，合计 15–20 ms 的满速忙循环。一秒一次是白
+        // 烧电：频率不会那么快变，而三秒一次的代价不到 1% 的单核占用。
+        if tick % 3 == 1 {
+            refreshFrequencyIfNeeded()
+        }
+
         var next = HardwareSnapshot()
         next.date = .now
         next.cpu = Self.readCPU(previous: &previousTicks)
+        next.cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
+        // 探针的结果优先；没测到（或结果不可信）就用机型表的标称值兜底。
+        next.cpu.frequencyMHz = measuredFrequencyMHz ?? Self.cpuIdentity.nominalFrequencyMHz
         next.memory = Self.readMemory()
         // 容量一次查询是一次文件系统往返，而数字几分钟都不会变。十秒问一次足够，
         // 中间直接复用上次的结果。
@@ -159,19 +209,22 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: CPU
 
-    /// 型号名、核心数、主频。出厂就定死，第一次用到时读一遍就够 —— 一秒读一次
-    /// sysctl 是纯浪费，而值永远一样。
+    /// 型号名、核心数、标称主频。出厂就定死，第一次用到时读一遍就够 ——
+    /// 一秒读一次 sysctl 是纯浪费，而值永远一样。
     ///
-    /// **主频这一项以前是错的，值得写清楚。** 之前只读 `sysctl hw.cpufrequency_max`，
-    /// 那是 macOS（Intel）专有的键；iOS 真机上它恒返回失败，`sysctlInt` 给回 nil，
-    /// 界面就一直显示「—」。网上流传很广的那段 `sysctl(mib, 2, &results, ...)`
-    /// 取 `HW_CPU_FREQ` 是早期 iOS 的遗留代码 —— Apple 后来出于安全考虑把主频这个
-    /// 内核变量对沙箱关掉了。
+    /// **标称主频这一项以前是唯一的来源，而且读错了，值得写清楚。** 之前只读
+    /// `sysctl hw.cpufrequency_max`，那是 macOS（Intel）专有的键；iOS 真机上它恒返回
+    /// 失败，`sysctlInt` 给回 nil，界面就一直显示「—」。网上流传很广的那段
+    /// `sysctl(mib, 2, &results, ...)` 取 `HW_CPU_FREQ` 是早期 iOS 的遗留代码 ——
+    /// Apple 后来把主频这个内核变量对沙箱关掉了。
     ///
-    /// 沙箱 App **拿不到实时频率**：没有公开接口，也没有不需要特权就能用的私有接口。
-    /// 能拿到的是「这台机器装的是哪颗芯片、它标称跑多少」，所以这里按机型查表。
-    /// 静态数据，不猜、不编；认不出来的机型留 0，界面照旧显示「—」。
-    private static let cpuIdentity: (model: String, physicalCores: Int, logicalCores: Int, frequencyMHz: Int) = {
+    /// 所以这里按机型查表拿**标称**主频，真实的当前主频由 `CPUFrequency` 实测
+    /// （见那边与 `CPUFrequencyProbe.c` 的注释）。CPU-X 的界面把这两者并列：
+    /// `CPU Design Speed`（设计主频）与 `CPU Current Speed`（当前主频）——
+    /// 前者查表，后者实测。
+    ///
+    /// 静态数据，不猜、不编；认不出来的机型留 0，界面显示「—」。
+    private static let cpuIdentity: (model: String, physicalCores: Int, logicalCores: Int, nominalFrequencyMHz: Int) = {
         let machine = sysctlString("hw.machine") ?? ""
         // 个别机型／系统版本上这个键仍然是通的，能读到就优先用它（那才是真正的
         // 内核口径），读不到再退回机型表。
@@ -221,7 +274,7 @@ final class HardwareMonitor: ObservableObject {
         stats.model = cpuIdentity.model
         stats.physicalCores = cpuIdentity.physicalCores
         stats.logicalCores = cpuIdentity.logicalCores
-        stats.frequencyMHz = cpuIdentity.frequencyMHz
+        // 频率不在这里填：它是实测值，由 `refresh` 补上（见那边的注释）。
 
         var cpuInfo: processor_info_array_t?
         var infoCount: mach_msg_type_number_t = 0
@@ -278,6 +331,27 @@ final class HardwareMonitor: ObservableObject {
         return stats
     }
 
+    /// 在后台线程上跑一次实测，结果回主 actor。
+    ///
+    /// 探针是**阻塞**的（15–20 ms 的满速忙循环），放主线程上就是一次肉眼可见的卡顿，
+    /// 所以整件事丢给一个专用队列；它不碰任何 UI，只把最后那个 `Int?` 送回来。
+    ///
+    /// 回主 actor 用 `Task { @MainActor in }` 而不是 `DispatchQueue.main.async`：
+    /// 后者在 Swift 6 的类型系统里并不建立主 actor 隔离，直接写主 actor 属性会报错。
+    private func refreshFrequencyIfNeeded() {
+        guard !frequencyProbeInFlight else { return }
+        frequencyProbeInFlight = true
+        let nominal = Self.cpuIdentity.nominalFrequencyMHz
+        frequencyQueue.async { [weak self] in
+            let measured = CPUFrequency.measureMHz(nominalMHz: nominal)
+            Task { @MainActor in
+                guard let self else { return }
+                self.measuredFrequencyMHz = measured
+                self.frequencyProbeInFlight = false
+            }
+        }
+    }
+
     // MARK: 内存
 
     private static func readMemory() -> MemoryStats {
@@ -299,6 +373,8 @@ final class HardwareMonitor: ObservableObject {
         stats.inactive = UInt64(vmStats.inactive_count) &* page
         stats.wired = UInt64(vmStats.wire_count) &* page
         stats.compressed = UInt64(vmStats.compressor_page_count) &* page
+        stats.purgeable = UInt64(vmStats.purgeable_count) &* page
+        stats.speculative = UInt64(vmStats.speculative_count) &* page
         return stats
     }
 
@@ -325,17 +401,95 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: 网络
 
-    private static func readNetwork(
-        previous: inout [String: (rx: UInt64, tx: UInt64, date: Date)],
-        lastInterface: inout String?
-    ) -> NetworkStats {
-        var stats = NetworkStats()
-        var addresses: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addresses) == 0, let first = addresses else { return stats }
-        defer { freeifaddrs(addresses) }
+    /// `<sys/socket.h>` / `<net/route.h>` 里的常量，以及 `if_msghdr2` 的字段偏移。
+    ///
+    /// 写成字面量而不是直接用那几个宏：`PF_ROUTE` 在头文件里是 `AF_ROUTE` 的别名
+    /// （宏套宏），Swift 的宏导入对它并不可靠；`NET_RT_IFLIST2`、`RTM_IFINFO2` 同理，
+    /// 一并写死更省事。偏移按 Darwin 的 ABI 写 —— 这几个结构自 64 位 Darwin 起没变过。
+    private enum Route {
+        /// `CTL_NET`
+        static let ctlNet: Int32 = 4
+        /// `PF_ROUTE`（= `AF_ROUTE`）
+        static let pfRoute: Int32 = 17
+        /// `NET_RT_IFLIST2`
+        static let netRTIFList2: Int32 = 6
+        /// `RTM_VERSION`
+        static let rtmVersion: UInt8 = 5
+        /// `RTM_IFINFO2`
+        static let rtmIfInfo2: UInt8 = 0x12
+        /// `IF_NAMESIZE`（= `IFNAMSIZ`）。宏套宏，同样写成字面量。
+        static let ifNameSize = 16
 
-        let now = Date()
-        var candidates: [(name: String, kind: NetworkKind, ipv4: String, rx: UInt64, tx: UInt64)] = []
+        /// `struct if_msghdr2` 里 `ifm_data`（`struct if_data64`）的起始偏移。
+        static let ifData64Offset = 32
+        /// `struct if_data64.ifi_ibytes` 的绝对偏移。
+        static let ifIBytesOffset = ifData64Offset + 64
+        /// `struct if_data64.ifi_obytes` 的绝对偏移。
+        static let ifOBytesOffset = ifData64Offset + 72
+        /// 一条 `RTM_IFINFO2` 至少要有这么长才读得到两个计数器。
+        static let minimumIfInfo2Length = ifOBytesOffset + 8
+    }
+
+    /// 各接口的累计字节数，来自 `NET_RT_IFLIST2`。
+    ///
+    /// **为什么不用 `getifaddrs` 的 `ifa_data`** —— 这正是「下载 / 上传与累计流量一直
+    /// 是 0」的根因，值得写清楚：
+    ///
+    /// 1. `ifa_data` **只在 `AF_LINK` 那条记录上非空**。之前是在 `AF_INET` 记录上读它，
+    ///    那里恒为 NULL，于是 `ifi_ibytes` / `ifi_obytes` 永远是 0 —— 地址显示得出来
+    ///    （地址本来就走 `AF_INET`），流量却一直是零，症状正是「一半对一半不对」；
+    /// 2. 即便读对了记录，`ifa_data` 指向的是 32 位的 `struct if_data`
+    ///    （`ifi_ibytes` 是 `u_int32_t`），4 GB 就回绕 —— 累计流量根本没法用。
+    ///
+    /// `NET_RT_IFLIST2` 返回的是 `if_msghdr2` + `if_data64`：计数器 64 位，
+    /// 也正是 `netstat` 在 64 位系统上走的那条路。
+    private static func interfaceCounters() -> [String: (received: UInt64, sent: UInt64)] {
+        var mib: [Int32] = [Route.ctlNet, Route.pfRoute, 0, 0, Route.netRTIFList2, 0]
+        var length = 0
+        guard sysctl(&mib, 6, nil, &length, nil, 0) == 0, length > 0 else { return [:] }
+        var buffer = [UInt8](repeating: 0, count: length)
+        guard sysctl(&mib, 6, &buffer, &length, nil, 0) == 0 else { return [:] }
+
+        var counters: [String: (received: UInt64, sent: UInt64)] = [:]
+        buffer.withUnsafeBytes { raw in
+            var offset = 0
+            while offset + Route.minimumIfInfo2Length <= length {
+                let messageLength = Int(raw.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+                let version = raw.loadUnaligned(fromByteOffset: offset + 2, as: UInt8.self)
+                let type = raw.loadUnaligned(fromByteOffset: offset + 3, as: UInt8.self)
+                // 缓冲区是内核按 `ifm_msglen` 串起来的消息流。长度或版本走歪了就停 ——
+                // 继续按偏移读下去只会读到垃圾。
+                guard messageLength > 0, version == Route.rtmVersion else { break }
+
+                if type == Route.rtmIfInfo2,
+                   messageLength >= Route.minimumIfInfo2Length,
+                   offset + Route.minimumIfInfo2Length <= length {
+                    let index = UInt32(raw.loadUnaligned(fromByteOffset: offset + 12, as: UInt16.self))
+                    let received = raw.loadUnaligned(fromByteOffset: offset + Route.ifIBytesOffset,
+                                                     as: UInt64.self)
+                    let sent = raw.loadUnaligned(fromByteOffset: offset + Route.ifOBytesOffset,
+                                                 as: UInt64.self)
+                    var name = [CChar](repeating: 0, count: Route.ifNameSize + 1)
+                    if if_indextoname(index, &name) != nil {
+                        counters[nullTerminatedString(name)] = (received, sent)
+                    }
+                }
+                offset += messageLength
+            }
+        }
+        return counters
+    }
+
+    /// 各接口的 IPv4 地址，来自 `getifaddrs`。
+    ///
+    /// 地址与计数器分两个来源取，是因为它们本来就在两条不同的记录上：
+    /// 地址在 `AF_INET` 记录，字节计数在 `AF_LINK`（或 `NET_RT_IFLIST2`）里。
+    /// 硬凑到一次遍历里，就是上一版踩的那个坑。
+    private static func ipv4Addresses() -> [String: String] {
+        var result: [String: String] = [:]
+        var addresses: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addresses) == 0, let first = addresses else { return result }
+        defer { freeifaddrs(addresses) }
 
         var pointer: UnsafeMutablePointer<ifaddrs>? = first
         while let entry = pointer {
@@ -345,22 +499,33 @@ final class HardwareMonitor: ObservableObject {
             guard let address = entry.pointee.ifa_addr,
                   address.pointee.sa_family == UInt8(AF_INET) else { continue }
             let name = nullTerminatedString(at: entry.pointee.ifa_name)
-            // 只认 Wi-Fi（`en*`）与蜂窝（`pdp_ip*`），虚拟隧道一律跳过。
-            guard let kind = NetworkKind(interfaceName: name) else { continue }
-
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(address, socklen_t(address.pointee.sa_len),
                            &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let ipv4 = nullTerminatedString(host)
-                var rx: UInt64 = 0
-                var tx: UInt64 = 0
-                if let data = entry.pointee.ifa_data {
-                    let networkData = data.assumingMemoryBound(to: if_data.self).pointee
-                    rx = UInt64(networkData.ifi_ibytes)
-                    tx = UInt64(networkData.ifi_obytes)
-                }
-                candidates.append((name, kind, ipv4, rx, tx))
+                result[name] = nullTerminatedString(host)
             }
+        }
+        return result
+    }
+
+    private static func readNetwork(
+        previous: inout [String: (rx: UInt64, tx: UInt64, date: Date)],
+        lastInterface: inout String?
+    ) -> NetworkStats {
+        var stats = NetworkStats()
+        let counters = interfaceCounters()
+        let addresses = ipv4Addresses()
+        guard !counters.isEmpty else { return stats }
+
+        let now = Date()
+        var candidates: [(name: String, kind: NetworkKind, ipv4: String, rx: UInt64, tx: UInt64)] = []
+        for (name, counter) in counters {
+            // 只认 Wi-Fi（`en*`）与蜂窝（`pdp_ip*`），虚拟隧道一律跳过。
+            guard let kind = NetworkKind(interfaceName: name) else { continue }
+            // 没有 IPv4 就不显示：这个面板要的是「现在走哪条路、地址是多少」，
+            // 只有 IPv6 的接口放进来会让地址那一栏变成空白。
+            guard let ipv4 = addresses[name] else { continue }
+            candidates.append((name, kind, ipv4, counter.received, counter.sent))
         }
 
         // 选哪条链路：**先看类型，再看谁在跑流量。**
