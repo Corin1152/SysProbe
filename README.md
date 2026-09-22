@@ -60,20 +60,21 @@ App Store 审核**。
 传统扩展自 iOS 14 起被标记废弃、iOS 18 起被移除。**iPhone X 的系统封顶就是 iOS 16.x**，
 所以在这个目标上不存在保质期问题。
 
-### 三个会让它显示「无法载入」的坑
+### 会让它显示「无法载入」的几种原因
 
-都是**静默**的：构建全绿、界面正常安装，只有真机上才看得出来。CI 里各有一条断言卡住。
+都是**静默**的：构建全绿、界面正常安装，只有真机上才看得出来。CI 里有断言卡住其中几条。
 
-- **这一屏不能碰 SwiftUI。** 这是真根因，而且一开始找错了两次方向（先修 principal
-  class、又修 NotificationCenter 分类，装上去都没用）。判据来自对比，不是推测 ——
-  拆开两边的 appex 数 SwiftUI 符号：我们 **181 个**，能正常工作的 CPU-X 是 **0 个**
-  （它是 storyboard + UIKit 控件）。传统扩展的内存预算与启动 watchdog 都远小于主 App，
-  appex 里只要有 SwiftUI 的东西，dyld 就会把 `SwiftUI.framework` 映射进来，再叠上
-  `UIHostingController` 那一整套视图运行时 —— 启动即被掐掉。所以这一屏是纯 UIKit 的
-  （`Sources/TodayExt/TodayWidgetView.swift`，环用 `CAShapeLayer`），取数层
-  `Shared/Power` 也去掉了 `LocalizedStringKey`（改用 `Strings.text` 直接返回 `String`，
-  译文来源是同一份 `.lproj`，不经过 SwiftUI）。**主 App 用 SwiftUI 完全没问题，
-  这个约束只属于扩展。**
+**按验证成本从低到高排**，别凭直觉挑一个最显眼的差异当根因 —— 我在这上面连续判断错过
+两次（先怪 principal class 与 NotificationCenter 分类，再怪 SwiftUI 运行时），两次都
+不是根因。
+
+- **启动路径上不能有 IO。** 传统扩展的内存预算与启动 watchdog 都远小于主 App。
+  `PowerMonitor` 这类对象的构造会 `dlopen` 框架、枚举 IOKit 服务、读文件系统 ——
+  在主 App 里是几十毫秒，在扩展里就可能被 watchdog 掐掉。现在 `viewDidLoad` 只做三件
+  不可能失败的事（落一次语言、设背景色、挂一个占位标签），真正的内容全部推迟到
+  `viewDidAppear`；属性初始化也一并去掉了 —— 那段跑在 `viewDidLoad` **之前**，
+  同属启动路径。**占位文字「正在读取传感器…」能看到，就说明扩展加载成功了**，
+  问题在内容那一侧。
 - **`NSExtensionPrincipalClass` 必须是显式的 ObjC 类名。** 写成「模块名.类名」
   （`TodayExtension.TodayViewController`）要靠模块名在运行期被解析成类，解析不到就找不到
   类 —— 负一屏显示「无法载入」。现在 `TodayViewController` 标了
@@ -87,6 +88,18 @@ App Store 审核**。
   修法是先把框架 `dlopen` 进来（分类随之注册），再先探响应性、后走 `method(for:)` 调用 ——
   选择器不在就安静跳过，退回收起态但内容照常显示，不会崩。能正常显示的 CPU-X，它的 appex
   是链了 NotificationCenter 的，而且根本不调这个 API。
+
+- **扩展注册缓存。** iOS 会缓存已安装扩展的元数据，**覆盖安装不会刷新它**。
+  完全卸载 App → 重启设备 → 重装。这一步成本很低，值得先做。
+- **签名。** 未签名 IPA 由 TrollStore 自签。能正常工作的参照（CPU-X）其 appex 二进制
+  里**有** `LC_CODE_SIGNATURE`，完全未签名的**没有**。如果前几条都排除后仍失败，
+  下一步是给 appex 加 ad-hoc 签名，让产物结构与参照一致。
+
+另外，这一屏也刻意**不用 SwiftUI**：appex 里带 SwiftUI 运行时会让 dyld 把
+`SwiftUI.framework` 映射进来（几十 MB），而扩展的预算远小于主 App。取数层
+`Shared/Power` 因此去掉了 `LocalizedStringKey`（改用 `Strings.text` 直接返回 `String`，
+译文来源是同一份 `.lproj`）。**但它不是「无法载入」的充分原因** —— 把它脱干净之后
+（链接列表里没有 SwiftUI、未定义符号 0 个），装上去照样失败。别把它当终点。
 
 ### 点一下打开主 App
 
