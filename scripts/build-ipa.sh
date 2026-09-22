@@ -84,10 +84,13 @@ while IFS= read -r -d '' appex; do
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
   xcrun strip -S -x "$appex/$executable"
 done < <(find "$BUILD_DIR/Payload/$SCHEME.app" -name '*.appex' -type d -print0)
-(cd "$BUILD_DIR" && zip -qry "export/$SCHEME-unsigned.ipa" Payload)
+# 包名带上版本号：`SysProbe-0.0.6.ipa`。取不到版本号时退回 `unsigned` ——
+# 宁可叫 `SysProbe-unsigned.ipa`，也不要出现 `SysProbe-.ipa` 这种残名。
+IPA_NAME="$SCHEME-${MARKETING_VERSION:-unsigned}.ipa"
+(cd "$BUILD_DIR" && zip -qry "export/$IPA_NAME" Payload)
 rm -rf "$BUILD_DIR/Payload"
 
-IPA="$EXPORT_DIR/$SCHEME-unsigned.ipa"
+IPA="$EXPORT_DIR/$IPA_NAME"
 
 echo "==> Checking the ipa"
 work=$(mktemp -d)

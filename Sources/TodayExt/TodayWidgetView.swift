@@ -37,6 +37,14 @@ final class TodayWidgetView: UIView {
 
     private let root = UIStackView()
 
+    /// 左右留白。
+    ///
+    /// 这个数值不是随手定的：负一屏的组件标题（图标 + App 名 + 箭头）由**系统**绘制，
+    /// 它有自己的边距（实测约 19pt）。内容区原来贴边，于是最左边的 `CPU` 比上方图标
+    /// 往外探出约 13pt，看着不齐。加上这个偏移后，`CPU` 的左边缘正好落在图标的左边缘上；
+    /// 右边也顺带留出空间，「已用 … · 剩余 …」不会再顶到组件右边缘。
+    private static let horizontalInset: CGFloat = 14
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         build()
@@ -60,8 +68,10 @@ final class TodayWidgetView: UIView {
         addSubview(root)
 
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: trailingAnchor),
+            root.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                          constant: Self.horizontalInset),
+            root.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                           constant: -Self.horizontalInset),
             root.topAnchor.constraint(equalTo: topAnchor),
             root.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
@@ -71,11 +81,15 @@ final class TodayWidgetView: UIView {
 
     /// 数据来自两个采样器：硬件（CPU / 内存 / 存储）与电源（充电功率）。
     ///
-    /// 未插电时 `inputWatts` / `batteryWatts` 会是 nil —— 那种情况显示「—」而不是 0，
-    /// 因为「没在充电」和「充着电但功率是 0」是两件事。
+    /// 未插电时 `inputWatts` / `batteryWatts` 会是 nil，这里按 **0 W** 显示而不是「—」：
+    /// 四组读数里突然出现一个破折号，看上去像「这一项坏了」；而 0 W 本身是准确的读数
+    /// （确实没有功率进来）。电芯那组本来就是这个行为，两组现在一致。
+    ///
+    /// 数字与单位**分开**传：单位要小一号、颜色也更淡。所以这里用 `Formatting.number`
+    /// 而不是 `Formatting.percent` —— 后者会把 `%` 一起吐出来，再叠一个单位就印出两个。
     func apply(hardware: HardwareSnapshot, power: PowerSnapshot) {
         cpuCell.apply(caption: Strings.text("CPU"),
-                      value: Formatting.percent(hardware.cpu.usage * 100),
+                      value: Formatting.number(hardware.cpu.usage * 100),
                       unit: "%",
                       tint: TodayStyle.loadTint(hardware.cpu.usage),
                       footnote: hardware.cpu.frequencyMHz > 0
@@ -83,20 +97,20 @@ final class TodayWidgetView: UIView {
                           : "—")
 
         memoryCell.apply(caption: Strings.text("Memory"),
-                         value: Formatting.percent(hardware.memory.usage * 100),
+                         value: Formatting.number(hardware.memory.usage * 100),
                          unit: "%",
                          tint: TodayStyle.loadTint(hardware.memory.usage),
                          footnote: Strings.text("%@ free", Formatting.bytes(hardware.memory.available)))
 
         chargerCell.apply(caption: Strings.text("Charger"),
-                          value: power.inputWatts.map(Formatting.watts) ?? "—",
-                          unit: power.inputWatts != nil ? "W" : nil,
+                          value: Formatting.watts(power.inputWatts ?? 0),
+                          unit: "W",
                           tint: TodayStyle.accent,
                           footnote: Strings.text("Input power"))
 
         cellCell.apply(caption: Strings.text("Cell"),
-                       value: power.batteryWatts.map { Formatting.watts(abs($0)) } ?? "—",
-                       unit: power.batteryWatts != nil ? "W" : nil,
+                       value: Formatting.watts(abs(power.batteryWatts ?? 0)),
+                       unit: "W",
                        tint: TodayStyle.battery,
                        footnote: Strings.text("Input power"))
 
@@ -123,12 +137,12 @@ final class TodayCellView: UIView {
         captionLabel.textColor = TodayStyle.muted
         captionLabel.numberOfLines = 1
 
-        valueLabel.font = TodayFont.mono(21, weight: .semibold)
+        valueLabel.font = TodayFont.mono(11, weight: .semibold)
         valueLabel.adjustsFontSizeToFitWidth = true
         valueLabel.minimumScaleFactor = 0.6
         valueLabel.numberOfLines = 1
 
-        unitLabel.font = TodayFont.text(12, weight: .medium)
+        unitLabel.font = TodayFont.text(10, weight: .medium)
         unitLabel.textColor = TodayStyle.muted
 
         footnoteLabel.font = TodayFont.text(11)
@@ -207,6 +221,9 @@ final class TodayStorageView: UIView {
         header.axis = .horizontal
         header.spacing = 8
         header.alignment = .firstBaseline
+        // 把「已用 / 剩余」顶到右边。两个 label 的默认 hugging 都是 251，靠 `.fill`
+        // 隐式决定谁被拉伸 —— 那是碰运气，说清楚才稳。
+        captionLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         track.translatesAutoresizingMaskIntoConstraints = false
         fill.translatesAutoresizingMaskIntoConstraints = false

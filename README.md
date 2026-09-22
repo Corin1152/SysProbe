@@ -304,7 +304,7 @@ iOS 不允许任何 App 释放别的 App 的内存 —— 内存由内核按进�
 
 ```bash
 brew install xcodegen
-bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-unsigned.ipa
+bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-<版本号>.ipa
 ```
 
 工程文件（`.xcodeproj`）不入库，每次构建由 `project.yml` 重新生成。

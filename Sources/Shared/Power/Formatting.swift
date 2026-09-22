@@ -29,6 +29,15 @@ nonisolated enum Formatting {
         String(format: "%.\(decimals)f %%", value)
     }
 
+    /// 只出数字，**不带单位**。
+    ///
+    /// 给「数字与单位分开排版」的地方用 —— 比如负一屏那四组读数，数字与 `%` / `W`
+    /// 是分开的两个 label（单位要小一号、颜色也更淡）。
+    /// `percent(_:)` 会把 `%` 一起吐出来，那种场合再用它就会印出两个 `%`。
+    static func number(_ value: Double, decimals: Int = 0) -> String {
+        String(format: "%.\(decimals)f", value)
+    }
+
     /// "1h 04m", "4m 12s", "38s"
     static func duration(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "—" }
