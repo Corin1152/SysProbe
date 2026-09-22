@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  这个文件故意只有 NSExtension 一个键。
+
+	  其余所有键（CFBundleIdentifier / CFBundleExecutable / CFBundlePackageType = XPC! /
+	  CFBundleShortVersionString / CFBundleVersion …）都由 GENERATE_INFOPLIST_FILE 从
+	  构建设置合成，Xcode 会把本文件的内容合并进去。
+
+	  NSExtension 之所以必须写在这里，是因为没有对应的 INFOPLIST_KEY_* 构建设置。
+
+	  NSExtensionPointIdentifier = com.apple.widget-extension 是**传统 Today 扩展**，
+	  不是 WidgetKit（com.apple.widgetkit-extension）。区别是本质的：传统扩展在负一屏
+	  里是一个真正被加载、活着的 UIViewController，只要负一屏可见进程就在跑，于是可以
+	  按自己的节奏（1 秒）重读数据 —— 不受 WidgetKit「时间线预算、最快 5 分钟」的限制。
+	  CPU-X 的负一屏走的正是这条路。iPhone X 的系统封顶为 iOS 16.x，而传统扩展到
+	  iOS 18 才被移除，所以本机不受影响。
+	-->
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.widget-extension</string>
+		<!-- Swift 类的运行时名字是「模块名.类名」，模块名即 PRODUCT_MODULE_NAME，
+		     在本工程里等于 TodayExtension。 -->
+		<key>NSExtensionPrincipalClass</key>
+		<string>TodayExtension.TodayViewController</string>
+	</dict>
+</dict>
+</plist>

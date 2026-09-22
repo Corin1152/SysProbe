@@ -1,0 +1,82 @@
+name: SysProbe
+
+options:
+  bundleIdPrefix: com.corin
+  deploymentTarget:
+    iOS: "16.2"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  defaultConfig: Release
+  # 空目录不进工程，避免出现只用来占位的分组。
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    # 代码里的 `nonisolated` 类型/扩展声明与 SWIFT_DEFAULT_ACTOR_ISOLATION 需要
+    # Swift 6 工具链（实测需 6.2 及以上，见 .github/workflows/build.yml 的前置检查）。
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+    CLANG_ENABLE_MODULES: "YES"
+    SWIFT_EMIT_LOC_STRINGS: "NO"
+    # Info.plist 由 Xcode 依据 INFOPLIST_KEY_* 合成；只有构建设置表达不了的键
+    # （扩展的 NSExtension 字典）才落成 Support/ 下的局部 plist。
+    GENERATE_INFOPLIST_FILE: "YES"
+    # 侧载用，不带任何签名身份。
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  SysProbe:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/App
+      - path: Sources/Shared
+    settings:
+      base:
+        PRODUCT_NAME: SysProbe
+        PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: SysProbe
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+    dependencies:
+      - target: TodayExtension
+        embed: true
+        codeSign: false
+
+  TodayExtension:
+    type: app-extension
+    platform: iOS
+    # 只吃 Power 与 Design：扩展不需要 Hardware 那一套（Mach / getifaddrs / 内存分配），
+    # 少链接一点，也避免把与扩展无关的代码带进 appex。
+    sources:
+      - path: Sources/TodayExt
+      - path: Sources/Shared/Power
+      - path: Sources/Shared/Design
+    settings:
+      base:
+        PRODUCT_NAME: TodayExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.today
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: SysProbe
+        INFOPLIST_FILE: Support/TodayExtension-Info.plist
+
+schemes:
+  SysProbe:
+    build:
+      targets:
+        SysProbe: all
+    run:
+      config: Release
+    archive:
+      config: Release

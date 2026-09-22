@@ -1,0 +1,111 @@
+name: Build
+
+# 触发方式：
+#   - 推送到 main / master、PR：构建并校验，产出未签名 ipa 作为 artifact
+#   - 打 v* tag：额外发布一个 Release，把 ipa 挂上去
+#   - 手动：Actions -> Build -> Run workflow
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    name: Unsigned ipa
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 构建号取自 commit 数，浅克隆会让每次构建号都是 1。
+          fetch-depth: 0
+
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          newest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$newest"
+          xcodebuild -version
+          swift --version
+
+      # 代码里用了 `nonisolated` 标注在类型与扩展声明上，并且依赖
+      # SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor —— 这两样都要 Swift 6.2 起步
+      # （Xcode 26）。工具链过旧时错误会出现在编译深处且不点名真正原因，所以先明确检查。
+      - name: Check toolchain
+        run: |
+          required=6.2
+          found=$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          echo "Swift $found (need $required or newer)"
+          if [ "$(printf '%s\n%s\n' "$required" "$found" | sort -V | head -1)" != "$required" ]; then
+            echo "::error::Swift $found is too old. This project needs Swift $required or newer; pin a runner image that ships it."
+            exit 1
+          fi
+
+      - name: Install XcodeGen
+        run: brew install xcodegen || brew upgrade xcodegen
+
+      - name: Take the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "MARKETING_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build unsigned ipa
+        run: bash scripts/build-ipa.sh
+
+      # 整个项目最关键的一处断言：负一屏能不能秒级刷新，全看这个扩展是不是
+      # **传统** Today 扩展。它必须是 com.apple.widget-extension；如果哪天变成
+      # com.apple.widgetkit-extension，界面照样能装、能显示，但刷新会掉到
+      # 5 分钟以上，而且不会有任何报错 —— 所以在这里明确卡住。
+      - name: Check the widget is a traditional Today extension
+        run: |
+          work=$(mktemp -d)
+          unzip -q build/export/SysProbe-unsigned.ipa -d "$work"
+          app="$(ls -d "$work"/Payload/*.app)"
+          found=0
+          for appex in "$app"/PlugIns/*.appex; do
+            [ -d "$appex" ] || continue
+            point=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex/Info.plist")
+            principal=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPrincipalClass' "$appex/Info.plist")
+            echo "appex $(basename "$appex"): $point (principal: $principal)"
+            if [ "$point" != "com.apple.widget-extension" ]; then
+              echo "::error::$(basename "$appex") is '$point', not 'com.apple.widget-extension'. The Today widget would fall back to WidgetKit's timeline budget and stop refreshing every second."
+              exit 1
+            fi
+            found=$((found + 1))
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No .appex was embedded into the ipa. The Today widget would be missing entirely."
+            exit 1
+          fi
+          rm -rf "$work"
+
+      - name: Upload ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysProbe-unsigned-ipa
+          path: build/export/SysProbe-unsigned.ipa
+          if-no-files-found: error
+
+      # 崩溃报告需要 dSYM 才能符号化；它不随 Release 发布，只作为构建产物保留。
+      - name: Upload dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysProbe-dSYM
+          path: build/DerivedData/Build/Products/Release-iphoneos/*.dSYM
+          if-no-files-found: warn
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/export/SysProbe-unsigned.ipa
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            未签名构建 —— 安装前请用自己的凭证签名（巨魔 / AltStore / SideStore / Sideloadly）。

@@ -1,0 +1,20 @@
+# 构建产物
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# XcodeGen 每次构建都会重新生成，仓库里不保存工程文件，
+# 这样 pbxproj 永远不会和目录结构对不上。
+*.xcodeproj/
+*.xcworkspace/
+
+# Xcode / macOS
+.DS_Store
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+
+# Swift Package Manager（当前未使用，留给以后）
+.build/
+.swiftpm/

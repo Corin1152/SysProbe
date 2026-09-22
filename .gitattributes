@@ -1,0 +1,14 @@
+# 构建跑在 macOS 上，仓库里一律用 LF。
+# 在 Windows 上编辑时如果少了这一行，Git 会把 CRLF 带进 .sh，
+# 到了 macOS 就变成 `\r: command not found`，而且报错信息完全指不到行尾问题。
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.plist text eol=lf
+
+# 二进制文件不要做任何行尾或编码转换
+*.png  binary
+*.jpg  binary
+*.ipa  binary
+*.zip  binary
