@@ -84,8 +84,12 @@ bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-unsigned.ipa
 CI 在 GitHub Actions 的 macOS runner 上跑同一套步骤，推送到 `main` 即构建，
 打 `v*` tag 会额外发布 Release。构建完还会断言两件容易静默失败的事：内嵌的 `.appex`
 确实是 `com.apple.widget-extension`（万一退化成 WidgetKit，界面照样能装能显示，但刷新会
-悄悄掉到 5 分钟以上且不报任何错），以及图标确实进了包（`CFBundleIconName` 指向 `AppIcon`、
-bundle 根目录有 actool 渲染出的 60x60 @2x/@3x PNG）。
+悄悄掉到 5 分钟以上且不报任何错），以及图标确实接上了（`CFBundleIconName` 指向 `AppIcon`、
+`Assets.car` 存在、bundle 根目录有图标 PNG，另加一条对源 asset set 槽位完整性的检查）。
+
+顺带记一个坑：**不要断言 actool 输出了哪几个倍率**。Xcode 26 / iOS 26 SDK 只吐一张规范化
+的图标 PNG（`AppIcon60x60@2x.png`），其余倍率交给 `Assets.car`，这是新版图标管线而不是缺陷 ——
+按「@2x 和 @3x 都会产出」去写断言，构建会被自己的断言判死。
 
 ## 授权与致谢
 
