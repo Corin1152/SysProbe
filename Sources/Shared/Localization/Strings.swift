@@ -42,6 +42,15 @@ nonisolated enum Strings {
             .localizedString(forKey: key, value: key, table: nil)
     }
 
+    /// 带格式参数的取值：`Strings.text("%@ free", "351 MB")`。
+    ///
+    /// 键里带 `%@` / `%lld` 的条目用这个。顺序不能反 —— 必须**先查表拿到译文，
+    /// 再交给 `String(format:)`**；反过来（先格式化再查表）参数会被当成键的一部分，
+    /// 永远查不到。
+    static func text(_ key: String, _ arguments: CVarArg...) -> String {
+        String(format: text(key), arguments: arguments)
+    }
+
     /// 各语言的 `.lproj` 包，进程内取一次。
     ///
     /// `static let` 的初始化是惰性的、线程安全的，正好用来做这件事；建完之后只读。

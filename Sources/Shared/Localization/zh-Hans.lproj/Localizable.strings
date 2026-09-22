@@ -191,3 +191,7 @@
 "App version" = "App 版本";
 "Widget" = "负一屏组件";
 "not bundled" = "未打进包";
+"Charger" = "充电器";
+"Input power" = "输入功率";
+"%@ free" = "%@ 空闲";
+"%@ used · %@ free" = "已用 %@ · 剩余 %@";

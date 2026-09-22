@@ -25,6 +25,8 @@ nonisolated enum TodayStyle {
     static let battery = dynamic(0x0E9B57, 0x3FE08C)
     /// 变成热损耗掉的。
     static let loss = dynamic(0xB86A00, 0xFFB443)
+    /// 高占用 / 危险。
+    static let danger = dynamic(0xC5342B, 0xFF6058)
     /// 无线 / MagSafe。
     static let wireless = dynamic(0x6B4EE6, 0xB49BFF)
     static let muted = dynamic(0x60687A, 0x8C93A6)
@@ -52,6 +54,18 @@ nonisolated enum TodayStyle {
         case ..<39: return warm
         case ..<44: return hot
         default: return veryHot
+        }
+    }
+
+    /// 负载色：CPU / 内存的占用率用。
+    ///
+    /// 三段而不是连续渐变 —— 读数每秒都在动，连续渐变换色只会让人觉得整屏在闪；
+    /// 三段的话只有跨过阈值那一下才变色，那一下恰好是需要被注意到的。
+    static func loadTint(_ fraction: Double) -> UIColor {
+        switch fraction {
+        case ..<0.70: return battery
+        case ..<0.90: return loss
+        default: return danger
         }
     }
 }

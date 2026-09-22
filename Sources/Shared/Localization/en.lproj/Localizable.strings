@@ -191,3 +191,7 @@
 "App version" = "App version";
 "Widget" = "Widget";
 "not bundled" = "not bundled";
+"Charger" = "Charger";
+"Input power" = "Input power";
+"%@ free" = "%@ free";
+"%@ used · %@ free" = "%@ used · %@ free";

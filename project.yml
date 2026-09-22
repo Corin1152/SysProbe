@@ -41,8 +41,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.4"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.0.5"
+        CURRENT_PROJECT_VERSION: "5"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -86,6 +86,13 @@ targets:
       - path: Sources/TodayExt
       - path: Sources/Shared/Power
       - path: Sources/Shared/Localization
+      # CPU / 内存 / 存储来自这一层。它里面有 **C 汇编探针**（CPU 频率靠它实测），
+      # 所以扩展也得配桥接头 —— 见下面的 SWIFT_OBJC_BRIDGING_HEADER。
+      #
+      # 这一层里还带着 `MemoryOptimizer`（会分配大块内存的那个），它跟着一起被编进来，
+      # 但只在 `run()` 被调用时才分配 —— 不调用就完全无副作用。代价只是 appex 大约
+      # 大 80 KB。
+      - path: Sources/Shared/Hardware
     settings:
       base:
         PRODUCT_NAME: TodayExtension
@@ -93,11 +100,17 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.4"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.0.5"
+        CURRENT_PROJECT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist
+        # 扩展也要桥接头：`Shared/Hardware` 里的 CPU 频率探针是 C（Swift 没有内联汇编，
+        # 而测频率靠的正是一段「周期数已知」的汇编循环）。没有它，
+        # `sysprobe_measure_cpu_frequency_mhz` 找不到，编译直接失败。
+        # 与主 App 用的是同一份头文件与搜索路径。
+        SWIFT_OBJC_BRIDGING_HEADER: Support/SysProbe-Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Sources/Shared/Hardware
         # 让 appex **真的**链上 NotificationCenter.framework —— 这是「无法载入」的最终根因。
         #
         # 崩溃日志（`TodayExtension-*.ips`）里写得明明白白：扩展进程 trap 在
