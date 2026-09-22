@@ -178,6 +178,28 @@ jobs:
             exit 1
           fi
 
+          # 5) appex 必须**真的链上** NotificationCenter.framework —— 这是「无法载入」的
+          #    最终根因，来自真机崩溃日志：
+          #
+          #        +[EXConcreteExtensionContextVendor _extensionContextClass]
+          #
+          #    ExtensionFoundation 在建立扩展的 XPC 连接时（线程名
+          #    com.apple.NSXPCListener.service.….apple-extension-service），按
+          #    NSExtensionPointIdentifier 找这个扩展该用哪个 NSExtensionContext 子类 ——
+          #    对 com.apple.widget-extension 就是 NCWidgetExtensionContext，它实现在
+          #    NotificationCenter.framework 里。库不在，类找不到，当场 EXC_BREAKPOINT；
+          #    而这个时机**早于** NSExtensionMain 实例化我们的 VC，所以连 init 都跑不到。
+          #
+          #    链接器会把这个「没被用到」的库 dead-strip 掉（本工程的 appex 同样因此
+          #    丢掉过 Charts.framework），所以 project.yml 里配了 `-no_dead_strip_dylibs`。
+          #    这条断言保证那个配置真的生效 —— 它一旦失效，症状是「构建全绿、真机
+          #    无法载入」，且**应用自己的代码一行都不会执行**，极难从代码侧看出来。
+          if ! otool -L "$binary" | grep -q "NotificationCenter.framework"; then
+            echo "::error::the appex does not link NotificationCenter.framework. Without it NCWidgetExtensionContext is missing, so the extension traps in +[EXConcreteExtensionContextVendor _extensionContextClass] before NSExtensionMain instantiates the view controller — the Today view shows \"Unable to Load\" and none of the app's own code runs."
+            exit 1
+          fi
+          echo "NotificationCenter.framework is linked"
+
           echo "widget load checks passed"
           rm -rf "$work"
 
