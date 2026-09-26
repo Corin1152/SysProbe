@@ -12,7 +12,7 @@ iPhone 硬件信息 + 充电功率/适配器读数工具。四屏结构：
 外加一个**负一屏 Today Extension**，1 秒刷新，展示功率与适配器读数。
 （负一屏**不含**充电控制 —— 它只需要看数，不需要开关。）
 
-四屏右上角各有一个齿轮，进入同一个设置页（界面语言、诊断信息、致谢）。
+四屏右上角各有一个齿轮，进入同一个设置页（设备维护、界面语言、诊断信息、致谢）。
 入口与面板都挂在视图树的根上，不归任何一页所有 —— 面板挂在分页里的话，
 切语言时整棵树换 identity，会把面板连同自己一起关掉。
 
@@ -107,6 +107,68 @@ App 一启动就检查 `127.0.0.1:1230`，没人监听就用 `posix_spawn` 把�
 - 本地直接 `xcodebuild`（不走 `scripts/build-ipa.sh`）时包里**没有**守护进程，
   Smart charge 屏会显示一句「这一版里没有充电控制服务」并停用所有开关。
 
+## 设备维护（重启设备 / 注销）
+
+设置页最上面两个并排的按钮，各走一次二次确认。
+
+| 动作 | 实际做的事 |
+|---|---|
+| **重启设备** | `reboot(0)` —— 整机重启 |
+| **注销** | 给 SpringBoard 发 `SIGHUP` —— 只重启界面层，**不重启设备** |
+
+两者都由包根目录下一个**裸可执行文件** `SysProbeRootTool` 执行。它不是 Xcode target，
+而是 `scripts/build-ipa.sh` 用 `clang` 单独编译后拷进包根的，源码在 `Tools/RootTool.c`。
+
+### 为什么源码在 `Tools/` 而不是 `Sources/`
+
+它有**自己的 `main()`**。XcodeGen 会把 `sources` 下的 `.c` 全部编进 target，一旦被当成
+App 的源文件，链接期就会出现重复的 `_main` 而直接失败。放在 `Sources/` 之外是**结构性**
+保证 —— 靠 `project.yml` 里一条 `excludes` 也能达到同样效果，但那条配置将来被人删掉时
+不会有任何提示，而这里会（链接报错）。
+
+### 复用了充电守护进程那条 root 链路
+
+`ChargeSpawn.c` 里原本只有一个入口 `sysprobe_spawn_root_daemon`。现在拆成
+`sysprobe_spawn_root`（建属性 → persona 99 / uid 0 / gid 0 → `posix_spawn`）+ 三个包装：
+
+| 入口 | 传参 | 用途 |
+|---|---|---|
+| `sysprobe_spawn_root_daemon` | 不传 | 充电守护进程。它靠 `argc == 1` 判定自己该常驻 |
+| `sysprobe_spawn_root_tool` | 传一个子命令 | 重启 / 注销。**发了就不管** |
+| `sysprobe_spawn_root_tool_sync` | 传一个子命令，**等它结束** | 只给 `check` 用 |
+
+三个入口的 persona 序列逐行相同，改那段时一起看。
+
+### 一个必须知道的失败模式：权限不足是**静默**的
+
+`posix_spawnattr_set_persona_*` 那三个调用在没有 `com.apple.private.persona-mgmt` 时
+会失败，但**失败之后 `posix_spawn` 仍然成功** —— 只是子进程变成 mobile 身份。于是
+`reboot(2)` 和 `kill(SpringBoard)` 双双返回 EPERM，而调用方收不到任何错误。
+
+这正是「按钮点了没反应」的来源，所以有两道防线：
+
+1. 工具带一个 `check` 子命令，只回答一个问题：`geteuid() == 0` 吗。设置页一打开就跑一次
+   （`DeviceActions.probe()`），把结果落到诊断区的 **Root tool** 一行上；
+2. 自检没过时整区**禁用并变淡**，而不是留一个看起来能用、点了没反应的按钮。
+
+守护进程那边有同一类问题，判据是 1230 端口（`sysprobe_local_port_open`）——
+两边都必须有一个「怎么知道它真的生效了」的独立判据。
+
+### 几个要记住的点
+
+- **工具用自己那份 entitlements**（`Support/SysProbeRootTool.entitlements`），
+  不是主 App 那份。主 App 那份是为了**能 spawn 出 root 子进程**；工具这份是为了
+  **自己以 root 跑起来之后不被沙箱拦住**（`no-sandbox` / `no-container` /
+  `container-required=false` / `platform-application`）。两份别合并。
+- **主 App 的 entitlements 一个字都没改。** 这是这次改动最重要的兼容性保证 ——
+  充电控制那条链路完全没被碰到。
+- **`reboot(0)` 的实参是 `0`，不是 `<sys/reboot.h>` 里的 `RB_AUTOBOOT`（0x100）。**
+  注销用 `SIGHUP` 而不是 `SIGKILL`（后者走的是「崩溃恢复」，表现不一样）。
+  这两个取值来自 RebootTools 的真机验证，别「顺手改正」。
+- **注销之后本 App 会被系统一起收掉**，那是预期行为，不是崩溃 —— 确认弹窗里写了这一句。
+- 本地直接 `xcodebuild` 时包里**没有**这个工具，那一区会禁用并显示
+  「维护工具不在这一版里，或者没能取得 root 权限」。
+
 ## 为什么只能侧载
 
 Power 与 Adapter 两屏的读数来自 Apple 的**私有 IOKit 接口**（`AppleSmartBattery`、
@@ -114,8 +176,9 @@ Power 与 Adapter 两屏的读数来自 Apple 的**私有 IOKit 接口**（`Appl
 不需要任何私有 entitlement —— 但私有 API 意味着它**永远无法通过 App Store 审核**。
 
 Charge 屏更进一步：它要 spawn 一个 root 子进程，并且真的往 IORegistry 里写。
-这需要 `Support/SysProbe.entitlements` 里那一组私有 entitlement，也就只能是侧载
-（巨魔 / AltStore / SideStore / Sideloadly）。
+设置页的「设备维护」同理 —— 它 spawn 的 `SysProbeRootTool` 要调 `reboot(2)` 和
+`kill(SpringBoard)`。两者都需要 `Support/SysProbe.entitlements` 里那一组私有
+entitlement（工具自己另有一份），也就只能是侧载（巨魔 / AltStore / SideStore / Sideloadly）。
 
 副作用有两个，都反直觉，都写在 entitlements 文件的注释里：**脱了沙箱，一部分权限
 反而变紧**（原来靠沙箱隐式授予的 IOKit 访问没了，得靠 `iokit-user-client-class`
@@ -387,8 +450,10 @@ bash scripts/build-ipa.sh          # 产出 build/export/SysProbe-<版本号>.ip
    校验 sha256，落到 `Sources/ChargeControl/Resources/`（该文件被 `.gitignore` 忽略）。
    **放在最前面**：下载失败该在这里就炸，而不是等 `xcodebuild` 跑完十分钟才报。
 2. `xcodegen` + `xcodebuild` —— 正常出未签名的 .app。
-3. 打包 + **`ldid -S` 签名** —— 把守护进程拷进包根目录，然后给主 App 与守护进程
-   签上 `Support/SysProbe.entitlements`。顺序是 strip 之后才签，反过来会被 strip 作废。
+3. 打包 + **`ldid -S` 签名** —— 把守护进程拷进包根目录、用 `clang` 编出维护工具
+   `SysProbeRootTool`，然后给主 App 与守护进程签上 `Support/SysProbe.entitlements`、
+   给工具签上 `Support/SysProbeRootTool.entitlements`（**两份不一样**，见「设备维护」那一节）。
+   顺序是 strip 之后才签，反过来会被 strip 作废。
 
 第 3 步是这个包里唯一「未签名 ipa 却要签名」的地方：TrollStore 安装时会**保留**
 IPA 里已有的 entitlements，所以它们必须在构建时就签进去。扩展（`.appex`）**不签** ——
@@ -405,8 +470,9 @@ CI 在 GitHub Actions 的 macOS runner 上跑同一套步骤，推送到 `main` 
 悄悄掉到 5 分钟以上且不报任何错），图标确实接上了（`CFBundleIconName` 指向 `AppIcon`、
 `Assets.car` 存在、bundle 根目录有图标 PNG，另加一条对源 asset set 槽位完整性的检查），
 以及充电控制那三样 —— 守护进程在不在且可执行、`www/` 有没有被展平成普通资源、
-主 App 与守护进程的 entitlements 全不全。三条守的都是同一类失败：**包能装、界面能开、
-开关能点，但充电一点都停不下来，而且哪里都不报错。**
+主 App 与守护进程的 entitlements 全不全 —— 再加设备维护那两样（工具在不在且可执行、
+它那份 entitlements 全不全）。这几条守的都是同一类失败：**包能装、界面能开、
+开关能点，但充电一点都停不下来 / 维护按钮点了什么都不发生，而且哪里都不报错。**
 
 顺带记一个坑：**不要断言 actool 输出了哪几个倍率**。Xcode 26 / iOS 26 SDK 只吐一张规范化
 的图标 PNG（`AppIcon60x60@2x.png`），其余倍率交给 `Assets.car`，这是新版图标管线而不是缺陷 ——
@@ -421,5 +487,11 @@ Power / Adapter 两屏的取数层与设计系统移植自
 （作者 lich4，**GNU GPL v3**）。其守护进程二进制**不包含在本仓库中** ——
 由 `scripts/fetch-daemon.sh` 在构建时从上游 Release 下载，仓库里只有下载地址与校验值。
 前端界面（`Sources/ChargeControl/Resources/www/`）为 SysProbe 自行重写。
+
+设备维护（重启设备 / 注销）的代码在 `Tools/RootTool.c`，是**本仓库自行实现**的，
+没有复用任何第三方二进制。它依赖的两个「在真机上验证过的取值」—— `reboot(0)` 的实参，
+以及注销发给 SpringBoard 的信号 —— 参考自 [RebootTools](https://github.com/dongchenshuo/RebootTools)
+（作者 dongchenshuo，其致谢「肖博vlog」提供重启核心代码）。RebootTools 的 tipa 里**没有
+LICENSE**（默认保留所有权利），所以这里只沿用了接口层面的事实，没有搬运它的代码或二进制。
 
 详见 `LICENSE` 与 `NOTICE`。

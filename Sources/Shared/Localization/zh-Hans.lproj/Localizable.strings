@@ -244,3 +244,16 @@
 "The charge control service is not in this build. Run scripts/build-ipa.sh to fetch and bundle it." = "这一版里没有充电控制服务。请运行 scripts/build-ipa.sh 取回并打进包里。";
 "The charge control service is not running. Nothing on this page will take effect until it starts." = "充电控制服务未运行。在它启动之前，这一页的任何设置都不会生效。";
 "Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository." = "充电控制移植自 ChargeLimiter，© lich4，以 GNU GPL v3 授权。它的守护进程在构建时从上游 Release 获取，不存放于本仓库。";
+
+/* ── 设备维护（重启设备 / 注销）────────────────────────────────────── */
+"Maintenance" = "维护";
+"Reboot Device" = "重启设备";
+"Respring" = "注销";
+"Root tool" = "维护工具";
+"Are you sure you want to %@?" = "确定要%@？";
+"The device restarts immediately. Anything unsaved is lost." = "设备会立即重启，未保存的内容会丢失。";
+"Only the interface restarts — the device does not reboot. This app closes with it." = "只重启界面层，不会重启设备。本 App 也会随之退出。";
+"The privileged helper is missing from this build, or could not obtain root. Run scripts/build-ipa.sh to bundle it." = "维护工具不在这一版里，或者没能取得 root 权限。请运行 scripts/build-ipa.sh 把它打进包里。";
+"These run a privileged helper from this app's bundle. Reboot Device restarts the whole phone; Respring restarts the interface only." = "这两个按钮调用本 App 包内的一个特权工具：重启设备会重启整台手机，注销只重启界面层。";
+"Could not start the helper." = "无法启动维护工具";
+"Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core." = "重启与注销由本仓库自行实现，没有复用其他 App 的二进制。它们依赖的两个已验证取值 —— reboot(0) 与发给 SpringBoard 的信号 —— 参考自 RebootTools（作者 dongchenshuo，其致谢「肖博vlog」提供重启核心代码）。";

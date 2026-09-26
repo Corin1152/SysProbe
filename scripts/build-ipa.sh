@@ -108,6 +108,29 @@ cp Sources/ChargeControl/Resources/ChargeLimiterDaemon "$BUILD_DIR/Payload/$SCHE
 # 二次 strip 没有好处，反而会改掉校验值。
 chmod 755 "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"
 
+# ── 维护工具（重启设备 / 注销）──────────────────────────────────────────────
+#
+# 源码在 `Tools/` 而不是 `Sources/`：它有**自己的 `main()`**，一旦被 XcodeGen 当成
+# target 的源文件编进去，就会和 App 的 `main` 撞符号、链接直接失败。放在 Sources/
+# 之外是**结构性**保证，不靠 project.yml 里一条随时可能被删掉的 `excludes`。
+#
+# 用 clang 直编，**不新开 Xcode target**：iOS 的「命令行工具」在 Xcode 里没有模板，
+# 要靠手写 PRODUCT_TYPE 才编得出来；而这里要的只是一个静态链接的裸可执行文件，
+# 一个 clang 调用就够了，也更容易看出它到底编了些什么。
+TOOL_SRC="Tools/RootTool.c"
+TOOL="$BUILD_DIR/Payload/$SCHEME.app/SysProbeRootTool"
+[ -f "$TOOL_SRC" ] || { echo "::error::$TOOL_SRC is missing" >&2; exit 1; }
+
+echo "==> Building SysProbeRootTool"
+xcrun --sdk iphoneos clang \
+  -arch arm64 \
+  -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  -miphoneos-version-min=16.2 \
+  -O2 -Wall \
+  -o "$TOOL" "$TOOL_SRC"
+# 同上：zip 保留执行位，装到设备上才起得来。
+chmod 755 "$TOOL"
+
 # 链接器会把每个目标文件的绝对路径记进符号表（N_OSO），-file-prefix-map 覆盖不到，
 # 剥掉调试与本地符号即可去掉。dSYM 仍留在 DerivedData 里备用。
 xcrun strip -S -x "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME"
@@ -138,6 +161,9 @@ done < <(find "$BUILD_DIR/Payload/$SCHEME.app" -name '*.appex' -type d -print0)
 # **扩展不签。** 它现在没有 entitlements、跑得好好的，就别动它 —— 这一条不是
 # 省事，是「不要在没有设备可测的情况下改动已经在工作的东西」。
 ENTITLEMENTS="Support/SysProbe.entitlements"
+# 维护工具用**自己那份**：它要的权限（platform-application / no-container /
+# no-sandbox）与主 App 那份完全是两回事，别合并 —— 见那个文件的注释。
+TOOL_ENTITLEMENTS="Support/SysProbeRootTool.entitlements"
 if ! command -v ldid >/dev/null 2>&1; then
   echo "==> ldid not found, installing"
   brew install ldid
@@ -146,7 +172,8 @@ for binary in "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME" \
               "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"; do
   ldid -S"$ENTITLEMENTS" "$binary"
 done
-echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS"
+ldid -S"$TOOL_ENTITLEMENTS" "$TOOL"
+echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS, SysProbeRootTool with $TOOL_ENTITLEMENTS"
 
 # 包名带上版本号：`SysProbe-0.0.6.ipa`。取不到版本号时退回 `unsigned` ——
 # 宁可叫 `SysProbe-unsigned.ipa`，也不要出现 `SysProbe-.ipa` 这种残名。
@@ -227,6 +254,37 @@ for target in "$main_binary" "$daemon"; do
   done
   echo "  entitlements: $(basename "$target") ok"
 done
+
+# ── 维护工具（重启设备 / 注销）──────────────────────────────────────────────
+#
+# 守的还是同一类**静默失败**：工具在包里、进程也起得来，但**拿不到 root** ——
+# 于是 `reboot(2)` 和 `kill(SpringBoard)` 双双返回 EPERM，界面不会有任何报错，
+# 用户看到的就是「点了没反应」。所以下面逐条卡死。
+tool="$app_dir/SysProbeRootTool"
+if [ ! -f "$tool" ]; then
+  echo "::error::SysProbeRootTool is missing from the app bundle. The maintenance buttons would still be drawn, but pressing them would do nothing at all." >&2
+  exit 1
+fi
+if [ ! -x "$tool" ]; then
+  echo "::error::SysProbeRootTool is in the bundle but not executable. posix_spawn would fail and both buttons would silently do nothing." >&2
+  exit 1
+fi
+echo "  root tool  : SysProbeRootTool ($(wc -c < "$tool" | tr -d ' ') bytes, executable)"
+
+tool_entitlements="$(ldid -e "$tool" 2>/dev/null || true)"
+if [ -z "$tool_entitlements" ]; then
+  echo "::error::SysProbeRootTool carries no entitlements at all. TrollStore preserves whatever the ipa carries, so it would install and run but never be able to reboot or signal SpringBoard." >&2
+  exit 1
+fi
+for key in platform-application \
+           com.apple.private.security.no-container \
+           com.apple.private.security.no-sandbox; do
+  if ! printf '%s' "$tool_entitlements" | grep -q "$key"; then
+    echo "::error::SysProbeRootTool is missing the '$key' entitlement. Without it the tool still starts, but rebooting and respringing both fail silently — neither the app nor the tool reports anything." >&2
+    exit 1
+  fi
+done
+echo "  entitlements: SysProbeRootTool ok"
 
 rm -rf "$work"
 

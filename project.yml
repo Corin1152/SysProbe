@@ -45,6 +45,13 @@ targets:
         excludes:
           - "Resources"
           - "Resources/**"
+      # 设备维护：设置页顶部的「重启设备 / 注销」。
+      #
+      # 这一层里**只有 Swift 侧的服务类**。真正干活的 `SysProbeRootTool` 是裸可执行
+      # 文件，源码在 `Tools/RootTool.c`，由 `scripts/build-ipa.sh` 用 clang 单独编译后
+      # 拷进包根 —— 它**不能**放进 Sources/：那份源码有自己的 `main()`，被 XcodeGen
+      # 编进这个 target 就会和 App 的 main 撞符号，链接直接失败。
+      - path: Sources/DeviceControl
       # 守护进程托管的网页界面。
       #
       # **必须是 `type: folder`（蓝色文件夹引用）**，不能让它当普通资源被展平：
@@ -62,8 +69,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.9"
-        CURRENT_PROJECT_VERSION: "9"
+        MARKETING_VERSION: "0.0.10"
+        CURRENT_PROJECT_VERSION: "10"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -121,8 +128,8 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.9"
-        CURRENT_PROJECT_VERSION: "9"
+        MARKETING_VERSION: "0.0.10"
+        CURRENT_PROJECT_VERSION: "10"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

@@ -244,3 +244,16 @@
 "The charge control service is not in this build. Run scripts/build-ipa.sh to fetch and bundle it." = "The charge control service is not in this build. Run scripts/build-ipa.sh to fetch and bundle it.";
 "The charge control service is not running. Nothing on this page will take effect until it starts." = "The charge control service is not running. Nothing on this page will take effect until it starts.";
 "Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository." = "Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository.";
+
+/* ── 设备维护（重启设备 / 注销）────────────────────────────────────── */
+"Maintenance" = "Maintenance";
+"Reboot Device" = "Reboot Device";
+"Respring" = "Respring";
+"Root tool" = "Root tool";
+"Are you sure you want to %@?" = "Are you sure you want to %@?";
+"The device restarts immediately. Anything unsaved is lost." = "The device restarts immediately. Anything unsaved is lost.";
+"Only the interface restarts — the device does not reboot. This app closes with it." = "Only the interface restarts — the device does not reboot. This app closes with it.";
+"The privileged helper is missing from this build, or could not obtain root. Run scripts/build-ipa.sh to bundle it." = "The privileged helper is missing from this build, or could not obtain root. Run scripts/build-ipa.sh to bundle it.";
+"These run a privileged helper from this app's bundle. Reboot Device restarts the whole phone; Respring restarts the interface only." = "These run a privileged helper from this app's bundle. Reboot Device restarts the whole phone; Respring restarts the interface only.";
+"Could not start the helper." = "Could not start the helper.";
+"Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core." = "Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core.";

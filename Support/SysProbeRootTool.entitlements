@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  SysProbeRootTool 的 entitlements。
+
+	  由 CI（`scripts/build-ipa.sh`）用 `ldid -S` 签进包根目录的 SysProbeRootTool。
+	  TrollStore 安装时会**保留** IPA 里已经存在的 entitlements，所以它们最终会原样生效。
+
+	  ══════════════════════════════════════════════════════════════════════════
+	  为什么它**不是**主 App 那一份（Support/SysProbe.entitlements）
+	  ══════════════════════════════════════════════════════════════════════════
+
+	  两件事分得很清楚：
+
+	    · 主 App 需要的（`persona-mgmt` / `no-sandbox` / `no-container`）是为了
+	      **能 spawn 出一个 root 子进程**，签名在 SysProbe.app 的主可执行文件上；
+	    · 工具需要的（下面这三条）是为了**自己以 root 跑起来之后不被沙箱拦住**，
+	      签名在 SysProbeRootTool 上。
+
+	  所以这份清单刻意保持最小：**不要**把主 App 那份的电源、IOKit、通知等条目
+	  抄过来。工具只做三件事 —— 读 `sysctl` 的进程表、发一个 `kill`、调一次
+	  `reboot(2)` —— 一条额外的权限都用不上，多给只会扩大出问题的面。
+
+	  逐条与 RebootTools 1.2.1 里那两个 helper 的并集对齐（它自己的 helper 用的是
+	  `platform-application` + `container-required=false`，userspace helper 用的是
+	  `platform-application` + `no-container` + `no-sandbox`）。这里取并集，
+	  因为一个二进制要同时干那两件事。
+
+	  `no-sandbox` 是**必须**的：`kill(SpringBoard)` 属于跨进程操作，默认的
+	  platform 沙箱 profile 会把它拦下来；`reboot(2)` 同理。
+	-->
+
+	<!-- ── 平台 ───────────────────────────────────────────────────────────── -->
+	<key>platform-application</key>
+	<true/>
+
+	<!-- ── 沙箱 ───────────────────────────────────────────────────────────── -->
+	<!--
+	  下面两条是**同一件事的两种写法**：「这个进程没有 App 容器，别因为它找不到容器
+	  就把它拦下来」。刻意两条都留着 —— RebootTools 1.2.1 里干同类活的那个 helper
+	  用的是 `container-required = false`，而它的 userspace helper（同样是裸可执行文件）
+	  用的是 `no-container = true`，没有一个能在无设备的情况下判定哪条才是真正生效的那条。
+	  两条都属于「放宽」而不是「收紧」，多留一条不会带来额外风险。
+	-->
+	<key>com.apple.private.security.no-container</key>
+	<true/>
+	<key>com.apple.private.security.container-required</key>
+	<false/>
+	<!--
+	  `no-sandbox`：见上面的说明 —— 跨进程的 `kill` 与 `reboot(2)` 都要靠它。
+	-->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+</dict>
+</plist>
