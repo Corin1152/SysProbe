@@ -152,13 +152,16 @@ struct SettingsView: View {
     /// 设置页最上面那一区：两个破坏性动作并排。
     ///
     /// 位置在**最上方**，是明确要求的结果 —— 代价要说清楚：破坏性操作放在最容易
-    /// 顺手点到的地方，误触概率比埋在下面高。所以这一区的安全性全部压在另外三件事上，
+    /// 顺手点到的地方，误触概率比埋在下面高。所以这一区的安全性全部压在另外两件事上，
     /// 改动这里时别把它们去掉：
     ///
     ///   1. 每个动作都要过二次确认（`confirmationDialog`），且弹窗里写全动作名，
     ///      不是「确定 / 取消」；
-    ///   2. 工具不可用时整区禁用 + 变淡，不给一个点了没反应的按钮；
-    ///   3. 按钮是**普通行内按钮**，不占满整行 —— 见下面 `.buttonStyle` 那一段。
+    ///   2. 工具不可用时整区禁用 + 变淡，不给一个点了没反应的按钮。
+    ///
+    /// 这一区**刻意不带 footer**：按钮本身就是全部内容，下面再挂一段说明只会把
+    /// 两个按钮往下推、把设置页的第一屏让给解释文字。工具不可用的原因走诊断区的
+    /// **Root tool** 一行，点击后的失败走 alert。
     private var maintenanceSection: some View {
         Section {
             HStack(spacing: 12) {
@@ -177,12 +180,6 @@ struct SettingsView: View {
             .opacity(toolReady == false ? 0.4 : 1)
         } header: {
             Text("Maintenance")
-        } footer: {
-            if toolReady == false {
-                Text("The privileged helper is missing from this build, or could not obtain root. Run scripts/build-ipa.sh to bundle it.")
-            } else {
-                Text("These run a privileged helper from this app's bundle. Reboot Device restarts the whole phone; Respring restarts the interface only.")
-            }
         }
     }
 
@@ -237,9 +234,9 @@ private struct DeviceActionButton: View {
         Button {
             tap()
         } label: {
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 Image(systemName: action.systemImage)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.mwDanger)
                 Text(action.title)
                     .font(AppFont.text(13, weight: .semibold))
@@ -248,8 +245,10 @@ private struct DeviceActionButton: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
+            // 宽度靠 `maxWidth: .infinity` 撑满半个行，**只压高度**：
+            // 纵向内边距 14 → 8、图标 18 → 16、行间距 6 → 4。
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .padding(.vertical, 8)
             .background(Color.mwDanger.opacity(0.10),
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
