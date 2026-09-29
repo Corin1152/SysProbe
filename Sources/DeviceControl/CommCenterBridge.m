@@ -287,6 +287,247 @@ BOOL sysprobe_restore_default_bands(int slot)
     return writeBands(slot, @{}, YES);
 }
 
+// MARK: - 只读状态（频段页顶部那一段）
+
+/// `CTServiceDescriptor`。
+///
+/// `getCurrentRat:` 与 `getSignalStrengthMeasurements:` 要的都是它，不是 context ——
+/// 两个类名字很像，传错的那个不会报错，只会静默返回 nil。
+static id serviceDescriptor(int slot)
+{
+    Class descriptorClass = NSClassFromString(@"CTServiceDescriptor");
+    if (descriptorClass == Nil) {
+        return nil;
+    }
+    @try {
+        id allocated = [descriptorClass alloc];
+        SEL sel = NSSelectorFromString(@"initWithDomain:instance:");
+        if (![allocated respondsToSelector:sel]) {
+            return nil;
+        }
+        // -(id)initWithDomain:(long long)domain instance:(NSNumber *)instance;
+        id (*send)(id, SEL, long long, id) = (id (*)(id, SEL, long long, id))objc_msgSend;
+        return send(allocated, sel, 1LL, @(slot));
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+/// 服务小区的频段号。
+///
+/// `copyCellInfo:completion:` **只有异步版本**，所以这里用信号量把它等成同步的。
+/// 调用方在后台队列上（`BandService`），等的是那条队列，不是主线程。
+///
+/// 超时（1 秒）就当没有：基带服务正在重启时这个回调可能一直不来，而这一行只是
+/// 「参考信息」，不值得让整页卡住。
+static NSNumber *servingBand(id client, id context)
+{
+    SEL sel = NSSelectorFromString(@"copyCellInfo:completion:");
+    if (![client respondsToSelector:sel]) {
+        return nil;
+    }
+
+    __block id cellInfo = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    void (^completion)(id, id) = ^(id info, id error) {
+        cellInfo = info;
+        dispatch_semaphore_signal(semaphore);
+    };
+
+    void (*send)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
+    @try {
+        send(client, sel, context, completion);
+    } @catch (NSException *e) {
+        return nil;
+    }
+
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 1000 * NSEC_PER_MSEC)) != 0) {
+        return nil;
+    }
+
+    NSArray *cells = [cellInfo valueForKey:@"legacyInfo"];
+    if (![cells isKindOfClass:[NSArray class]] || cells.count == 0) {
+        return nil;
+    }
+
+    // 优先服务小区；没有标记就退回第一条。
+    NSDictionary *serving = nil;
+    for (id cell in cells) {
+        if (![cell isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        if ([[cell objectForKey:@"kCTCellMonitorCellType"] isEqual:@"kCTCellMonitorCellTypeServing"]) {
+            serving = cell;
+            break;
+        }
+    }
+    if (serving == nil) {
+        serving = [cells firstObject];
+    }
+
+    id band = [serving objectForKey:@"kCTCellMonitorBandInfo"];
+    return [band isKindOfClass:[NSNumber class]] ? band : nil;
+}
+
+/// 运营商配置文件里的 `CarrierName`。读不到返回 nil。
+static NSString *carrierName(id client, id context)
+{
+    SEL sel = NSSelectorFromString(@"context:getCarrierBundleValue:error:");
+    if (![client respondsToSelector:sel]) {
+        return nil;
+    }
+    id (*send)(id, SEL, id, id, NSError **) = (id (*)(id, SEL, id, id, NSError **))objc_msgSend;
+    NSError *error = nil;
+    id value = nil;
+    @try {
+        value = send(client, sel, context, @[@"CarrierName"], &error);
+    } @catch (NSException *e) {
+        value = nil;
+    }
+    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+        return value;
+    }
+    return nil;
+}
+
+/// 网络名称。读不到返回 nil。
+static NSString *networkName(id client, id context)
+{
+    SEL sel = NSSelectorFromString(@"getLocalizedOperatorName:error:");
+    if (![client respondsToSelector:sel]) {
+        return nil;
+    }
+    id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+    NSError *error = nil;
+    id value = nil;
+    @try {
+        value = send(client, sel, context, &error);
+    } @catch (NSException *e) {
+        value = nil;
+    }
+    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+        return value;
+    }
+    return nil;
+}
+
+BOOL sysprobe_slot_has_sim(int slot)
+{
+    @autoreleasepool {
+        id client = commCenterClient();
+        id context = subscriptionContext(slot);
+        if (client == nil || context == nil) {
+            return NO;
+        }
+        // **刻意只查这两个字符串，不碰 `copyCellInfo`。**
+        //
+        // 这个函数的作用是回答「要不要在界面上给出这个卡槽」—— 在单卡设备上它必然
+        // 会失败一次，而 `sysprobe_slot_info` 里那步 `copyCellInfo` 失败要等满 1 秒。
+        // 为了判断一个卡槽存不存在而让进页面多等一秒，不划算。
+        //
+        // 判据也刻意比「频段读得回来」严格：频段配置是设备级的，没插卡也可能读得到，
+        // 而运营商名只有真的有卡才有。
+        return carrierName(client, context) != nil || networkName(client, context) != nil;
+    }
+}
+
+NSDictionary * _Nullable sysprobe_slot_info(int slot)
+{
+    @autoreleasepool {
+        // 空字典而不是 nil：调用方按「有没有这个键」决定那一行显不显示，
+        // 一个 nil 会让它去区分「读失败」和「没有这一项」两件事，而这里没这个区别。
+        NSMutableDictionary *info = [NSMutableDictionary dictionary];
+
+        id client = commCenterClient();
+        id context = subscriptionContext(slot);
+        if (client == nil || context == nil) {
+            return info;
+        }
+
+        NSString *carrier = carrierName(client, context);
+        if (carrier != nil) {
+            info[@"carrierName"] = carrier;
+        }
+        NSString *network = networkName(client, context);
+        if (network != nil) {
+            info[@"networkName"] = network;
+        }
+
+        // 信号格。
+        SEL barsSel = NSSelectorFromString(@"getSignalStrengthInfo:error:");
+        if ([client respondsToSelector:barsSel]) {
+            id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+            NSError *error = nil;
+            id strength = nil;
+            @try {
+                strength = send(client, barsSel, context, &error);
+            } @catch (NSException *e) {
+                strength = nil;
+            }
+            if (strength != nil) {
+                NSNumber *bars = [strength valueForKey:@"displayBars"];
+                NSNumber *maxBars = [strength valueForKey:@"maxDisplayBars"];
+                if ([bars isKindOfClass:[NSNumber class]]) {
+                    info[@"bars"] = bars;
+                }
+                if ([maxBars isKindOfClass:[NSNumber class]]) {
+                    info[@"maxBars"] = maxBars;
+                }
+            }
+        }
+
+        // 制式与 RSRP/SNR 都挂在 descriptor 上（不是 context）。
+        id descriptor = serviceDescriptor(slot);
+        if (descriptor != nil) {
+            SEL ratSel = NSSelectorFromString(@"getCurrentRat:error:");
+            if ([client respondsToSelector:ratSel]) {
+                id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+                NSError *error = nil;
+                id value = nil;
+                @try {
+                    value = send(client, ratSel, descriptor, &error);
+                } @catch (NSException *e) {
+                    value = nil;
+                }
+                if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+                    info[@"rat"] = value;
+                }
+            }
+
+            SEL measurementsSel = NSSelectorFromString(@"getSignalStrengthMeasurements:error:");
+            if ([client respondsToSelector:measurementsSel]) {
+                id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+                NSError *error = nil;
+                id measurements = nil;
+                @try {
+                    measurements = send(client, measurementsSel, descriptor, &error);
+                } @catch (NSException *e) {
+                    measurements = nil;
+                }
+                if (measurements != nil) {
+                    NSNumber *rsrp = [measurements valueForKey:@"rsrp"];
+                    NSNumber *snr = [measurements valueForKey:@"snr"];
+                    // RSRP 恒为负；0 是「没读到」的哨兵值。
+                    if ([rsrp isKindOfClass:[NSNumber class]] && rsrp.integerValue < 0) {
+                        info[@"rsrp"] = rsrp;
+                    }
+                    if ([snr isKindOfClass:[NSNumber class]]) {
+                        info[@"snr"] = snr;
+                    }
+                }
+            }
+        }
+
+        // 服务小区频段。放最后：它是唯一一个可能等满 1 秒的调用。
+        NSNumber *band = servingBand(client, context);
+        if (band != nil && band.integerValue > 0) {
+            info[@"band"] = band;
+        }
+
+        return info;
+    }
+}
+
 SysProbeBandStatus sysprobe_band_status(void)
 {
     return gStatus;

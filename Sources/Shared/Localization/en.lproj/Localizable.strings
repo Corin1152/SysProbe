@@ -275,7 +275,6 @@
 "I understand" = "I understand";
 "Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users." = "Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users.";
 "Incorrect band settings may cause cellular network issues, such as \"No Service\"." = "Incorrect band settings may cause cellular network issues, such as \"No Service\".";
-"Network Bands" = "Network Bands";
 "Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3." = "Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3.";
 "No bands reported" = "No bands reported";
 "Only bands the device reports as supported are listed. Unchecking a band removes it from the list the network may use." = "Only bands the device reports as supported are listed. Unchecking a band removes it from the list the network may use.";
@@ -291,6 +290,16 @@
 "Show in Settings" = "Show in Settings";
 "Slot %d" = "Slot %d";
 "The baseband did not answer. This usually means the CommCenter entitlement is not in effect for this build, or there is no SIM in the device. Reading bands is refused the same way as writing them, so nothing here can be edited until it works." = "The baseband did not answer. This usually means the CommCenter entitlement is not in effect for this build, or there is no SIM in the device. Reading bands is refused the same way as writing them, so nothing here can be edited until it works.";
-"Turning this off hides this page from the settings menu. There is no way to bring it back from inside the app — reinstall to restore it." = "Turning this off hides this page from the settings menu. There is no way to bring it back from inside the app — reinstall to restore it.";
 "Unavailable" = "Unavailable";
 "Version" = "Version";
+
+/* 齿轮菜单 + 频段页改勾选网格（2026-09-30） */
+"Bands" = "Bands";
+"Carrier" = "Carrier";
+"Current network" = "Current network";
+"Signal" = "Signal";
+"Technology" = "Technology";
+"Serving band" = "Serving band";
+"RSRP" = "RSRP";
+"SNR" = "SNR";
+"Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it." = "Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it.";

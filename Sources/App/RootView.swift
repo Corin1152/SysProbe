@@ -16,14 +16,10 @@ struct RootView: View {
                 // 这个 `locale` 直接去 bundle 的 `.lproj` 里挑译文 —— 全 App 一起换语言，
                 // 靠的就是这一句。挂在这里而不是 `tabs` 里面，设置面板（sheet）才继承得到。
                 .environment(\.locale, app.language.locale)
-                // 设置面板挂在 `tabs` 外面，而 `tabs` 会随语言换 identity —— 挂在里面的话，
-                // 用户在设置页切完语言，面板会被自己触发的重建关掉。
-                .sheet(isPresented: $app.showingSettings) { SettingsView() }
                 // 负一屏那一下点击会带 `sysprobe://open` 进来（见
-                // `TodayViewController.openApp`）。这里只把设置面板收起来 ——
-                // 用户是来看数据的，不该一进来就压着一个模态。分页不重置：
-                // 停在用户上次看的那一屏更自然。
-                .onOpenURL { _ in app.showingSettings = false }
+                // `TodayViewController.openApp`）。这里刻意**不动分页** ——
+                // 用户是来看数据的，停在上次看的那一屏更自然。
+                .onOpenURL { _ in }
                 // 采样的生命周期单独放进一个零尺寸视图。
                 //
                 // 独立出来是为了把每秒一次的 `PowerSnapshot` 发布挡在 `RootView` 之外：
@@ -37,19 +33,6 @@ struct RootView: View {
         }
     }
 
-    /// 打开设置面板。以普通闭包往下传，而不是让每页都去观察 `AppState`。
-    ///
-    /// 观察 `AppState` 的代价在这里是实打实的：`showingSettings` 一变，三个分页
-    /// （各自一棵 `NavigationStack` + `ScrollView` + 面板树）会在**同一帧**里各重算
-    /// 一次 —— 而这一帧恰好就是设置面板开始做呈现动画的那一帧。齿轮是唯一需要这个
-    /// 动作的地方，那就只把动作传下去，别把状态传下去。
-    ///
-    /// 类型写成 `@MainActor () -> Void` 而不是 `() -> Void`：闭包体里要写
-    /// `app.showingSettings`，而 `AppState` 是主 actor 隔离的。
-    private var openSettings: @MainActor () -> Void {
-        { app.showingSettings = true }
-    }
-
     /// 语言一变，整棵分页树换 identity。
     ///
     /// 译文由环境 locale 决定，换 locale 时 SwiftUI 会自己重算；但**字形**不是 ——
@@ -59,16 +42,16 @@ struct RootView: View {
     /// 上，重建不会把用户踢回第一页。
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
-            HardwareView(onOpenSettings: openSettings)
+            HardwareView()
                 .tabItem { Label("Hardware", systemImage: "cpu") }
                 .tag(0)
-            DashboardView(onOpenSettings: openSettings)
+            DashboardView()
                 .tabItem { Label("Power", systemImage: "bolt.fill") }
                 .tag(1)
-            AdapterView(onOpenSettings: openSettings)
+            AdapterView()
                 .tabItem { Label("Adapter", systemImage: "powerplug.fill") }
                 .tag(2)
-            ChargeControlView(onOpenSettings: openSettings)
+            ChargeControlView()
                 // 键用 "Smart charge" 而不是 "Charging"：后者是功率页的状态词，
                 // 也用在电池信息页的面板标题上，共用一个键会把那两处一起改掉。
                 .tabItem { Label("Smart charge", systemImage: "battery.100.bolt") }
@@ -125,27 +108,17 @@ struct MonitorLifecycle: View {
 
 /// Shared page chrome: the instrument backdrop behind a scrolling column of panels.
 ///
-/// 设置入口在这里，不在某个分页里 —— 三个分页共用同一个齿轮按钮，设置面板本身由
-/// `RootView` 持有（见 `AppState.showingSettings`）。
+/// 设置入口在这里，不在某个分页里 —— 四个分页共用右上角同一个齿轮。
 struct PageScaffold<Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color = .mwAccent
-    /// 打开设置面板。
-    ///
-    /// **普通属性，不是 `@EnvironmentObject AppState`。** 观察 `AppState` 就意味着
-    /// `showingSettings` / `selectedTab` / `language` 任何一个变化都会让三个分页各重算
-    /// 一次；而按下齿轮这件事恰好发生在设置面板开始做呈现动画的那一帧。齿轮只需要
-    /// 一个动作，不需要那份状态。
-    var onOpenSettings: @MainActor () -> Void
     @ViewBuilder var content: () -> Content
 
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
-         onOpenSettings: @escaping @MainActor () -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
-        self.onOpenSettings = onOpenSettings
         self.content = content
     }
 
@@ -170,13 +143,7 @@ struct PageScaffold<Content: View>: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        onOpenSettings()
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .tint(.mwAccent)
-                    .accessibilityLabel(Text("Settings"))
+                    SettingsMenu()
                 }
             }
         }

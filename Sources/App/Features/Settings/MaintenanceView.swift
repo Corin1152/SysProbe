@@ -194,9 +194,8 @@ struct MaintenanceView: View {
 /// 维护区里的一个动作按钮。两个并排，各占一半宽度。
 private struct DeviceActionButton: View {
     let action: DeviceAction
-    /// 类型写成 `@MainActor () -> Void` 而不是 `() -> Void` —— 与 `PageScaffold`
-    /// 里那个 `onOpenSettings` 同样的理由：闭包体里要碰主 actor 隔离的状态，
-    /// 而项目默认主 actor 隔离，`() -> Void` 会在这里丢掉那个隔离域。
+    /// 类型写成 `@MainActor () -> Void` 而不是 `() -> Void`：闭包体里要碰主 actor
+    /// 隔离的状态，而项目默认主 actor 隔离，`() -> Void` 会在这里丢掉那个隔离域。
     let tap: @MainActor () -> Void
 
     var body: some View {

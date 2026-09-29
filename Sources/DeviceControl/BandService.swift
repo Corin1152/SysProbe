@@ -8,6 +8,63 @@ import Foundation
 /// 而这里本来就是刻意的跨线程共享（队列自己保证串行）。
 private nonisolated(unsafe) let bandQueue = DispatchQueue(label: "com.corin.sysprobe.band")
 
+/// 卡槽的只读状态。频段页顶部那一段用。
+///
+/// 每个字段都可选，而且**「没有」就是「不显示那一行」** —— 基带读不到的项不该在界面上
+/// 占一行写着「未知」，那只会让人以为哪里坏了。
+nonisolated struct SlotInfo: Equatable {
+    var carrierName: String?
+    var networkName: String?
+    var bars: Int?
+    var maxBars: Int?
+    /// 当前网络制式，CoreTelephony 给的原始串（如 `CTRadioAccessTechnologyLTE`）。
+    var rat: String?
+    /// 服务小区的频段号。
+    var band: Int?
+    var rsrp: Int?
+    var snr: Double?
+
+    /// 制式转成人看的写法。
+    ///
+    /// 原始串长这样：`CTRadioAccessTechnologyLTE` / `CTRadioAccessTechnologyNR` /
+    /// `CTRadioAccessTechnologyNRNSA` / `CTRadioAccessTechnologyWCDMA` …… 直接显示太长，
+    /// 而只截后几位又会把 `NRNSA` 和 `NR` 弄混（前者是 5G NSA，后者是 5G SA）。
+    /// 所以**按整串精确匹配**一张表，认不出来就原样显示。
+    var ratDisplay: String? {
+        guard let rat else { return nil }
+        let known: [String: String] = [
+            "CTRadioAccessTechnologyNRNSA": "5G (NSA)",
+            "CTRadioAccessTechnologyNR": "5G (NR)",
+            "CTRadioAccessTechnologyLTE": "4G (LTE)",
+            "CTRadioAccessTechnologyHSUPA": "3G (HSUPA)",
+            "CTRadioAccessTechnologyHSDPA": "3G (HSDPA)",
+            "CTRadioAccessTechnologyWCDMA": "3G (WCDMA)",
+            "CTRadioAccessTechnologyeHRPD": "3G (eHRPD)",
+            "CTRadioAccessTechnologyEVDOB": "3G (EVDO-B)",
+            "CTRadioAccessTechnologyEVDOA": "3G (EVDO-A)",
+            "CTRadioAccessTechnologyEVDO": "3G (EVDO)",
+            "CTRadioAccessTechnologyCDMA1x": "2G (CDMA 1x)",
+            "CTRadioAccessTechnologyEdge": "2G (EDGE)",
+            "CTRadioAccessTechnologyGPRS": "2G (GPRS)",
+            "CTRadioAccessTechnologyGSM": "2G (GSM)",
+        ]
+        return known[rat] ?? rat
+    }
+
+    static func parse(_ raw: [String: Any]) -> SlotInfo {
+        var info = SlotInfo()
+        info.carrierName = raw["carrierName"] as? String
+        info.networkName = raw["networkName"] as? String
+        info.bars = (raw["bars"] as? NSNumber)?.intValue
+        info.maxBars = (raw["maxBars"] as? NSNumber)?.intValue
+        info.rat = raw["rat"] as? String
+        info.band = (raw["band"] as? NSNumber)?.intValue
+        info.rsrp = (raw["rsrp"] as? NSNumber)?.intValue
+        info.snr = (raw["snr"] as? NSNumber)?.doubleValue
+        return info
+    }
+}
+
 /// 「频段设置」的取数与写入。
 ///
 /// 一层薄封装，真正干活的是 `CommCenterBridge.m`（运行时解析 CoreTelephony 的私有
@@ -63,26 +120,32 @@ final class BandService: ObservableObject {
     func load(slot: Int) {
         isLoading = true
         Task.detached(priority: .userInitiated) {
-            let result = BandService.readSync(slot: slot)
-            let extraSlots = BandService.probeExtraSlots(primary: slot)
+            let bands = BandService.readBandsSync(slot: slot)
+            let info = BandService.readInfoSync(slot: slot)
+            let otherSlots = BandService.otherSlots(primary: slot)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.isLoading = false
-                self.apply(result)
-                if !extraSlots.isEmpty {
-                    self.slots = ([slot] + extraSlots).sorted()
-                }
+                self.apply(bands)
+                self.slotInfo = info
+                // 只列**主卡槽 + 确实插着卡的那些**。单卡设备上 `otherSlots` 是空的，
+                // 界面上就不会出现卡槽选择器 —— 只有一个卡槽时给一个只有一项的分段控件，
+                // 除了占地方没有别的用处。
+                self.slots = ([slot] + otherSlots).sorted()
             }
         }
     }
 
-    /// 只在第一次加载时探一次第二卡槽 —— 单卡设备上它会读失败，于是不进 `slots`。
-    private nonisolated static func probeExtraSlots(primary: Int) -> [Int] {
-        guard primary == 1 else { return [] }
-        return readSync(slot: 2) == nil ? [] : [2]
+    /// 除主卡槽之外、确实插着卡的卡槽。
+    ///
+    /// 走 `sysprobe_slot_has_sim` 而不是「频段读得回来」：频段配置是设备级的，没插卡
+    /// 也可能读得到。而那个函数刻意做得很轻，单卡设备上这次探测只是两次快速失败的
+    /// 字符串查询，不会让进页面多等。
+    private nonisolated static func otherSlots(primary: Int) -> [Int] {
+        (1...2).filter { $0 != primary && sysprobe_slot_has_sim(Int32($0)) }
     }
 
-    private nonisolated static func readSync(slot: Int) -> BandSet? {
+    private nonisolated static func readBandsSync(slot: Int) -> BandSet? {
         var entity: BandSet?
         bandQueue.sync {
             guard let raw = sysprobe_read_bands(Int32(slot)) as? [String: Any] else {
@@ -94,6 +157,17 @@ final class BandService: ObservableObject {
             entity = parsed
         }
         return entity
+    }
+
+    private nonisolated static func readInfoSync(slot: Int) -> SlotInfo {
+        var info = SlotInfo()
+        bandQueue.sync {
+            guard let raw = sysprobe_slot_info(Int32(slot)) as? [String: Any] else {
+                return
+            }
+            info = SlotInfo.parse(raw)
+        }
+        return info
     }
 
     private func apply(_ entity: BandSet?) {

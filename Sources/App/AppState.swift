@@ -16,7 +16,6 @@ final class AppState: ObservableObject {
         didSet { applyLanguage() }
     }
 
-    @Published var showingSettings = false
     @Published var selectedTab = 0
 
     init() {

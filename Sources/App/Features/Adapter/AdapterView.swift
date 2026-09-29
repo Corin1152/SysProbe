@@ -1,16 +1,13 @@
 import SwiftUI
 
 struct AdapterView: View {
-    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
-    var onOpenSettings: @MainActor () -> Void
     @EnvironmentObject private var monitor: PowerMonitor
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
 
     var body: some View {
         PageScaffold("Adapter",
-                     glow: snapshot.isWirelessInput ? .mwWireless : .mwAccent,
-                     onOpenSettings: onOpenSettings) {
+                     glow: snapshot.isWirelessInput ? .mwWireless : .mwAccent) {
             if snapshot.externalConnected {
                 headlinePanel
                 identityPanel

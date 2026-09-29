@@ -2,8 +2,6 @@ import SwiftUI
 
 /// 第一屏：设备硬件信息。
 struct HardwareView: View {
-    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
-    var onOpenSettings: @MainActor () -> Void
     @EnvironmentObject private var hardware: HardwareMonitor
     @EnvironmentObject private var optimizer: MemoryOptimizer
 
@@ -20,7 +18,7 @@ struct HardwareView: View {
     private static let valueSize: CGFloat = 18
 
     var body: some View {
-        PageScaffold("Hardware", glow: .mwAccent, onOpenSettings: onOpenSettings) {
+        PageScaffold("Hardware", glow: .mwAccent) {
             devicePanel
             cpuPanel
             memoryPanel

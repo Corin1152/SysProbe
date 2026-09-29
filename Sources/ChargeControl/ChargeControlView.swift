@@ -22,8 +22,6 @@ import SwiftUI
 /// 同时也是一道保险 —— 界面出问题时，在 Safari 里打开 `http://127.0.0.1:1230`
 /// 依然能手动停充。设置页里有这个地址。
 struct ChargeControlView: View {
-    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
-    var onOpenSettings: @MainActor () -> Void
 
     @EnvironmentObject private var charge: ChargeControlService
     @State private var page = 0
@@ -31,7 +29,7 @@ struct ChargeControlView: View {
     var body: some View {
         // 标题与下面那个 `Picker` 都用 "Smart charge" 这个键。**不能复用 "Charging"** ——
         // 那个键还被功率页的状态词与电池信息页的「Charging」面板标题用着，改它会连累那两处。
-        PageScaffold("Smart charge", glow: .mwBattery, onOpenSettings: onOpenSettings) {
+        PageScaffold("Smart charge", glow: .mwBattery) {
             Picker("Smart charge", selection: $page) {
                 Text("Charge control").tag(0)
                 Text("Battery info").tag(1)

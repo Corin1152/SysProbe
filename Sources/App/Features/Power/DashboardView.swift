@@ -1,25 +1,20 @@
 import SwiftUI
 
 struct DashboardView: View {
-    /// 见 `PageScaffold.onOpenSettings`：传动作，不传状态。
-    var onOpenSettings: @MainActor () -> Void
     @EnvironmentObject private var monitor: PowerMonitor
 
     /// 这一页是不是当前选中的分页。
     ///
-    /// 以前读的是 `AppState.selectedTab`，但那意味着这一页得观察 `AppState` —— 于是
-    /// `showingSettings` 一变它也跟着重算，而那恰好是设置面板开始做呈现动画的那一帧。
+    /// 以前读的是 `AppState.selectedTab`，但那意味着这一页得观察 `AppState`。
     /// 换成本地状态，由 `TabView` 的 `onAppear` / `onDisappear` 维护，观察面就干净了。
     @State private var isVisible = false
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
 
-    // 设置入口与设置面板都不在这一页：齿轮由 `PageScaffold` 给（三个分页共用
-    // 同一个），面板由 `RootView` 持有（见 `AppState.showingSettings`）。
-    // 面板挂在分页里会在语言切换重建分页时被一起关掉，所以必须提到树根上。
+    // 设置入口不在这一页：右上角那个齿轮由 `PageScaffold` 给，四个分页共用同一个。
     var body: some View {
-        PageScaffold("Power", glow: glowColor, onOpenSettings: onOpenSettings) {
+        PageScaffold("Power", glow: glowColor) {
             heroPanel
             if monitor.thermalState.isThrottling { throttleBanner }
             batteryPanel
