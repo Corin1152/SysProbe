@@ -61,6 +61,17 @@
 	<true/>
 	<key>com.apple.private.persona-mgmt</key>
 	<true/>
+	<!--
+	  「频段设置」要读/写基带频段，走的是 CoreTelephony 的私有 XPC。
+	  这条权限是 CommCenter 在建立连接时校验的。
+	  只给 spi：上游 CellularInfo（同一个功能的开源实现）自己的能力判定就是
+	  exists(["com.apple.CommCenter.fine-grained", "spi"])。
+	  真机若频段页显示「不可用」，再逐个补 internal 等值。
+	-->
+	<key>com.apple.CommCenter.fine-grained</key>
+	<array>
+		<string>spi</string>
+	</array>
 	<key>com.apple.private.memorystatus</key>
 	<true/>
 	<key>com.apple.runningboard.process-state</key>

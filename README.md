@@ -171,6 +171,53 @@ App 的源文件，链接期就会出现重复的 `_main` 而直接失败。放�
 - 维护区**没有 footer**。按钮本身就是全部内容，下面再挂一段说明只会把两个按钮往下推、
   把设置页第一屏让给解释文字。原因与失败信息走上面那条路径。
 
+## 频段设置
+
+设置菜单 →「频段设置」。读写基带允许使用的频段，按 SIM 卡槽分开。
+
+### 这是全 App 唯一会**写系统状态**的地方
+
+别的页面读不到数据，最坏结果是难看。这里写错频段会导致**无服务、无法注册网络、
+VoLTE / VoNR / 语音通话 / 短信异常**，而且是持久的 —— 重启设备也不会恢复。
+
+所以安全措施是硬要求，改动这一页时别去掉：
+
+1. **入口整屏警告**（首次进入，说清风险，可关）；
+2. **保存前二次确认**（可关，关掉是用户自己的选择）；
+3. **恢复默认前确认**；
+4. **「重启蜂窝网络服务」** —— 与保存解耦，改完不一定要立刻重启，而且重启会短暂断网；
+5. **不可用时不画任何可点的东西**，并说明原因。
+
+第 5 条针对的是一类**静默失败**：没有 CommCenter 权限时，读和写都返回 nil，
+**不抛异常也不打日志**。界面上表现为「不可用」，而用户看到的只是一句没有原因的话。
+所以那一页会明确写出两种可能（权限没生效 / 没有 SIM），`scripts/build-ipa.sh`
+也在构建期卡住这条权限。
+
+### 它是怎么工作的
+
+走 CoreTelephony 的私有 XPC 客户端 `CoreTelephonyClient`：
+
+    -[CoreTelephonyClient getBandInfo:error:]               -> CTBandInfo  (iOS 14+)
+    -[CoreTelephonyClient setActiveBandInfo:bands:error:]                  (iOS 14+)
+
+`CTBandInfo` 有两个字典：`fActiveBands`（网络广播允许使用的频段，**可写**）与
+`fSupportedBands`（设备声明支持的频段，**只读**）。写回时从**读回来的那个对象**
+出发，只替换 `fActiveBands` —— 这样界面上不认识的制式、以及 supported 里没有的项
+不会被顺手删掉。这也是「写之前必须先读」的原因。
+
+全部按名字运行时解析（类、方法、KVC），没有链接 CoreTelephony。好处是类改名或
+方法消失时降级成「读不到」，而不是链接失败或崩溃 —— 与 `ChargeSpawn.c` 里那几个
+persona SPI 是同一个模式。
+
+### 权限
+
+`Support/SysProbe.entitlements` 里的 `com.apple.CommCenter.fine-grained = ["spi"]`。
+上游 CellularInfo 带的是完整 12 个值（它还要装 IPCC、检测 eSIM），但频段读写只需要
+`spi` —— 依据是它自己的能力判定 `exists(["com.apple.CommCenter.fine-grained", "spi"])`。
+
+真机上如果这一页显示「不可用」，按顺序试：先确认设备里有卡，再往 `ent.plist` 里
+逐个补 `internal` 等值重新构建。
+
 ## 为什么只能侧载
 
 Power 与 Adapter 两屏的读数来自 Apple 的**私有 IOKit 接口**（`AppleSmartBattery`、

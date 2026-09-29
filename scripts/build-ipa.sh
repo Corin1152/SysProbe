@@ -255,6 +255,18 @@ for target in "$main_binary" "$daemon"; do
   echo "  entitlements: $(basename "$target") ok"
 done
 
+# 频段设置要的权限。**只有主 App 需要** —— 守护进程不碰蜂窝网络，所以它不在上面
+# 那个循环的名单里。
+#
+# 同样是一类静默失败：没有这条权限时 CommCenter 拒绝建立连接，读和写都返回 nil，
+# 不抛异常也不打日志。界面上表现为「频段设置」页显示「不可用」，而用户看到的只是
+# 一句没有原因的话。所以这里在构建期就卡住。
+if ! ldid -e "$main_binary" 2>/dev/null | grep -q "com.apple.CommCenter.fine-grained"; then
+  echo "::error::the app is missing 'com.apple.CommCenter.fine-grained'. Without it CommCenter refuses the band read/write connection, and the failure is silent — the band page would just say 'Unavailable'." >&2
+  exit 1
+fi
+echo "  entitlements: CommCenter ok"
+
 # ── 维护工具（重启设备 / 注销）──────────────────────────────────────────────
 #
 # 守的还是同一类**静默失败**：工具在包里、进程也起得来，但**拿不到 root** ——
@@ -285,6 +297,17 @@ for key in platform-application \
   fi
 done
 echo "  entitlements: SysProbeRootTool ok"
+
+# 「重启蜂窝网络服务」这个子命令真的编进去了吗。
+#
+# 这一条挡的是「改了 Tools/RootTool.c 但构建缓存没重编」—— 那种情况下包里的工具
+# 还是旧的，`restart-commcenter` 会走到 `unknown command` 分支并返回非 0，
+# 而界面只会说「重启失败」，看不出是版本不对。
+if ! grep -a -q "restart-commcenter" "$tool"; then
+  echo "::error::SysProbeRootTool does not contain the 'restart-commcenter' subcommand. The escape hatch would be there in the UI but would do nothing." >&2
+  exit 1
+fi
+echo "  root tool  : restart-commcenter present"
 
 rm -rf "$work"
 

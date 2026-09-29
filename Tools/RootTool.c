@@ -59,6 +59,9 @@ extern int reboot(int howto);
 /// SpringBoard 的进程名。注销靠给它发信号实现。
 #define SYSPROBE_SPRINGBOARD "SpringBoard"
 
+/// CommCenter 的进程名。「重启蜂窝网络服务」靠杀它实现。
+#define SYSPROBE_COMMCENTER "CommCenter"
+
 /// 注销用的信号。见文件头：`SIGHUP` 才是「重启界面层」。
 #define SYSPROBE_RESPRING_SIGNAL SIGHUP
 
@@ -98,11 +101,11 @@ static int do_reboot(void) {
     return SYSPROBE_EXIT_OK;
 }
 
-/// 找到 SpringBoard 的 pid。找不到返回 -1。
+/// 按进程名找 pid。找不到返回 -1。
 ///
 /// 走 `sysctl(KERN_PROC_ALL)` 自己遍历，而不是调用系统的 `killall` —— 后者在
 /// iOS 上是私有 API，公开 SDK 里没有原型。遍历本身是公开接口。
-static pid_t springboard_pid(void) {
+static pid_t process_pid_by_name(const char *name) {
     int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
     size_t size = 0;
 
@@ -126,9 +129,9 @@ static pid_t springboard_pid(void) {
     pid_t found = -1;
     size_t count = size / sizeof(struct kinfo_proc);
     for (size_t i = 0; i < count; i++) {
-        // `p_comm` 是 `char[MAXCOMLEN + 1]`（17 字节），"SpringBoard" 11 字节，
-        // 不会被截断。
-        if (strcmp(procs[i].kp_proc.p_comm, SYSPROBE_SPRINGBOARD) == 0) {
+        // `p_comm` 是 `char[MAXCOMLEN + 1]`（17 字节）。要查的两个名字
+        // "SpringBoard"(11) 与 "CommCenter"(10) 都放得下，不会被截断。
+        if (strcmp(procs[i].kp_proc.p_comm, name) == 0) {
             found = procs[i].kp_proc.p_pid;
             break;
         }
@@ -143,7 +146,7 @@ static pid_t springboard_pid(void) {
 /// 只重启 SpringBoard，不动内核。表现是屏幕转圈后回到锁屏 / 主屏 ——
 /// **前台 App（包括本 App 自己）会被一起收掉**，那是预期行为，不是崩溃。
 static int do_respring(void) {
-    pid_t pid = springboard_pid();
+    pid_t pid = process_pid_by_name(SYSPROBE_SPRINGBOARD);
     if (pid <= 0) {
         fprintf(stderr, "respring: %s is not running\n", SYSPROBE_SPRINGBOARD);
         return SYSPROBE_EXIT_FAILED;
@@ -155,9 +158,30 @@ static int do_respring(void) {
     return SYSPROBE_EXIT_OK;
 }
 
+/// 重启蜂窝网络服务（CommCenter）。
+///
+/// 频段设置写错时的**逃生通道**：改完频段若出现「无服务」或网络异常，杀掉
+/// CommCenter 会让它重新读一遍配置，多数情况下能回到可用状态。原版 CellularInfo
+/// 的工具菜单里就有这一项（`restartCommCenter` → `killall -9 CommCenter`）。
+///
+/// 用 SIGKILL 而不是 SIGTERM：CommCenter 对 TERM 不一定有响应，而 launchd 在
+/// 它退出后会立刻把它拉起来 —— 要的就是这个「硬重启」。
+static int do_restart_commcenter(void) {
+    pid_t pid = process_pid_by_name(SYSPROBE_COMMCENTER);
+    if (pid <= 0) {
+        fprintf(stderr, "restart-commcenter: %s is not running\n", SYSPROBE_COMMCENTER);
+        return SYSPROBE_EXIT_FAILED;
+    }
+    if (kill(pid, SIGKILL) != 0) {
+        perror("kill");
+        return SYSPROBE_EXIT_FAILED;
+    }
+    return SYSPROBE_EXIT_OK;
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s check|reboot|respring\n", argv[0]);
+        fprintf(stderr, "usage: %s check|reboot|respring|restart-commcenter\n", argv[0]);
         return SYSPROBE_EXIT_USAGE;
     }
 
@@ -169,6 +193,9 @@ int main(int argc, char *argv[]) {
     }
     if (strcmp(argv[1], "respring") == 0) {
         return do_respring();
+    }
+    if (strcmp(argv[1], "restart-commcenter") == 0) {
+        return do_restart_commcenter();
     }
 
     fprintf(stderr, "%s: unknown command %s\n", argv[0], argv[1]);

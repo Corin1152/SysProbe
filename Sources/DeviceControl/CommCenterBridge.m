@@ -1,0 +1,293 @@
+//
+//  CommCenterBridge.m
+//  SysProbe
+//
+//  「频段设置」的取数与写入。
+//
+//  ══════════════════════════════════════════════════════════════════════════
+//  为什么是运行时解析
+//  ══════════════════════════════════════════════════════════════════════════
+//
+//  频段读写走 CoreTelephony 的私有 XPC 客户端 `CoreTelephonyClient`：
+//
+//      -[CoreTelephonyClient getBandInfo:error:]              -> CTBandInfo   (iOS 14+)
+//      -[CoreTelephonyClient setActiveBandInfo:bands:error:]                  (iOS 14+)
+//
+//  这些在公开 SDK 里没有声明，而 SysProbe 也没有链接 CoreTelephony，所以框架得先
+//  dlopen。全部按名字解析的好处是：类改名或方法消失时降级成「读不到」，而不是
+//  链接失败或崩溃。同一个模式在本工程里已经有两处：`ChargeSpawn.c` 里的 persona
+//  SPI，以及移植过来的 IOReport 那段。
+//
+//  ══════════════════════════════════════════════════════════════════════════
+//  权限，以及它失败时是静默的
+//  ══════════════════════════════════════════════════════════════════════════
+//
+//  调用被 `com.apple.CommCenter.fine-grained` 门住（见 Support/SysProbe.entitlements）。
+//  没有它时 CommCenter 拒绝连接，方法返回 nil 加一个 error —— **不抛异常、不打日志**。
+//  所以这里把状态记下来，由界面显示「不可用」并说清原因，而不是让用户对着一个
+//  空列表发呆、反复点「刷新」。
+//
+//  ══════════════════════════════════════════════════════════════════════════
+//  写回时只替换 active
+//  ══════════════════════════════════════════════════════════════════════════
+//
+//  `CTBandInfo` 有两个字典：
+//
+//      fActiveBands      网络广播允许使用的频段   ← 可写
+//      fSupportedBands   设备支持的频段           ← 只读，不碰
+//
+//  写回时从**读回来的那个对象**出发，只替换 `fActiveBands`。这样界面上不认识的
+//  制式、以及 supported 里没有的项不会被意外删掉。所以每个卡槽读回来的对象要留着，
+//  这也是「写之前必须先读」的原因。
+//
+//  参考：DevelopCubeLab/CellularInfo（GPL-3.0）的
+//  `Controller/CoreTelephonyController.swift` —— 取数形状与它一致。署名见 NOTICE。
+//
+
+#import "CommCenterBridge.h"
+
+#import <dlfcn.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
+
+static SysProbeBandStatus gStatus = SysProbeBandStatusUnknown;
+
+static void *gCoreTelephonyHandle = NULL;
+static BOOL gResolved = NO;
+static id gClient = nil;
+
+/// 每个卡槽最近一次读回来的 `CTBandInfo`。写回时用它，只替换 `fActiveBands`。
+static NSMutableDictionary<NSNumber *, id> *gBandInfoBySlot = nil;
+
+static id commCenterClient(void)
+{
+    if (gResolved) {
+        return gClient;
+    }
+    gResolved = YES;
+
+    // SysProbe 没链接 CoreTelephony，所以类在别的组件把它拉进来之前是不存在的。
+    // dlopen 一次；失败就退回默认命名空间（也许已经被谁加载过了）。
+    gCoreTelephonyHandle = dlopen("/System/Library/Frameworks/CoreTelephony.framework/CoreTelephony",
+                                  RTLD_LAZY);
+    if (gCoreTelephonyHandle == NULL) {
+        gCoreTelephonyHandle = RTLD_DEFAULT;
+    }
+
+    Class clientClass = NSClassFromString(@"CoreTelephonyClient");
+    if (clientClass != Nil) {
+        @try {
+            gClient = [[clientClass alloc] init];
+        } @catch (NSException *e) {
+            gClient = nil;
+        }
+    }
+    return gClient;
+}
+
+/// `CTXPCServiceSubscriptionContext`，用 `-initWithSlot:` 造。
+///
+/// 注意这个类虽然叫 Context，但频段读写要的就是它 —— 上游也是直接
+/// `CTXPCServiceSubscriptionContext(slot:)`。
+static id subscriptionContext(int slot)
+{
+    Class contextClass = NSClassFromString(@"CTXPCServiceSubscriptionContext");
+    if (contextClass == Nil) {
+        return nil;
+    }
+
+    @try {
+        id allocated = [contextClass alloc];
+        SEL sel = NSSelectorFromString(@"initWithSlot:");
+        if (![allocated respondsToSelector:sel]) {
+            return nil;
+        }
+        // -(instancetype)initWithSlot:(int)slot;
+        id (*send)(id, SEL, int) = (id (*)(id, SEL, int))objc_msgSend;
+        return send(allocated, sel, slot);
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+/// 读一次，成功返回 `CTBandInfo`，失败返回 nil 并把状态置为 unavailable。
+static id bandInfoForSlot(int slot)
+{
+    id client = commCenterClient();
+    if (client == nil) {
+        gStatus = SysProbeBandStatusUnavailable;
+        return nil;
+    }
+
+    id context = subscriptionContext(slot);
+    if (context == nil) {
+        gStatus = SysProbeBandStatusUnavailable;
+        return nil;
+    }
+
+    SEL sel = NSSelectorFromString(@"getBandInfo:error:");
+    if (![client respondsToSelector:sel]) {
+        gStatus = SysProbeBandStatusUnavailable;
+        return nil;
+    }
+
+    // -(CTBandInfo *)getBandInfo:(CTXPCServiceSubscriptionContext *)context error:(NSError **)error;
+    id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+    NSError *error = nil;
+    id bandInfo = nil;
+    @try {
+        bandInfo = send(client, sel, context, &error);
+    } @catch (NSException *e) {
+        bandInfo = nil;
+    }
+
+    if (bandInfo == nil || error != nil) {
+        // 静默失败的那一种：没权限、无卡、或者基带服务正在重启。状态就是全部信息。
+        gStatus = SysProbeBandStatusUnavailable;
+        return nil;
+    }
+
+    gStatus = SysProbeBandStatusOK;
+    return bandInfo;
+}
+
+/// 把 KVC 取出来的字典整理成 `@{制式: @[NSNumber 频段号, …]}`。
+///
+/// 上游是 `(bandInfo.fActiveBands as? [String: Any])`，然后按 `[NSNumber]` 解。
+/// 这里做同样的收敛：不是数组的值直接丢掉，免得一个意外类型把整页带崩。
+static NSDictionary *normalizeBands(id raw)
+{
+    if (![raw isKindOfClass:[NSDictionary class]]) {
+        return @{};
+    }
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    for (id key in (NSDictionary *)raw) {
+        if (![key isKindOfClass:[NSString class]]) {
+            continue;
+        }
+        id value = [(NSDictionary *)raw objectForKey:key];
+        if (![value isKindOfClass:[NSArray class]]) {
+            continue;
+        }
+        NSMutableArray *bands = [NSMutableArray array];
+        for (id item in (NSArray *)value) {
+            if ([item isKindOfClass:[NSNumber class]]) {
+                [bands addObject:item];
+            }
+        }
+        out[key] = bands;
+    }
+    return out;
+}
+
+NSDictionary * _Nullable sysprobe_read_bands(int slot)
+{
+    @autoreleasepool {
+        id bandInfo = bandInfoForSlot(slot);
+        if (bandInfo == nil) {
+            return nil;
+        }
+
+        NSDictionary *active = nil;
+        NSDictionary *supported = nil;
+        @try {
+            active = normalizeBands([bandInfo valueForKey:@"fActiveBands"]);
+            supported = normalizeBands([bandInfo valueForKey:@"fSupportedBands"]);
+        } @catch (NSException *e) {
+            gStatus = SysProbeBandStatusUnavailable;
+            return nil;
+        }
+
+        if (gBandInfoBySlot == nil) {
+            gBandInfoBySlot = [NSMutableDictionary dictionary];
+        }
+        gBandInfoBySlot[@(slot)] = bandInfo;
+
+        return @{ @"active": active, @"supported": supported };
+    }
+}
+
+/// 把 `activeBands` 灌进留着的那个 `CTBandInfo` 并写回。
+///
+/// `useSupported` 为真时走「恢复默认」那条路：active 整个换成 supported。
+static BOOL writeBands(int slot, NSDictionary *activeBands, BOOL useSupported)
+{
+    @autoreleasepool {
+        id bandInfo = gBandInfoBySlot[@(slot)];
+        if (bandInfo == nil) {
+            // 没读过就没有可写的对象 —— 上游也是从读回来的对象出发改的。
+            gStatus = SysProbeBandStatusUnavailable;
+            return NO;
+        }
+
+        id client = commCenterClient();
+        id context = subscriptionContext(slot);
+        SEL sel = NSSelectorFromString(@"setActiveBandInfo:bands:error:");
+        if (client == nil || context == nil || ![client respondsToSelector:sel]) {
+            gStatus = SysProbeBandStatusUnavailable;
+            return NO;
+        }
+
+        @try {
+            if (useSupported) {
+                id supported = [bandInfo valueForKey:@"fSupportedBands"];
+                if (supported == nil) {
+                    gStatus = SysProbeBandStatusUnavailable;
+                    return NO;
+                }
+                // 深拷一份：直接把手里的对象塞回去，等于把 active 和 supported 变成同一个引用。
+                [bandInfo setValue:[supported mutableCopy] forKey:@"fActiveBands"];
+            } else {
+                NSMutableDictionary *updated = [NSMutableDictionary dictionary];
+                for (id key in activeBands) {
+                    id value = activeBands[key];
+                    if ([key isKindOfClass:[NSString class]] && [value isKindOfClass:[NSArray class]]) {
+                        updated[key] = [value mutableCopy];
+                    }
+                }
+                [bandInfo setValue:updated forKey:@"fActiveBands"];
+            }
+        } @catch (NSException *e) {
+            gStatus = SysProbeBandStatusUnavailable;
+            return NO;
+        }
+
+        // -(void)setActiveBandInfo:(CTXPCServiceSubscriptionContext *)context
+        //                    bands:(CTBandInfo *)bands
+        //                    error:(NSError **)error;
+        //
+        // 注意返回 void、错误只从 error 出 —— 不接住就等于把失败静默吞掉，
+        // 用户会以为改了、其实没改。
+        void (*send)(id, SEL, id, id, NSError **) = (void (*)(id, SEL, id, id, NSError **))objc_msgSend;
+        NSError *error = nil;
+        @try {
+            send(client, sel, context, bandInfo, &error);
+        } @catch (NSException *e) {
+            gStatus = SysProbeBandStatusUnavailable;
+            return NO;
+        }
+
+        if (error != nil) {
+            gStatus = SysProbeBandStatusUnavailable;
+            return NO;
+        }
+
+        gStatus = SysProbeBandStatusOK;
+        return YES;
+    }
+}
+
+BOOL sysprobe_write_active_bands(int slot, NSDictionary *activeBands)
+{
+    return writeBands(slot, activeBands, NO);
+}
+
+BOOL sysprobe_restore_default_bands(int slot)
+{
+    return writeBands(slot, @{}, YES);
+}
+
+SysProbeBandStatus sysprobe_band_status(void)
+{
+    return gStatus;
+}

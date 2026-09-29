@@ -65,3 +65,30 @@ interface rather than guesswork, and two details of loading BatteryCenter from
 a sandboxed app — using NSBundle rather than dlopen, and prefixing the path
 with DYLD_ROOT_PATH so the same code works in the simulator — were learned
 from reading Batsie. No source from that project is reproduced here.
+
+
+================================================================================
+CellularInfo — reference only, no code incorporated
+https://github.com/DevelopCubeLab/CellularInfo
+================================================================================
+
+`Sources/DeviceControl/BandInfo.swift` and the band read/write shape in
+`Sources/DeviceControl/CommCenterBridge.m` implement the same feature as
+CellularInfo, and the following were learned from reading it:
+
+  * which CoreTelephony calls carry band information, and that a write replaces
+    only the "active" set while the "supported" set is carried back untouched;
+  * the band-number spellings per radio access technology (n78 / B3 / BC0 /
+    plain integers) and the fact that a radio-access-technology key has to be
+    matched by substring, with TDSCDMA tested before CDMA.
+
+No source from that project is reproduced here. The implementation is written
+for this repository: it models a radio access technology as a value wrapping
+the original dictionary key rather than as a fixed enum, so an unrecognised
+technology is preserved instead of dropped.
+
+CellularInfo itself is licensed under the GNU GPL v3. It is listed here because
+its API facts were read from it, not because any of it was copied — the same
+arrangement as the Batsie entry above. Keeping GPL-3.0 code out of this repository is
+deliberate; see README.md.
+

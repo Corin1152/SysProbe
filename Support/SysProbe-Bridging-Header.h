@@ -20,3 +20,5 @@
 // 相对路径而不是加一条 HEADER_SEARCH_PATHS：扩展那边没有 ChargeControl 这一层，
 // 为它多配一条搜索路径反而会让人以为扩展也用得到这个探针。
 #import "../Sources/ChargeControl/ChargeSpawn.h"
+// 同上：扩展的 sources 里没有 DeviceControl，「频段设置」只有主 App 用得到。
+#import "../Sources/DeviceControl/CommCenterBridge.h"

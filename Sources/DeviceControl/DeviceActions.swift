@@ -91,4 +91,18 @@ nonisolated enum DeviceActions {
         guard let path = toolPath else { return false }
         return sysprobe_spawn_root_tool(path, action.rawValue) == 0
     }
+
+    /// 重启蜂窝网络服务（CommCenter）。
+    ///
+    /// **刻意不放进 `DeviceAction`**：那一组是「维护」区并排的两个按钮，由
+    /// `allCases` 驱动；这个是频段设置页的**逃生通道**，位置与语义都不同 ——
+    /// 塞进去会让维护区凭空多出第三个按钮。
+    ///
+    /// 频段写错导致「无服务」时，杀掉 CommCenter 会让它重新读一遍配置，
+    /// 多数情况下能回到可用状态。返回 `false` 同样只代表进程没起来。
+    @discardableResult
+    static func restartCommCenter() -> Bool {
+        guard let path = toolPath else { return false }
+        return sysprobe_spawn_root_tool(path, "restart-commcenter") == 0
+    }
 }
