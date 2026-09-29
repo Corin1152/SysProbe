@@ -99,15 +99,20 @@ final class BandService: ObservableObject {
 
     @Published private(set) var availability: Availability = .unknown
 
-    /// 探测到有数据的卡槽。单卡设备只有 `[1]`。
+    /// 探测到的卡槽。单卡设备只有 `[1]`。
     ///
-    /// 判定方式很直接：**读得到就是这个卡槽存在**。上游用
-    /// `getSlotCount()` + `getSlotSIMStatus` 一整套私有接口来判断，为了一个卡槽
-    /// 选择器不值得再引入那么多私有 API。
+    /// 判据是 `sysprobe_slot_has_sim`（**确实插着卡**），不是「频段读得回来」——
+    /// 频段配置是设备级的，没插卡也可能读得到。所以只有一个卡槽时界面上不会出现
+    /// 卡槽选择器：给一个只有一项的分段控件，除了占地方没有别的用处。
     @Published private(set) var slots: [Int] = [1]
 
     /// 当前卡槽的频段。`nil` = 还没读到 / 读不到。
     @Published private(set) var bandInfo: BandSet?
+
+    /// 当前卡槽的只读状态（运营商、网络名、信号格、制式、频段、RSRP/SNR）。
+    ///
+    /// 每一项都可能缺 —— 基带读不到就不显示那一行，而不是显示一个「未知」占位。
+    @Published private(set) var slotInfo: SlotInfo?
 
     /// 正在读。
     @Published private(set) var isLoading = false
