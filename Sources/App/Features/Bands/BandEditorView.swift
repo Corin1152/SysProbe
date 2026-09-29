@@ -210,13 +210,13 @@ struct BandEditorView: View {
 
             ForEach(bands, id: \.self) { band in
                 Button {
-                    toggle(rat, band.value)
+                    toggle(rat, band.number)
                 } label: {
                     HStack {
                         Text(verbatim: band.label)
-                            .foregroundStyle(Color.mwText)
+                            .foregroundStyle(Color.primary)
                         Spacer()
-                        if active.contains(band.value) {
+                        if active.contains(band.number) {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color.mwAccent)
@@ -283,7 +283,7 @@ struct BandEditorView: View {
     }
 
     private func setAll(_ rat: RadioAccessTechnology, in bands: [Band], on: Bool) {
-        selection[rat] = on ? Set(bands.map(\.value)) : []
+        selection[rat] = on ? Set(bands.map(\.number)) : []
         hasUnsavedChanges = true
         banner = nil
     }
