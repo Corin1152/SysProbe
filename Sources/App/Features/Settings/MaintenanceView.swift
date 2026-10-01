@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 「维护」页。原来摊在设置页最上面那几区，现在整块搬过来。
 ///
-/// 内容：两个破坏性动作（重启设备 / 注销）、语言切换、以及诊断信息。
+/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、语言切换、以及诊断信息。
 struct MaintenanceView: View {
     @EnvironmentObject private var monitor: PowerMonitor
     @EnvironmentObject private var charge: ChargeControlService
@@ -25,12 +25,40 @@ struct MaintenanceView: View {
     /// 这两个动作最大的失败模式就是「什么都没发生」。
     @State private var actionFailed = false
 
+    // ── 关闭温控降频 ────────────────────────────────────────────────────────
+
+    /// `disabled.plist` 里 `com.apple.thermalmonitord` 的状态。`true` = 已配置为禁用。
+    ///
+    /// 注意这是**配置**状态，不是运行状态：改完要重启才真的生效。
+    @State private var thermalDisabled = false
+
+    /// 配置读不出来（工具不在包里 / 拿不到 root）。此时整行禁用。
+    ///
+    /// 与 `thermalDisabled == false` 分开存是必需的：合并的话，一个坏掉的工具
+    /// 会显示成一个看起来正常、拨了却没反应的开关。
+    @State private var thermalUnavailable = false
+
+    /// 已经改过配置、还没重启。用来把「重启后生效」那一行显示出来。
+    @State private var thermalNeedsRestart = false
+
+    /// 正在写配置（起子进程并等它结束）。
+    @State private var thermalBusy = false
+
+    /// 待确认「开启」。开启有真实副作用，必须先说清楚。
+    @State private var confirmThermalEnable = false
+
+    /// 写入失败。**用行内提示而不是弹窗** —— 外层的 `confirmationDialog` 已经
+    /// 给了重启 / 注销那两个动作，同一个视图上再叠一个弹窗会互相抢呈现。
+    @State private var thermalFailed = false
+
     var body: some View {
         ZStack {
             Color.mwCanvas
             Backdrop(glow: .mwAccent)
             Form {
                 maintenanceSection
+
+                performanceSection
 
                 Section {
                     Picker("Language", selection: $app.language) {
@@ -97,6 +125,16 @@ struct MaintenanceView: View {
         // 所以放到主 actor 之外跑。
         .task {
             toolReady = await Task.detached { DeviceActions.probe() }.value
+
+            // 配置状态要**另外读一次**：`probe()` 只回答「子进程拿不拿得到 root」，
+            // 不回答「温控那个键在不在」。两者失败时界面表现一样（都不可用），
+            // 但能读的时候必须读出来。
+            let state = await Task.detached { DeviceActions.thermalState() }.value
+            switch state {
+            case .disabled: thermalDisabled = true
+            case .enabled: thermalDisabled = false
+            case .unknown: thermalUnavailable = true
+            }
         }
         .confirmationDialog(
             Text(verbatim: confirmTitle),
@@ -153,6 +191,112 @@ struct MaintenanceView: View {
             Text("Maintenance")
         }
     }
+
+    // MARK: 性能
+
+    /// 「性能」区：关闭温控降频。
+    ///
+    /// 这一区做的是**改系统文件**（launchd 的 `disabled.plist`），所以它的安全性
+    /// 压在四件事上，改这里时别去掉：
+    ///
+    ///   1. 开启前必须过二次确认，且弹窗里把代价写全（电池健康度读不出来、
+    ///      失去过热保护），不是「确定 / 取消」；
+    ///   2. 配置读不出来时整行禁用 —— 不给一个拨了没反应的开关；
+    ///   3. 明确写出**需要重启**，并在改完之后把「重启以生效」摆出来；
+    ///   4. 工具自己会在首次写入前备份原文件（见 `Tools/RootTool.c`），
+    ///      所以这里可以承诺「随时可以关回去」。
+    ///
+    /// 这一区**刻意不做成「一键加速」**：它只对**热**引起的降频有用，
+    /// 对电池老化引起的峰值性能限制完全无效。页脚那句话就是为此写的。
+    private var performanceSection: some View {
+        Section {
+            Toggle(isOn: thermalBinding) {
+                Text("Disable thermal throttling")
+            }
+            .disabled(toolReady != true || thermalUnavailable || thermalBusy)
+            // 挂在 `Toggle` 上而不是外层 `ZStack`：外层已经挂了一个
+            // `confirmationDialog`（重启 / 注销），同一个视图上叠两个会互相抢呈现。
+            .confirmationDialog(
+                Text("Disable thermal throttling?"),
+                isPresented: $confirmThermalEnable,
+                titleVisibility: .visible
+            ) {
+                Button("Turn Off", role: .destructive) {
+                    Task { await applyThermal(disabled: true) }
+                }
+                Button("Cancel", role: .cancel) {
+                    // 回滚乐观置位 —— 取消之后开关必须回到原来的位置。
+                    thermalDisabled = false
+                }
+            } message: {
+                Text(verbatim: Strings.text("Disable thermal throttling warning"))
+            }
+
+            if thermalNeedsRestart {
+                Button {
+                    // 走与「重启设备」同一个确认流程，不另开一条路径。
+                    request(.reboot)
+                } label: {
+                    Label("Restart to apply", systemImage: "arrow.clockwise")
+                }
+            }
+        } header: {
+            Text("Performance")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart.")
+                // 失败时在这里说 —— 见上面 `thermalFailed` 的说明。
+                if thermalFailed {
+                    Text("Could not change the thermal setting.")
+                        .foregroundStyle(Color.mwDanger)
+                }
+            }
+        }
+    }
+
+    /// 开关的绑定。
+    ///
+    /// setter **不直接落状态**：开启有真实副作用，要先弹确认。这里乐观置位是为了
+    /// 让开关立刻跟手 —— 取消那条路会把 `thermalDisabled` 改回去。
+    private var thermalBinding: Binding<Bool> {
+        Binding(
+            get: { thermalDisabled },
+            set: { newValue in
+                guard newValue != thermalDisabled else { return }
+                if newValue {
+                    thermalDisabled = true
+                    confirmThermalEnable = true
+                } else {
+                    Task { await applyThermal(disabled: false) }
+                }
+            }
+        )
+    }
+
+    /// 真的去写配置。
+    ///
+    /// 子进程要跑起来并等它结束（毫秒级，最长约 1 秒），所以放到主 actor 之外 ——
+    /// 与 `probe()` 同样的理由。
+    private func applyThermal(disabled: Bool) async {
+        guard !thermalBusy else { return }
+        thermalBusy = true
+        thermalFailed = false
+
+        let ok = await Task.detached { DeviceActions.setThermalDisabled(disabled) }.value
+
+        thermalBusy = false
+        if ok {
+            thermalDisabled = disabled
+            // 写成功也**不等于**已经生效 —— 要重启。
+            thermalNeedsRestart = true
+        } else {
+            // 回滚，别让开关停在一个假的「已开启」上。
+            thermalDisabled = !disabled
+            thermalFailed = true
+        }
+    }
+
+    // MARK: 诊断
 
     /// 维护工具在诊断区里的那一行。
     ///

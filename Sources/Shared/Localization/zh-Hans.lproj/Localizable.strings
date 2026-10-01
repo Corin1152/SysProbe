@@ -303,3 +303,13 @@
 "RSRP" = "参考信号接收功率 (RSRP)";
 "SNR" = "信噪比 (SNR)";
 "Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it." = "关掉之后这一页会从齿轮菜单里消失。App 内没有地方能再打开它 —— 要恢复得重新安装。";
+
+/* 关闭温控降频（2026-10-01） */
+"Performance" = "性能";
+"Disable thermal throttling" = "关闭温控降频";
+"Disable thermal throttling?" = "关闭温控降频？";
+"Disable thermal throttling warning" = "设备发热时，iOS 将不再压低 CPU 频率。\n\n会改变什么：\n· 电池健康度将无法读取 —— 系统可能把电池显示为「未知部件」，本 App 自己的电池页也会受影响。\n· 失去过热保护：持续重载时机身会更烫，充电也不再受温度限制。\n\n需要重启才能生效。首次修改前会先备份原文件，随时可以再关回去。\n\n注意：这个开关只对「发热引起的降频」有用。电池老化引起的峰值性能限制与温度无关，它管不了。";
+"Restart to apply" = "重启以生效";
+"Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart." = "停掉 thermalmonitord 守护进程，让 iOS 不再因发热而压低 CPU 频率。需要重启才能生效。";
+"Could not change the thermal setting." = "修改温控设置失败。";
+"Turn Off" = "关闭温控";

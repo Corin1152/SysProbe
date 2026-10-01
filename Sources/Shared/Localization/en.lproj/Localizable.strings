@@ -303,3 +303,13 @@
 "RSRP" = "RSRP";
 "SNR" = "SNR";
 "Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it." = "Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it.";
+
+/* Disabling thermal throttling (2026-10-01) */
+"Performance" = "Performance";
+"Disable thermal throttling" = "Disable thermal throttling";
+"Disable thermal throttling?" = "Disable thermal throttling?";
+"Disable thermal throttling warning" = "iOS will no longer lower the CPU clock when the device gets hot.\n\nWhat changes:\n· Battery health can no longer be read — the system may show the battery as an unknown part, and this app's own battery page is affected too.\n· The device loses its overheating protection: it runs hotter under sustained load, and charging is no longer thermally limited.\n\nTakes effect after a restart. The original file is backed up before the first change, so you can turn this off again at any time.\n\nNote: this only helps with heat-driven throttling. The battery-ageing peak-performance limit is not temperature related, and this cannot lift it.";
+"Restart to apply" = "Restart to apply";
+"Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart." = "Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart.";
+"Could not change the thermal setting." = "Could not change the thermal setting.";
+"Turn Off" = "Turn Off";

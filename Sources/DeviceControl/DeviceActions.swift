@@ -43,6 +43,25 @@ nonisolated enum DeviceAction: String, Identifiable, CaseIterable {
     }
 }
 
+/// 「关闭温控降频」这个开关的**配置**状态。
+///
+/// 必须把「配置」和「运行」分开看：这个开关改的是 launchd 的启动配置，
+/// **要重启之后 `thermalmonitord` 才真的不再启动**。所以在重启之前，
+/// `.disabled` 只代表「已经配置好」，不代表此刻已经生效 —— 界面必须把这件事说出来，
+/// 否则用户会以为「开了没效果」。
+nonisolated enum ThermalDaemonState: Equatable {
+    /// `disabled.plist` 里有 `com.apple.thermalmonitord` 且为真。
+    case disabled
+    /// 那个键不在（或不是真值）—— 温控守护进程照常启动。
+    case enabled
+    /// 读不出来：工具不在包里、拿不到 root、plist 解析失败。
+    ///
+    /// **不能和 `.enabled` 合并**：前者该显示「不可用」并禁用开关，
+    /// 后者该显示「关着」并允许打开。合并了就会把一个坏掉的工具
+    /// 显示成一个看起来正常、拨了没反应的开关。
+    case unknown
+}
+
 /// 包内特权工具（`SysProbeRootTool`）的调用入口。
 ///
 /// 工具本身是 `Tools/RootTool.c` 编出来的裸可执行文件，由 `scripts/build-ipa.sh`
@@ -104,5 +123,41 @@ nonisolated enum DeviceActions {
     static func restartCommCenter() -> Bool {
         guard let path = toolPath else { return false }
         return sysprobe_spawn_root_tool(path, "restart-commcenter") == 0
+    }
+
+    /// 读「温控守护进程是否已被配置为禁用」。
+    ///
+    /// 退出码的约定写在 `Tools/RootTool.c` 的 `enum` 里：**0 = 已禁用，5 = 未禁用**，
+    /// 其余（3 = 没拿到 root、4 = 读写失败）一律归为 `.unknown`。
+    /// 那个 `5` 是刻意加的一种「正常」—— 它必须能和 0 / 4 区分开，
+    /// 否则界面分不清「没开」与「读不出来」。
+    ///
+    /// 这是**阻塞**调用（起子进程并等它，最多约 1 秒），调用方负责别放在主线程上。
+    static func thermalState() -> ThermalDaemonState {
+        guard let path = toolPath else { return .unknown }
+        var status: Int32 = 0
+        guard sysprobe_spawn_root_tool_sync(path, "thermal-status", &status) == 0 else {
+            return .unknown
+        }
+        switch status {
+        case 0: return .disabled
+        case 5: return .enabled
+        default: return .unknown
+        }
+    }
+
+    /// 写入「禁用 / 恢复」温控守护进程的配置。
+    ///
+    /// 返回 `true` 表示**子进程正常收尾且回读校验通过**（工具自己会回读一次），
+    /// 但仍**不代表已经生效** —— 生效要重启。界面必须把这件事说出来。
+    ///
+    /// 这也是**阻塞**调用，同样别放在主线程上。
+    @discardableResult
+    static func setThermalDisabled(_ disabled: Bool) -> Bool {
+        guard let path = toolPath else { return false }
+        var status: Int32 = 0
+        let command = disabled ? "thermal-disable" : "thermal-enable"
+        guard sysprobe_spawn_root_tool_sync(path, command, &status) == 0 else { return false }
+        return status == 0
     }
 }

@@ -171,11 +171,82 @@ App 的源文件，链接期就会出现重复的 `_main` 而直接失败。放�
 - 维护区**没有 footer**。按钮本身就是全部内容，下面再挂一段说明只会把两个按钮往下推、
   把设置页第一屏让给解释文字。原因与失败信息走上面那条路径。
 
+## 关闭温控降频
+
+设置菜单 →「维护」→「性能」。
+
+一个开关，做的是把 `thermalmonitord` 这个**用户态温控守护进程**的 launchd 启动项禁掉：
+
+    /var/db/com.apple.xpc.launchd/disabled.plist
+      com.apple.thermalmonitord = true      ← Boolean
+      重启后生效；删掉这个键（+ 重启）即恢复
+
+`thermalmonitord` 读温度传感器、发布「热压力」等级，系统据此**压低 CPU 频率上限**、
+调暗屏幕、限制充电电流。禁掉它，这些**由热引起的**降频就不会再发生。
+
+### 它**不是**「设置 CPU 频率」
+
+这一点必须先说清楚，否则这个功能会被误解成它能做到的事：
+
+- iOS 用户态**没有**任何设置频率的接口，公开的没有，私有的也没有。调频由内核与固件里的
+  **CLPC**（闭环性能控制器）按功耗、电流、负载自行决定，不接受用户态写入。
+  所以「锁频 / 超频 / 选定一个固定频率」在 iOS 上**不存在**。
+- 这个开关只是**抽掉「热」这一个向下的输入**。它不设频率，也不会让频率超过硬件正常上限。
+- 尤其：**电池老化引起的峰值性能限制**（iOS 的「性能管理 / 峰值性能容量」）走的是另一条路，
+  **与温度无关** —— 关掉温控对它**完全无效**。
+
+如果机器发热轻微却仍然降频，那多半是电池那条路（iPhone 6 ~ X 都在 Apple 这个机制的名单里），
+正解是换原装电池，而不是关温控。
+
+### 代价
+
+1. **电池健康度会读不出来**，系统可能把电池显示为「未知部件」—— **本 App 自己的电池页
+   也在其中**；
+2. **失去过热保护**：持续重载时机身更烫，充电也不再被温度限制；
+3. 改的是系统文件，**必须重启**才生效。
+
+### 所以安全措施是硬要求，改动这一区时别去掉
+
+1. **开启前二次确认**，且弹窗里把上面三条代价写全，不是「确定 / 取消」；
+2. **配置读不出来时整行禁用** —— 不给一个拨了没反应的开关；
+3. **明确写出需要重启**，改完之后把「重启以生效」摆出来（走与「重启设备」同一个确认流程）；
+4. **首次写入前先备份**原文件到 `/var/root/SysProbe/disabled.plist.orig`，所以随时能关回去。
+
+### 它是怎么工作的
+
+三件事全在 `Tools/RootTool.c` 里（`thermal-status` / `thermal-disable` / `thermal-enable`），
+由主 App 经与重启设备**完全相同**的 root 拉起链路调起（`ChargeSpawn.c` 的 persona 99 / uid 0）。
+
+为什么必须走 root：`/var/db/com.apple.xpc.launchd/` 是 launchd 自己的配置目录，
+普通 App 的沙箱里没有写它的权限 —— **即使 uid 是 0**。本工具带着
+`com.apple.private.security.no-sandbox`，沙箱那一层已经整个去掉，所以**不需要新增任何
+entitlement**。
+
+实现上有三条约束（`Tools/RootTool.c` 里也有对应注释）：
+
+- **只动这一个键**：读进来 → 改一个键 → 原样写回。绝不能新建一个只含本键的 plist ——
+  那会把 launchd 里**其它已禁用的服务**全部重新打开；
+- **原子写**：先写 `…/disabled.plist.sysprobe.tmp` 再 `rename`。直接覆盖写时若中途掉电，
+  会留下一个半截的 plist，launchd 下次开机读不了 —— 那是「所有禁用设置一起失效」级别的后果；
+- **写完回读确认**：这条链路上「写了但没生效」完全可能，而且不会以任何方式报错。
+
+用 CoreFoundation 的 `CFPropertyList` 而不是手写解析：那份文件在真机上是**二进制 plist**
+（`bplist00`），且除我们关心的键之外还有别的条目，必须按原格式读进来、按原格式写回去。
+构建时需要 `-framework CoreFoundation`，见 `scripts/build-ipa.sh`。
+
+### 失败模式
+
+这个功能的静默失败长这样：**开关拨了、重启了、什么都没变** —— 而用户会以为是这个方法没用。
+所以 `scripts/build-ipa.sh` 在构建期逐个卡住 `thermal-status` / `thermal-disable` /
+`thermal-enable` 三个子命令是否真的编进了二进制。
+
 ## 频段设置
 
 设置菜单 →「频段设置」。读写基带允许使用的频段，按 SIM 卡槽分开。
 
 ### 这是全 App 唯一会**写系统状态**的地方
+
+（连同上面的「关闭温控降频」一起 —— 全 App 只有这两处会改设备上**持久**的系统状态。）
 
 别的页面读不到数据，最坏结果是难看。这里写错频段会导致**无服务、无法注册网络、
 VoLTE / VoNR / 语音通话 / 短信异常**，而且是持久的 —— 重启设备也不会恢复。
@@ -226,7 +297,8 @@ Power 与 Adapter 两屏的读数来自 Apple 的**私有 IOKit 接口**（`Appl
 
 Charge 屏更进一步：它要 spawn 一个 root 子进程，并且真的往 IORegistry 里写。
 设置页的「设备维护」同理 —— 它 spawn 的 `SysProbeRootTool` 要调 `reboot(2)` 和
-`kill(SpringBoard)`。两者都需要 `Support/SysProbe.entitlements` 里那一组私有
+`kill(SpringBoard)`；「关闭温控降频」还要用同一个工具去改 launchd 的 `disabled.plist`。
+两者都需要 `Support/SysProbe.entitlements` 里那一组私有
 entitlement（工具自己另有一份），也就只能是侧载（巨魔 / AltStore / SideStore / Sideloadly）。
 
 副作用有两个，都反直觉，都写在 entitlements 文件的注释里：**脱了沙箱，一部分权限

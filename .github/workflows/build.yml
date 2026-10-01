@@ -60,6 +60,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: echo "MARKETING_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
+      # 两份 .strings 的键集合必须一致、不能有重复键、中英占位符数量必须相等。
+      #
+      # 这三条全是**静默**失败：键对不上就是某处显示成英文（能用的降级，所以没人发现），
+      # 占位符数量对不上则是 `String(format:)` 直接崩。
+      #
+      # 这个脚本一直是手跑的（README 里写着「改完文案跑一下」），但正因为是手跑，
+      # 改文案时最容易漏掉。放在构建之前 —— 它很快，而且早失败早省一次十分钟的构建。
+      - name: Check the localizations line up
+        run: bash scripts/check-localization.sh
+
       - name: Build unsigned ipa
         run: bash scripts/build-ipa.sh
 

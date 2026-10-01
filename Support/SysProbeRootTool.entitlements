@@ -20,8 +20,20 @@
 	      签名在 SysProbeRootTool 上。
 
 	  所以这份清单刻意保持最小：**不要**把主 App 那份的电源、IOKit、通知等条目
-	  抄过来。工具只做三件事 —— 读 `sysctl` 的进程表、发一个 `kill`、调一次
-	  `reboot(2)` —— 一条额外的权限都用不上，多给只会扩大出问题的面。
+	  抄过来。工具做四件事 —— 读 `sysctl` 的进程表、发一个 `kill`、调一次
+	  `reboot(2)`、以及读写 `/var/db/com.apple.xpc.launchd/disabled.plist`
+	  （「关闭温控降频」那个开关）—— 一条额外的权限都用不上，多给只会扩大出问题的面。
+
+	  最后那件事值得单独说一句，因为它看起来该要一条新的权限：**其实不用**。
+	  `disabled.plist` 是 launchd 自己的配置目录，普通 App 的沙箱里确实没有写它的
+	  权限 —— **即使 uid 是 0**。但本工具带着下面的 `no-sandbox`，沙箱那一层已经
+	  整个去掉了，而文件系统层面 root 本来就能写 `/var/db`。所以缺的从来不是
+	  「一条文件权限」，而是「脱沙箱」这一条，而它已经在清单里了。
+
+	  另一件事：`disabled.plist` 里除 `com.apple.thermalmonitord` 之外还有**其它
+	  条目**，工具是「读进来 → 改这一个键 → 原样写回」，不是新建一个只含本键的文件。
+	  那一条约束在 `Tools/RootTool.c` 里，不在这份清单里 —— 但它是同一个安全考虑的
+	  另一半，一起改的时候别忘了。
 
 	  逐条与 RebootTools 1.2.1 里那两个 helper 的并集对齐（它自己的 helper 用的是
 	  `platform-application` + `container-required=false`，userspace helper 用的是

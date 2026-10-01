@@ -122,11 +122,14 @@ TOOL="$BUILD_DIR/Payload/$SCHEME.app/SysProbeRootTool"
 [ -f "$TOOL_SRC" ] || { echo "::error::$TOOL_SRC is missing" >&2; exit 1; }
 
 echo "==> Building SysProbeRootTool"
+# `-framework CoreFoundation` 是给「关温控」那一组用的：它要按原格式读、改、写回
+# launchd 的 disabled.plist（二进制 plist），用 CFPropertyList 是唯一稳的做法。
 xcrun --sdk iphoneos clang \
   -arch arm64 \
   -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
   -miphoneos-version-min=16.2 \
   -O2 -Wall \
+  -framework CoreFoundation \
   -o "$TOOL" "$TOOL_SRC"
 # 同上：zip 保留执行位，装到设备上才起得来。
 chmod 755 "$TOOL"
@@ -298,16 +301,21 @@ for key in platform-application \
 done
 echo "  entitlements: SysProbeRootTool ok"
 
-# 「重启蜂窝网络服务」这个子命令真的编进去了吗。
+# 子命令真的编进去了吗。
 #
 # 这一条挡的是「改了 Tools/RootTool.c 但构建缓存没重编」—— 那种情况下包里的工具
-# 还是旧的，`restart-commcenter` 会走到 `unknown command` 分支并返回非 0，
-# 而界面只会说「重启失败」，看不出是版本不对。
-if ! grep -a -q "restart-commcenter" "$tool"; then
-  echo "::error::SysProbeRootTool does not contain the 'restart-commcenter' subcommand. The escape hatch would be there in the UI but would do nothing." >&2
-  exit 1
-fi
-echo "  root tool  : restart-commcenter present"
+# 还是旧的，子命令会走到 `unknown command` 分支并返回非 0，
+# 而界面只会说「失败」，看不出是版本不对。
+#
+# `thermal-disable` 尤其要卡死：它写的是**系统文件**，静默失败的表现是
+# 「开关拨了、重启了、什么都没变」，而用户会以为是这个方法没用。
+for subcommand in restart-commcenter thermal-status thermal-disable thermal-enable; do
+  if ! grep -a -q "$subcommand" "$tool"; then
+    echo "::error::SysProbeRootTool does not contain the '$subcommand' subcommand. The feature would be there in the UI but would do nothing." >&2
+    exit 1
+  fi
+done
+echo "  root tool  : restart-commcenter, thermal-{status,disable,enable} present"
 
 rm -rf "$work"
 
