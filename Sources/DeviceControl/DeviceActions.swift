@@ -81,6 +81,20 @@ nonisolated enum DeviceActions {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
+    /// 「Root tool」诊断行的文案。原来只有维护页在用；诊断区迁到「关于」页之后，
+    /// 「清理」页也要显示同一行 —— 收进这里，免得两页各抄一份后漂移。
+    ///
+    /// 三态：没进包（静态可判）／自检通过／自检失败。中间那个 `—` 是「还在测」——
+    /// 与 `AppInfo` 里读不到值时的写法一致。
+    static func toolSummary(ready: Bool?) -> String {
+        guard toolPath != nil else { return Strings.text("not bundled") }
+        switch ready {
+        case .none: return "—"
+        case .some(true): return Strings.text("available")
+        case .some(false): return Strings.text("unavailable")
+        }
+    }
+
     /// 跑一次 `check`，确认子进程拿到的**确实是 root**。
     ///
     /// 为什么值得多起一个进程：这两个动作在权限不足时**不会把错误传到界面上**。

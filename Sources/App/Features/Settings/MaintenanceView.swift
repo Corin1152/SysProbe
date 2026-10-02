@@ -2,10 +2,10 @@ import SwiftUI
 
 /// 「维护」页。原来摊在设置页最上面那几区，现在整块搬过来。
 ///
-/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、语言切换、以及诊断信息。
+/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、语言切换。
+/// 诊断区迁去了「关于」页（2026-10-02，给「清理」页腾出并列的菜单位之后，
+/// 维护页里只剩真正「动手改系统」的东西，诊断放回关于更符合它的信息属性）。
 struct MaintenanceView: View {
-    @EnvironmentObject private var monitor: PowerMonitor
-    @EnvironmentObject private var charge: ChargeControlService
     @EnvironmentObject private var app: AppState
 
     /// 正在等确认的动作。`nil` 表示没有待确认的操作。
@@ -76,47 +76,6 @@ struct MaintenanceView: View {
                     Text("Language")
                 } footer: {
                     Text("Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.")
-                }
-
-                Section {
-                    LabeledContent("Device", value: monitor.deviceModelIdentifier)
-                    LabeledContent("Sensors",
-                                   value: Strings.text(monitor.sensorsAvailable
-                                                       ? "available"
-                                                       : "unavailable"))
-                    // 扩展摘要。排查负一屏问题时，第一步就是确认扩展有没有被打进包 ——
-                    // 这一行显示的就是**这一版**的真实内容。
-                    LabeledContent("Widget", value: AppInfo.widgetSummary)
-                    // 充电守护进程的状态。
-                    //
-                    // 这一行值得放在这里而不是只放在充电页上：它是唯一能区分
-                    // 「守护进程没被打进包」与「打进去了但起不来」的地方 ——
-                    // 两者的界面表现一模一样（开关能点、什么都不发生）。
-                    LabeledContent("Charge control",
-                                   value: Strings.text(charge.daemonRunning
-                                                       ? "Service running"
-                                                       : "Service stopped"))
-                    // 维护工具的状态。同上，它区分的正是「工具没进包」与
-                    // 「进了包但拿不到 root」—— 后者的表现也是「点了没反应」。
-                    LabeledContent("Root tool", value: rootToolSummary)
-                    // 守护进程托管的网页界面。App 里**不用**它（见 `ChargeControlView`），
-                    // 但它是 App 之外最后一道保险：界面出问题时，在 Safari 里打开
-                    // 这个地址依然能手动停充。
-                    Link(destination: ChargeBridge.interfaceURL) {
-                        HStack {
-                            Text("Service address")
-                            Spacer()
-                            Text(ChargeBridge.interfaceURL.absoluteString)
-                                .foregroundStyle(Color.mwAccent)
-                        }
-                    }
-                    ForEach(monitor.diagnostics, id: \.self) { line in
-                        Text(verbatim: line)
-                            .font(.footnote)
-                            .foregroundStyle(Color.mwMuted)
-                    }
-                } header: {
-                    Text("Diagnostics")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -298,20 +257,10 @@ struct MaintenanceView: View {
         }
     }
 
-    // MARK: 诊断
+    // 诊断区已迁到「关于」页。工具状态的文案在 `DeviceActions.toolSummary(ready:)`，
+    // 两个页面（关于 / 清理）共用它 —— 这里不再留一份。
 
-    /// 维护工具在诊断区里的那一行。
-    ///
-    /// 三态：没进包（静态可判）／自检通过／自检失败。中间那个 `—` 是「还在测」——
-    /// 与 `AppInfo` 里读不到值时的写法一致。
-    private var rootToolSummary: String {
-        guard DeviceActions.toolPath != nil else { return Strings.text("not bundled") }
-        switch toolReady {
-        case .none: return "—"
-        case .some(true): return Strings.text("available")
-        case .some(false): return Strings.text("unavailable")
-        }
-    }
+    // MARK: 确认弹窗
 
     private var confirmTitle: String {
         guard let action = pendingAction else { return "" }

@@ -5,7 +5,11 @@ This product incorporates source code from MiniWatts, licensed under the
 Apache License 2.0. The power and adapter screens, the sensor layer that feeds
 them, and the design system they are drawn with are derived from that project.
 The hardware-information screen, the memory optimiser and the Today Extension
-are original to SysProbe.
+are original to SysProbe. The storage cleaner (Tools/RootTool.c clean-*
+subcommands and the Clean feature) is also original to SysProbe: its directory
+set and per-app container approach follow an analysis of iOSCleanerPro 1.0,
+an unlicensed third-party sample whose code was not reused and whose hardcoded
+placeholder app list is deliberately not reproduced.
 
 Upstream: https://github.com/ResistanceTo/MiniWatts
 The full text of the Apache License 2.0 is in LICENSE.

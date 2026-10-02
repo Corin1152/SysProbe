@@ -321,13 +321,15 @@ echo "  entitlements: SysProbeRootTool ok"
 #
 # `thermal-disable` 尤其要卡死：它写的是**系统文件**，静默失败的表现是
 # 「开关拨了、重启了、什么都没变」，而用户会以为是这个方法没用。
-for subcommand in restart-commcenter thermal-status thermal-disable thermal-enable; do
+# `clean-*` 同理：存储清理页的工具状态由自检兜底，但子命令缺失时界面只会说
+# 「没有返回结果」，与工具版本不对分不清。
+for subcommand in restart-commcenter thermal-status thermal-disable thermal-enable clean-scan clean-run; do
   if ! grep -a -q "$subcommand" "$tool"; then
     echo "::error::SysProbeRootTool does not contain the '$subcommand' subcommand. The feature would be there in the UI but would do nothing." >&2
     exit 1
   fi
 done
-echo "  root tool  : restart-commcenter, thermal-{status,disable,enable} present"
+echo "  root tool  : restart-commcenter, thermal-{status,disable,enable}, clean-{scan,run} present"
 
 rm -rf "$work"
 

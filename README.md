@@ -129,15 +129,16 @@ App 的源文件，链接期就会出现重复的 `_main` 而直接失败。放�
 ### 复用了充电守护进程那条 root 链路
 
 `ChargeSpawn.c` 里原本只有一个入口 `sysprobe_spawn_root_daemon`。现在拆成
-`sysprobe_spawn_root`（建属性 → persona 99 / uid 0 / gid 0 → `posix_spawn`）+ 三个包装：
+`sysprobe_spawn_root`（建属性 → persona 99 / uid 0 / gid 0 → `posix_spawn`）+ 四个包装：
 
 | 入口 | 传参 | 用途 |
 |---|---|---|
 | `sysprobe_spawn_root_daemon` | 不传 | 充电守护进程。它靠 `argc == 1` 判定自己该常驻 |
 | `sysprobe_spawn_root_tool` | 传一个子命令 | 重启 / 注销。**发了就不管** |
 | `sysprobe_spawn_root_tool_sync` | 传一个子命令，**等它结束** | 只给 `check` 用 |
+| `sysprobe_spawn_root_tool_sync_args` | 子命令 + 最多三个参数，**等它结束**（预算由调用方给） | 存储清理。老入口的 1 秒预算会把几十秒的扫描/清理误判成超时 |
 
-三个入口的 persona 序列逐行相同，改那段时一起看。
+四个入口的 persona 序列逐行相同，改那段时一起看。
 
 ### 一个必须知道的失败模式：权限不足是**静默**的
 
@@ -147,8 +148,9 @@ App 的源文件，链接期就会出现重复的 `_main` 而直接失败。放�
 
 这正是「按钮点了没反应」的来源，所以有两道防线：
 
-1. 工具带一个 `check` 子命令，只回答一个问题：`geteuid() == 0` 吗。设置页一打开就跑一次
-   （`DeviceActions.probe()`），把结果落到诊断区的 **Root tool** 一行上；
+1. 工具带一个 `check` 子命令，只回答一个问题：`geteuid() == 0` 吗。页面一打开就跑一次
+   （`DeviceActions.probe()`），把结果落到「关于」页诊断区的 **Root tool** 一行上
+   （诊断区 2026-10-02 从维护页迁到了关于页）；
 2. 自检没过时整区**禁用并变淡**，而不是留一个看起来能用、点了没反应的按钮。
 
 守护进程那边有同一类问题，判据是 1230 端口（`sysprobe_local_port_open`）——
@@ -239,6 +241,62 @@ entitlement**。
 这个功能的静默失败长这样：**开关拨了、重启了、什么都没变** —— 而用户会以为是这个方法没用。
 所以 `scripts/build-ipa.sh` 在构建期逐个卡住 `thermal-status` / `thermal-disable` /
 `thermal-enable` 三个子命令是否真的编进了二进制。
+
+## 存储清理
+
+设置菜单 →「清理」。磁盘缓存扫描与清理，与「维护」「频段」「关于」并列成页。
+
+| 清理范围 | 实际做的事 |
+|---|---|
+| **系统缓存** | 清空 `/var/mobile/Library/Caches` 的**内容**，顶层条目按排除名单过滤 |
+| **日志** | 清空 `/var/mobile/Library/Logs`、`/var/mobile/Library/Preferences/Logs` |
+| **临时文件** | 清空 `/var/tmp` |
+| **应用缓存** | 遍历 `/var/mobile/Containers/Data/Application`，按容器 MCM 元数据里的真实 bundle id 聚合，逐个清 `Library/Caches` |
+
+### 三条刻意收窄的边界
+
+1. **不碰照片缓存**（`PhotoData/*`）：清掉不是故障，但照片 App 会全量重建缩略图，
+   发热耗电数小时 —— 收益配不上代价；
+2. **不碰 `Media/Downloads`**：那里面可能有用户主动保存的文件；
+3. **只删内容，不删目录本身**：清空后目录还归原来的属主，守护进程写新缓存不需要
+   任何额外步骤。「删掉再 mkdir」会把属主变成 root，那才是真故障。
+
+### 系统缓存的排除名单
+
+`/var/mobile/Library/Caches` 里有几个「名字叫缓存、实际是状态」的 com.apple.* 目录，
+工具在顶层按**名字完全相等**过滤（不做前缀匹配 —— 模糊匹配会让名单悄悄变成黑洞）：
+
+`com.apple.routined`（位置行为学习）、`com.apple.suggestions`（Siri 与搜索建议）、
+`com.apple.assistant`（Siri 语音数据）、`com.apple.cloudd`（iCloud 同步引擎，删了触发
+全量重同步）、`com.apple.dataaccess.dataaccessd`（邮件/日历/联系人同步状态）。
+
+名单刻意保持小，每一条都得有理由 —— 改它之前先想清楚删掉的到底是什么状态。
+
+### 它是怎么工作的
+
+与重启 / 注销同一条链路：`SysProbeRootTool` 新增 `clean-scan` / `clean-run` 子命令
+（见 `Tools/RootTool.c`），App 侧的门面在 `Sources/App/Features/Clean/StorageCleaner.swift`。
+
+- **报告文件**：扫描/清理的结果没法从退出码带回来，所以 App 把自己 tmp 目录里的一个
+  路径作为参数传给工具，工具写完 JSON、`chmod 0644` 再退出，App 读完就地删除。
+  报告里只有实测值，没有任何占位数据；
+- **等待预算**：走 `sysprobe_spawn_root_tool_sync_args`（扫描 120 秒 / 清理 300 秒），
+  自检那个 1 秒预算会把正在干活的子进程误判成超时；
+- **权限**：root + `no-sandbox` 对文件操作是充分权限。**entitlements 与 Info.plist
+  一个字都没改** —— 样本里那两条 `AppDataContainers` / `MobileContainerManager` 是给
+  沙箱内 App 进程读别的容器用的，root 工具进程用不上；
+- **尽力而为**：个别文件正被占用删不掉记进报告的 `errors`，不影响退出码 ——
+  「删掉了绝大部分」是一次成功的清理，报成失败反而诱导反复重试。
+
+### 几个要记住的点
+
+- **应用名称与图标**来自安装容器里各 `.app` 的 `Info.plist` 与 `AppIcon60x60@2x.png`；
+  系统应用不在安装容器里，退回显示 bundle id。**绝不编数据** —— 样本 iOSCleanerPro
+  列表里那段「Safari 150 MB」式的硬编码占位条目是这页的反面教材。
+- **清理没有取消**：子进程在后台把活干完。界面超时只报「没有返回结果」，
+  不提示「失败」却让 root 工具继续删 —— 这两种状态必须分开。
+- **清理完成后自动重扫**：不重扫的话界面上的数字停留在清理前。重扫是只读操作。
+- 扫描显示的系统缓存数字与清理口径**必须一致**（都应用排除名单），否则清完对不上账。
 
 ## 网络唤醒（WOL）
 
@@ -665,5 +723,10 @@ Power / Adapter 两屏的取数层与设计系统移植自
 以及注销发给 SpringBoard 的信号 —— 参考自 [RebootTools](https://github.com/dongchenshuo/RebootTools)
 （作者 dongchenshuo，其致谢「肖博vlog」提供重启核心代码）。RebootTools 的 tipa 里**没有
 LICENSE**（默认保留所有权利），所以这里只沿用了接口层面的事实，没有搬运它的代码或二进制。
+
+存储清理同样是**本仓库自行实现**。目录集合与按应用容器清理的思路参照了对
+iOSCleanerPro 1.0 的分析结果 —— 那是一个无 LICENSE 的第三方样本（脱壳分发包），
+只沿用了「清空固定目录集合 + 按容器清 Library/Caches」这一行为层面的事实，
+没有搬运它的代码或二进制；它列表里硬编码的占位数据也没有照搬。
 
 详见 `LICENSE` 与 `NOTICE`。

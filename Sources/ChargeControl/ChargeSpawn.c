@@ -6,13 +6,15 @@
 //  那套代码已经在 iPhone X / iOS 16.5.1 / TrollStore 上验证过能真正停充，
 //  这里刻意不做「优化」，只做减法（去掉日志、去掉 stdout/stderr 管道）。
 //
-//  文件里有两个入口，共用同一段属性设置（`sysprobe_spawn_root`）：
+//  文件里的入口，共用同一段属性设置（`sysprobe_spawn_root`）：
 //
 //    · `sysprobe_spawn_root_daemon` —— 充电守护进程，**不传参数**；
 //    · `sysprobe_spawn_root_tool` / `_sync` —— 设置页的维护工具（重启设备 / 注销），
-//      **传一个子命令**。
+//      **传一个子命令**；
+//    · `sysprobe_spawn_root_tool_sync_args` —— 存储清理（`clean-scan` / `clean-run`），
+//      子命令之外还能带最多三个参数，且等待预算由调用方给。
 //
-//  两者的 persona 序列逐行相同，改这段时两边一起看。
+//  它们的 persona 序列逐行相同，改这段时几边一起看。
 //
 
 #include "ChargeSpawn.h"
@@ -169,6 +171,73 @@ int sysprobe_spawn_root_tool_sync(const char *toolPath, const char *command, int
         if (reaped < 0) {
             // EINTR 只是这一轮被打断了，不是子进程出了问题 —— 继续等，
             // 否则一次无关的信号就会让自检误报「工具不可用」。
+            if (errno != EINTR) {
+                return errno;
+            }
+        }
+        usleep(10 * 1000);
+    }
+
+    return ETIMEDOUT;
+}
+
+int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
+                                       const char *command,
+                                       const char *arg1,
+                                       const char *arg2,
+                                       const char *arg3,
+                                       int timeoutMs,
+                                       int *exitStatus) {
+    if (toolPath == NULL || toolPath[0] != '/') {
+        return EINVAL;
+    }
+    if (command == NULL || command[0] == '\0') {
+        return EINVAL;
+    }
+    // 空位只允许在尾部：`arg2` 有值而 `arg1` 为空只会把参数传错位，
+    // 那种调用是调用方的 bug，当场拒绝比静默传错好。
+    if ((arg2 != NULL || arg3 != NULL) && arg1 == NULL) {
+        return EINVAL;
+    }
+
+    // `posix_spawn` 返回时已经把 argv 拷进内核，栈数组活不到子进程结束也没关系
+    //（与上面两个入口同一个理由）。为 `NULL` 的参数直接进数组没问题：
+    // `execve` 约定 argv 以 `NULL` 结尾，中间的 `NULL` 会被当成结尾跳过 ——
+    // 而这恰好就是「为空的参数不进 argv」想达到的效果。
+    char *const argv[] = {
+        (char *const)toolPath,
+        (char *const)command,
+        (char *const)arg1,
+        (char *const)arg2,
+        (char *const)arg3,
+        NULL,
+    };
+
+    pid_t pid = -1;
+    int err = sysprobe_spawn_root(toolPath, argv, &pid);
+    if (err != 0) {
+        return err;
+    }
+
+    // 轮询收尸的写法与 `sysprobe_spawn_root_tool_sync` 相同，但预算由调用方给：
+    // 扫描 / 清理是几十秒级的活，秒级预算会把正在干活的子进程误判成超时。
+    // 超时**不杀**子进程 —— 清理没有「取消」的语义，让它把活干完。
+    int budget = timeoutMs > 0 ? timeoutMs : 1000;
+    long attempts = budget / 10;
+    if (attempts < 1) {
+        attempts = 1;
+    }
+    int status = 0;
+    for (long attempt = 0; attempt < attempts; attempt++) {
+        pid_t reaped = waitpid(pid, &status, WNOHANG);
+        if (reaped == pid) {
+            if (exitStatus != NULL) {
+                *exitStatus = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            }
+            return 0;
+        }
+        if (reaped < 0) {
+            // EINTR 只是这一轮被打断了，不是子进程出了问题 —— 继续等。
             if (errno != EINTR) {
                 return errno;
             }

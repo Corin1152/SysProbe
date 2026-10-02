@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// 设置菜单能打开的三页。
+/// 设置菜单能打开的四页。
 ///
 /// 真值在 `AppState.settingsDestination` 上 —— 由 `RootView` 用
 /// `fullScreenCover(item:)` 呈现，见 `SettingsDestinationHost` 里那段说明。
 nonisolated enum SettingsDestination: String, Identifiable {
     case maintenance
     case bands
+    case clean
     case about
 
     var id: String { rawValue }
@@ -56,13 +57,14 @@ struct SettingsDestinationHost: View {
         .environment(\.locale, app.language.locale)
     }
 
-    /// 三页各自决定自己的标题样式（`navigationTitle` / `navigationBarTitleDisplayMode`），
+    /// 四页各自决定自己的标题样式（`navigationTitle` / `navigationBarTitleDisplayMode`），
     /// 这里不统一设 —— 维护页本来就是 `.inline`，别把它改成大标题。
     @ViewBuilder
     private var content: some View {
         switch destination {
         case .maintenance: MaintenanceView()
         case .bands: BandEditorView()
+        case .clean: CleanView()
         case .about: AboutView()
         }
     }

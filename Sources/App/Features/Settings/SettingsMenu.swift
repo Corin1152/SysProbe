@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 右上角的齿轮。**点开就在齿轮下面展开三行菜单**，不再先推一页菜单出来。
+/// 右上角的齿轮。**点开就在齿轮下面展开菜单**，不再先推一页菜单出来。
 ///
-/// 三行各自写一个 `AppState.settingsDestination`，由 `RootView` 用 `fullScreenCover`
-/// 呈现成**覆盖全屏**的一层 —— 底部分页栏被盖住，返回只能走左上角的返回按钮。
+/// 四行（频段被关掉时三行）各自写一个 `AppState.settingsDestination`，由 `RootView`
+/// 用 `fullScreenCover` 呈现成**覆盖全屏**的一层 —— 底部分页栏被盖住，返回只能走
+/// 左上角的返回按钮。
 ///
 /// 之前这里是 `Menu` 装 `NavigationLink`，推进**当前分页**的 `NavigationStack`。
 /// 那样做有两个问题，都是这次改掉的：
@@ -36,6 +37,15 @@ struct SettingsMenu: View {
                 } label: {
                     Label("Bands", systemImage: "antenna.radiowaves.left.and.right")
                 }
+            }
+
+            // 存储清理。与维护并列成页而不是塞进维护页：它有自己的扫描状态与
+            // 一个可能很长的按 App 列表，塞进去会把维护页顶成「先滚过温控和
+            // 重启才能看到清理」—— 两件事各自成页，菜单里各占一行。
+            Button {
+                app.settingsDestination = .clean
+            } label: {
+                Label("Clean", systemImage: "sparkles")
             }
 
             Button {
