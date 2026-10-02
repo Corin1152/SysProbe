@@ -203,6 +203,18 @@ echo "  icon name  : $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundle
 icon_files=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles' "$app_dir/Info.plist" 2>/dev/null | tr -d ' ' | tr '\n' ',' || true)
 echo "  icon files : ${icon_files:--}"
 echo "  icon PNGs  : $(cd "$app_dir" && ls AppIcon*.png 2>/dev/null | tr '\n' ' ' || true)"
+
+# 网络唤醒要的本地网络权限说明。
+#
+# 这一条同样是**静默**失败：Info.plist 里没有 `NSLocalNetworkUsageDescription`，
+# iOS 14 起那个「允许访问本地网络」的弹窗根本弹不出来，`sendto` 直接失败。
+# 而排查时会发现代码、entitlements、魔术包本身全都是对的 —— 症状只是「唤醒没反应」。
+local_network="$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app_dir/Info.plist" 2>/dev/null || true)"
+if [ -z "$local_network" ]; then
+  echo "::error::NSLocalNetworkUsageDescription is missing from Info.plist. Without it the local-network prompt never appears and every Wake-on-LAN send fails with no visible cause." >&2
+  exit 1
+fi
+echo "  local net  : NSLocalNetworkUsageDescription present"
 # 未签名包不该带上构建机的任何路径。`-I` 会跳过二进制文件，而路径恰恰藏在二进制里，
 # 所以这里用 `-a` 把二进制当文本扫。
 if grep -ral "$HOME" "$work" >/dev/null 2>&1; then

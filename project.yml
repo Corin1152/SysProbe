@@ -52,6 +52,12 @@ targets:
       # 拷进包根 —— 它**不能**放进 Sources/：那份源码有自己的 `main()`，被 XcodeGen
       # 编进这个 target 就会和 App 的 main 撞符号，链接直接失败。
       - path: Sources/DeviceControl
+      # 网络唤醒（WOL）：设备模型 / 存储 / 魔术包发送。界面在
+      # `Sources/App/Features/Wake`（跟着 `Sources/App` 一起进来了）。
+      #
+      # 单独一层而不是塞进 DeviceControl：那层是基带与系统维护，这一层是局域网发包，
+      # 混在一起只会让两边都难找。
+      - path: Sources/WakeControl
       # 守护进程托管的网页界面。
       #
       # **必须是 `type: folder`（蓝色文件夹引用）**，不能让它当普通资源被展平：
@@ -69,8 +75,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.14"
-        CURRENT_PROJECT_VERSION: "14"
+        MARKETING_VERSION: "0.0.15"
+        CURRENT_PROJECT_VERSION: "15"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -87,6 +93,10 @@ targets:
         # 本身已经是一份完整的启动屏定义。
         INFOPLIST_FILE: Support/SysProbe-Info.plist
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # 本地网络权限说明。iOS 14 起，往局域网发包（网络唤醒走的正是这条路）会触发
+        # 「允许访问本地网络」弹窗，**没有这一句就弹不出来** —— 而且不会有任何报错，
+        # 表现就是 `sendto` 直接失败。键名不能拼错，拼错等于没写。
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: SysProbe needs access to the local network to send Wake-on-LAN packets to your computers.
         # 图标来自 Sources/App/Assets.xcassets，由 scripts/make-appicon.py 生成。
         # 不设这一项，actool 会编译整个 catalog 但不会把图标写进 Info.plist 的
         # CFBundleIcons —— 装上去就是个白方块，而且构建不会报任何错。
@@ -128,8 +138,8 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.14"
-        CURRENT_PROJECT_VERSION: "14"
+        MARKETING_VERSION: "0.0.15"
+        CURRENT_PROJECT_VERSION: "15"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

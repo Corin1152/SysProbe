@@ -60,6 +60,8 @@ struct MaintenanceView: View {
 
                 performanceSection
 
+                WakeSection()
+
                 Section {
                     Picker("Language", selection: $app.language) {
                         // 语言名一律用该语言自己的写法，且不参与翻译 —— 把「简体中文」

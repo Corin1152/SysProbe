@@ -240,6 +240,57 @@ entitlement**。
 所以 `scripts/build-ipa.sh` 在构建期逐个卡住 `thermal-status` / `thermal-disable` /
 `thermal-enable` 三个子命令是否真的编进了二进制。
 
+## 网络唤醒（WOL）
+
+设置菜单 →「维护」→「网络唤醒」。给局域网里关着机的电脑发魔术包（Magic Packet）。
+
+- 设备列表：名称 + MAC（必填）+ IP（可选）；
+- 手动添加 / 编辑 / 删除（编辑与删除在行上左滑）；
+- 每行右侧的电源图标就是「唤醒」。
+
+### 为什么 MAC 是必填，IP 只是可选
+
+魔术包的载荷里装的是 **MAC 地址**（0xFF×6 + MAC 重复 16 次，共 102 字节）。目标机器
+关机时它的 IP 协议栈是不工作的：网卡只留一小块电路在监听链路层帧，比对的是
+「这个帧里有没有我自己的 MAC」。
+
+所以**只知道 IP 叫不醒它** —— 除非路由器上配了静态 ARP 绑定加端口转发。
+`WakeDevice` 因此把 MAC 当作必需项，缺了就禁用唤醒按钮，而不是等点了再报错。
+
+IP 那一栏的用途是**指定往哪儿发**，留空就用本机网段的广播地址。
+
+### iOS 上真正的坑：不能用 `255.255.255.255`
+
+这一条值得单独写，因为它会让「代码看起来完全正确」却就是不工作：
+
+| 目标地址 | iOS 14.5 起 |
+|---|---|
+| `255.255.255.255`（本地广播） | ❌ `sendto` 返回 -1，`EHOSTUNREACH`（No route to host），抓包也没发出去 |
+| `a.b.c.255`（**定向广播**） | ✅ 能发出去 |
+| 单播地址 | ✅ 能发出去 |
+
+所以 `WakeService` 是**先取本机 IPv4（`getifaddrs`），再把最后一段换成 255**，
+而不是写死一个 `255.255.255.255`。发送顺序是：定向广播 → 用户填的地址 →
+`255.255.255.255` 兜底；只要有一个发出去就算成功（`WakeResult.ok`）。
+
+另外两件必须配好的：
+
+- `NSLocalNetworkUsageDescription`（`project.yml` 里的 `INFOPLIST_KEY_`）——
+  iOS 14 起访问本地网络要它，缺了那个「允许访问本地网络」的弹窗**根本不弹**，
+  `sendto` 直接失败。构建脚本会卡住这一条；
+- `com.apple.developer.networking.multicast`（`Support/SysProbe.entitlements`）——
+  只影响 `255.255.255.255` 那条兜底路径，主路径用不到，**缺了功能也不会坏**。
+
+## 设置页是全屏覆盖的
+
+齿轮里那三页（维护 / 频段 / 关于）由 `RootView` 用 `fullScreenCover` 呈现，
+**盖住整个窗口**——包括底部分页栏。返回只有左上角那个按钮。
+
+之所以不能用 `NavigationLink`：齿轮挂在 `PageScaffold` 里，那是**每个分页各自**
+的 `NavigationStack`，而 `TabView` 在它外面。push 进去的子页盖不住底部分页栏，
+栏还在却点了不跳转（选中态属于外层 `TabView`，屏幕上却是内层栈的视图）。
+详见 `Sources/App/Features/Settings/SettingsDestination.swift`。
+
 ## 频段设置
 
 设置菜单 →「频段设置」。读写基带允许使用的频段，按 SIM 卡槽分开。

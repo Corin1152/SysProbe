@@ -158,5 +158,19 @@
 	<true/>
 	<key>com.apple.springboard.accessibility-window-hosting</key>
 	<true/>
+
+	<!-- ── 网络唤醒（WOL）：往局域网发 UDP 广播 ───────────────────────────── -->
+	<!--
+	  这一条是为「网络唤醒」加的。
+
+	  iOS 14 起，往广播地址发 UDP 有一部分路径被门起来了 —— 常态下这条权限要向
+	  Apple 申请，普通 App 拿不到；本包是靠 TrollStore 保留 entitlements 才带得上的。
+
+	  它的作用只在**兜底**：`WakeService` 的主路径是「本机网段的定向广播」
+	  （`a.b.c.255`），那条路不需要这条权限 —— iOS 14.5 之后 `255.255.255.255`
+	  才是发不出去的那个。所以**缺了这条功能也不会坏**，只是少一条退路。
+	-->
+	<key>com.apple.developer.networking.multicast</key>
+	<true/>
 </dict>
 </plist>

@@ -31,6 +31,16 @@ struct RootView: View {
                         .allowsHitTesting(false)
                 )
         }
+        // 设置子页：**盖住整个窗口**（含底部分页栏），而不是推进某个分页内部的栈。
+        //
+        // 挂在这里（树根）而不是 `tabs` 上，还有第二层原因：语言切换会按 `.id` 重建
+        // 整棵分页树，挂在分页里的呈现会随之被关掉 —— 那个症状是「设置页自己消失了」。
+        // 关掉的唯一途径是左上角那个返回按钮（见 `SettingsDestinationHost`）。
+        .fullScreenCover(item: $app.settingsDestination) { destination in
+            SettingsDestinationHost(destination: destination) {
+                app.settingsDestination = nil
+            }
+        }
     }
 
     /// 语言一变，整棵分页树换 identity。

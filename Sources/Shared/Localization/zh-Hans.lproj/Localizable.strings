@@ -313,3 +313,19 @@
 "Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart." = "停掉 thermalmonitord 守护进程，让 iOS 不再因发热而压低 CPU 频率。需要重启才能生效。";
 "Could not change the thermal setting." = "修改温控设置失败。";
 "Turn Off" = "关闭温控";
+
+/* 网络唤醒（WOL）+ 设置子页全屏后的返回按钮（2026-10-02） */
+"Back" = "返回";
+"Wake on LAN" = "网络唤醒";
+"Add Device" = "添加设备";
+"Edit Device" = "编辑设备";
+"Edit" = "编辑";
+"Delete" = "删除";
+"MAC Address" = "MAC 地址";
+"IP Address" = "IP 地址";
+"No devices yet." = "还没有设备。";
+"Untitled" = "未命名";
+"Magic packet sent." = "已发送魔术包。";
+"Could not send the magic packet." = "魔术包发送失败。";
+"A magic packet is sent to this network's broadcast address. The target machine needs Wake on LAN enabled in its firmware, and this phone needs to be on the same Wi-Fi." = "魔术包会发往本网络的广播地址。目标机器需要在固件里开启网络唤醒，且这台手机要连在同一个 Wi-Fi 上。";
+"Waking needs the MAC address. The IP is optional — leave it empty to send to this network's broadcast address." = "唤醒需要 MAC 地址。IP 可选 —— 留空则发往本网络的广播地址。";

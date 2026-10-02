@@ -313,3 +313,19 @@
 "Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart." = "Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart.";
 "Could not change the thermal setting." = "Could not change the thermal setting.";
 "Turn Off" = "Turn Off";
+
+/* Wake on LAN + the back button on full-screen settings pages (2026-10-02) */
+"Back" = "Back";
+"Wake on LAN" = "Wake on LAN";
+"Add Device" = "Add Device";
+"Edit Device" = "Edit Device";
+"Edit" = "Edit";
+"Delete" = "Delete";
+"MAC Address" = "MAC Address";
+"IP Address" = "IP Address";
+"No devices yet." = "No devices yet.";
+"Untitled" = "Untitled";
+"Magic packet sent." = "Magic packet sent.";
+"Could not send the magic packet." = "Could not send the magic packet.";
+"A magic packet is sent to this network's broadcast address. The target machine needs Wake on LAN enabled in its firmware, and this phone needs to be on the same Wi-Fi." = "A magic packet is sent to this network's broadcast address. The target machine needs Wake on LAN enabled in its firmware, and this phone needs to be on the same Wi-Fi.";
+"Waking needs the MAC address. The IP is optional — leave it empty to send to this network's broadcast address." = "Waking needs the MAC address. The IP is optional — leave it empty to send to this network's broadcast address.";

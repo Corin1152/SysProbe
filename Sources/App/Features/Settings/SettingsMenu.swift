@@ -2,14 +2,19 @@ import SwiftUI
 
 /// 右上角的齿轮。**点开就在齿轮下面展开三行菜单**，不再先推一页菜单出来。
 ///
-/// 用 `Menu` 装 `NavigationLink`：`Menu` 自己负责「在齿轮下展开」这个呈现，而里面的
-/// `NavigationLink` 会推进**当前分页**的 `NavigationStack` —— 四个分页各自有一个栈，
-/// 所以从哪一页进的、返回到哪一页，都是对的。
+/// 三行各自写一个 `AppState.settingsDestination`，由 `RootView` 用 `fullScreenCover`
+/// 呈现成**覆盖全屏**的一层 —— 底部分页栏被盖住，返回只能走左上角的返回按钮。
 ///
-/// 之前是「齿轮 → 设置面板（sheet）→ 三行菜单 → 再推一页」，三层才到内容；现在一层。
-/// 顺带去掉的还有那个 sheet 带来的一堆约束：面板挂在分页里会在语言切换重建分页时被
-/// 一起关掉，所以原来必须把它提到树根上（`RootView`）—— 现在没有 sheet 了。
+/// 之前这里是 `Menu` 装 `NavigationLink`，推进**当前分页**的 `NavigationStack`。
+/// 那样做有两个问题，都是这次改掉的：
+///
+///   1. `TabView` 在那层栈的**外面**，所以推出来的子页盖不住底部分页栏 —— 栏还在；
+///   2. 而那个栏点了不跳转：选中态属于外层 `TabView`，屏幕上却是内层栈的视图。
+///
+/// 见 `SettingsDestinationHost` 类型头上的完整说明。
 struct SettingsMenu: View {
+    @EnvironmentObject private var app: AppState
+
     /// 「频段」那一行是否显示。默认显示。
     ///
     /// 频段写错会导致无服务，所以那一页里留了一个关掉入口的开关。关掉之后菜单只剩
@@ -19,22 +24,22 @@ struct SettingsMenu: View {
 
     var body: some View {
         Menu {
-            NavigationLink {
-                MaintenanceView()
+            Button {
+                app.settingsDestination = .maintenance
             } label: {
                 Label("Maintenance", systemImage: "wrench.and.screwdriver")
             }
 
             if showBandEditor {
-                NavigationLink {
-                    BandEditorView()
+                Button {
+                    app.settingsDestination = .bands
                 } label: {
                     Label("Bands", systemImage: "antenna.radiowaves.left.and.right")
                 }
             }
 
-            NavigationLink {
-                AboutView()
+            Button {
+                app.settingsDestination = .about
             } label: {
                 Label("About", systemImage: "info.circle")
             }
