@@ -361,3 +361,4 @@
 "Could not run the cleaner." = "清理未能执行。";
 "The root tool did not return a result. Check the Root tool line on the About page." = "维护工具没有返回结果。请到「关于」页查看「维护工具」一行。";
 "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced." = "存储清理由本仓库自行实现。目录集合与按应用容器清理的思路参照了对 iOSCleanerPro 1.0（一个未授权的第三方样本）的分析结果，未复用其任何代码；它内置的占位应用列表也刻意没有照搬。";
+"Root tool diagnostics" = "维护工具诊断";

@@ -361,3 +361,4 @@
 "Could not run the cleaner." = "Could not run the cleaner.";
 "The root tool did not return a result. Check the Root tool line on the About page." = "The root tool did not return a result. Check the Root tool line on the About page.";
 "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced." = "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced.";
+"Root tool diagnostics" = "Root tool diagnostics";

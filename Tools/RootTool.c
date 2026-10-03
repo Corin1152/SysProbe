@@ -884,14 +884,22 @@ static clean_name_entry *clean_find_name(clean_name_entry *head, const char *bun
 
 /// 遍历安装容器，收集 bundle id → 显示名 / .app 路径。
 /// 系统应用（/Applications 下的）不在安装容器里，它们退回显示 bundle id。
-static clean_name_entry *clean_collect_names(int *countOut) {
+static clean_name_entry *clean_collect_names(int *countOut, clean_app_diagnostics *diag) {
     clean_name_entry *head = NULL;
     int count = 0;
 
     DIR *dir = opendir(CLEAN_BUNDLE_CONTAINERS);
     if (dir == NULL) {
+        if (diag != NULL) {
+            diag->bundleOpened = 0;
+            diag->bundleErrno = errno;
+        }
         *countOut = 0;
         return NULL;
+    }
+    if (diag != NULL) {
+        diag->bundleOpened = 1;
+        diag->bundleErrno = 0;
     }
 
     struct dirent *entry;
@@ -966,6 +974,9 @@ static clean_name_entry *clean_collect_names(int *countOut) {
     }
     closedir(dir);
 
+    if (diag != NULL) {
+        diag->nameEntries = count;
+    }
     *countOut = count;
     return head;
 }
@@ -977,6 +988,34 @@ static void clean_free_names(clean_name_entry *head) {
         head = next;
     }
 }
+
+/// `clean-scan` 的逐项计数，随报告一起回传，用来定位「应用缓存恒为 0」这类问题。
+///
+/// 2026-10-03 加：真机上原版 iOSCleanerPro 扫到 1.28 GB 应用缓存，本工具扫到 0，
+/// 而单看报告分不清是「容器目录打不开」「MCM 元数据读不出」还是「Caches 真是空的」
+/// —— 三种情况的界面表现完全一样。所以把中间每一步的计数都带回来。
+typedef struct {
+    /// 数据容器根能否打开；打不开时 `dataErrno` 是 errno。
+    int dataOpened;
+    int dataErrno;
+    /// `opendir` 失败时再 `stat` 一次，区分「路径不存在」与「权限不足」。
+    int dataStatOk;
+    /// 枚举到的条目数 / 其中确认是目录的。
+    int dataEntries;
+    int dataDirs;
+    /// MCM 元数据读取成功 / 失败数。
+    int mcmOk;
+    int mcmFailed;
+    /// 第一个读失败的容器及其原因（`access` 探测：文件不存在 / 存在但解析失败）。
+    char firstMcmFail[320];
+    /// `Library/Caches` 实测非零 / 为零（含不存在）的容器数。
+    int cachesNonEmpty;
+    int cachesEmpty;
+    /// 安装容器根能否打开，以及收集到的 bundle 条目数。
+    int bundleOpened;
+    int bundleErrno;
+    int nameEntries;
+} clean_app_diagnostics;
 
 /// 按 bundle id 聚合后的应用缓存条目。
 typedef struct {
@@ -1001,18 +1040,34 @@ static int clean_app_compare(const void *lhs, const void *rhs) {
 
 /// 遍历数据容器，按 bundle id 聚合每个应用的 `Library/Caches` 大小。
 /// 缓存为 0 的应用不进列表：列表只包含实测出东西的条目。
-static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, int maxApps) {
+static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, int maxApps,
+                              clean_app_diagnostics *diag) {
     int count = 0;
 
     DIR *dir = opendir(CLEAN_DATA_CONTAINERS);
     if (dir == NULL) {
+        if (diag != NULL) {
+            diag->dataOpened = 0;
+            diag->dataErrno = errno;
+            // 再 stat 一次：区分「路径不存在」与「存在但没权限列目录」。
+            struct stat dst;
+            diag->dataStatOk = (stat(CLEAN_DATA_CONTAINERS, &dst) == 0) ? 1 : 0;
+        }
         return 0;
+    }
+    if (diag != NULL) {
+        diag->dataOpened = 1;
+        diag->dataErrno = 0;
+        diag->dataStatOk = 1;
     }
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL && count < maxApps) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
+        }
+        if (diag != NULL) {
+            diag->dataEntries++;
         }
         char container[CLEAN_PATH_MAX];
         int n = snprintf(container, sizeof(container), "%s/%s", CLEAN_DATA_CONTAINERS, entry->d_name);
@@ -1023,9 +1078,29 @@ static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, in
         if (lstat(container, &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
         }
+        if (diag != NULL) {
+            diag->dataDirs++;
+        }
         char bundle[192];
         if (!clean_read_mcm_identifier(container, bundle, sizeof(bundle))) {
+            if (diag != NULL) {
+                diag->mcmFailed++;
+                // 第一个失败样本单独留下，并探测原因 —— 这决定了下一步该往哪儿查。
+                if (diag->firstMcmFail[0] == '\0') {
+                    char meta[CLEAN_PATH_MAX];
+                    int k = snprintf(meta, sizeof(meta), "%s/%s", container, CLEAN_MCM_PLIST);
+                    const char *why = "path too long";
+                    if (k > 0 && k < (int)sizeof(meta)) {
+                        why = (access(meta, F_OK) == 0) ? "metadata exists but not readable/parseable"
+                                                        : "metadata file missing";
+                    }
+                    snprintf(diag->firstMcmFail, sizeof(diag->firstMcmFail), "%s (%s)", container, why);
+                }
+            }
             continue;
+        }
+        if (diag != NULL) {
+            diag->mcmOk++;
         }
         char caches[CLEAN_PATH_MAX];
         int m = snprintf(caches, sizeof(caches), "%s/Library/Caches", container);
@@ -1034,7 +1109,13 @@ static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, in
         }
         uint64_t bytes = clean_measure(caches, 0);
         if (bytes == 0) {
+            if (diag != NULL) {
+                diag->cachesEmpty++;
+            }
             continue;
+        }
+        if (diag != NULL) {
+            diag->cachesNonEmpty++;
         }
 
         // 按 bundle id 聚合：同一应用的多个数据容器并成一条，容器路径记到上限为止。
@@ -1109,9 +1190,19 @@ static void clean_json_category(FILE *f, const char *name, uint64_t bytes) {
 
 /// 报告写完必须 `chmod 0644`：文件是 root 建的，默认权限下 App（mobile）读不到，
 /// 而那不会报错 —— App 只是拿到一份解析失败的报告，看起来像「扫描坏了」。
+/// 往诊断数组里追加一行（自动处理逗号）。
+static void clean_json_diag(FILE *f, int *first, const char *line) {
+    if (!*first) {
+        fputc(',', f);
+    }
+    *first = 0;
+    clean_json_string(f, line);
+}
+
 static int clean_write_scan_report(const char *path,
                                    uint64_t system, uint64_t logs, uint64_t temp,
-                                   const clean_app_entry *apps, int appCount) {
+                                   const clean_app_entry *apps, int appCount,
+                                   const clean_app_diagnostics *diag) {
     FILE *f = fopen(path, "w");
     if (f == NULL) {
         return -1;
@@ -1137,6 +1228,47 @@ static int clean_write_scan_report(const char *path,
         fputs(",\"bundlePath\":", f);
         clean_json_string(f, apps[i].bundlePath);
         fprintf(f, ",\"bytes\":%llu}", (unsigned long long)apps[i].bytes);
+    }
+    fputs("],\"diagnostics\":[", f);
+
+    // 诊断是**给人看的**：App 侧原样显示、不解析。每一行都回答「卡在哪一步」——
+    // 2026-10-03 加，起因是应用缓存恒为 0，而三种失败原因在界面上长得一模一样。
+    if (diag != NULL) {
+        int first = 1;
+        char line[640];
+
+        if (diag->dataOpened) {
+            snprintf(line, sizeof(line), "data containers: opendir OK - %d entries, %d dirs",
+                     diag->dataEntries, diag->dataDirs);
+        } else {
+            snprintf(line, sizeof(line),
+                     "data containers: opendir FAILED errno=%d (%s), stat=%s",
+                     diag->dataErrno, strerror(diag->dataErrno),
+                     diag->dataStatOk ? "OK - exists but not listable" : "also failed");
+        }
+        clean_json_diag(f, &first, line);
+
+        snprintf(line, sizeof(line), "MCM identifier: %d ok, %d failed",
+                 diag->mcmOk, diag->mcmFailed);
+        clean_json_diag(f, &first, line);
+
+        if (diag->firstMcmFail[0] != '\0') {
+            snprintf(line, sizeof(line), "first MCM failure: %s", diag->firstMcmFail);
+            clean_json_diag(f, &first, line);
+        }
+
+        snprintf(line, sizeof(line), "Library/Caches: %d non-empty, %d empty or missing",
+                 diag->cachesNonEmpty, diag->cachesEmpty);
+        clean_json_diag(f, &first, line);
+
+        if (diag->bundleOpened) {
+            snprintf(line, sizeof(line), "bundle containers: opendir OK - %d names",
+                     diag->nameEntries);
+        } else {
+            snprintf(line, sizeof(line), "bundle containers: opendir FAILED errno=%d (%s)",
+                     diag->bundleErrno, strerror(diag->bundleErrno));
+        }
+        clean_json_diag(f, &first, line);
     }
     fputs("]}", f);
 
@@ -1181,8 +1313,12 @@ static int do_clean_scan(const char *reportPath) {
     uint64_t logs = clean_measure(CLEAN_LOGS_DIR_1, 0) + clean_measure(CLEAN_LOGS_DIR_2, 0);
     uint64_t temp = clean_measure(CLEAN_TEMP_DIR, 0);
 
+    // 诊断计数。栈上分配（约 350 字节），随报告一起回传。
+    clean_app_diagnostics diag;
+    memset(&diag, 0, sizeof(diag));
+
     int nameCount = 0;
-    clean_name_entry *names = clean_collect_names(&nameCount);
+    clean_name_entry *names = clean_collect_names(&nameCount, &diag);
 
     // 一块连续的表（最多 512 × 约 2.4 KB）一次性 malloc；进程马上就退出，
     // 失败路径里唯一要紧的是别把报告写出来。
@@ -1191,10 +1327,10 @@ static int do_clean_scan(const char *reportPath) {
         clean_free_names(names);
         return SYSPROBE_EXIT_FAILED;
     }
-    int appCount = clean_collect_apps(names, apps, CLEAN_MAX_APPS);
+    int appCount = clean_collect_apps(names, apps, CLEAN_MAX_APPS, &diag);
     qsort(apps, (size_t)appCount, sizeof(apps[0]), clean_app_compare);
 
-    int status = clean_write_scan_report(reportPath, system, logs, temp, apps, appCount) == 0
+    int status = clean_write_scan_report(reportPath, system, logs, temp, apps, appCount, &diag) == 0
                      ? SYSPROBE_EXIT_OK
                      : SYSPROBE_EXIT_FAILED;
 

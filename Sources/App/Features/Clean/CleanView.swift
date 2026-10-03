@@ -247,7 +247,23 @@ struct CleanView: View {
         } header: {
             Text("App caches")
         } footer: {
-            Text("Only apps whose cache could actually be measured are listed. Names and icons come from the app bundles; when they cannot be read, the bundle identifier is shown.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Only apps whose cache could actually be measured are listed. Names and icons come from the app bundles; when they cannot be read, the bundle identifier is shown.")
+                // 一个应用缓存都没实测到时，把工具回传的诊断行摊开。三种失败原因
+                // （容器目录打不开 / MCM 元数据读不出 / Caches 真是空的）在界面上
+                // 长得一模一样，不给这几行就只能靠猜。正常扫到东西时不显示。
+                if let scan, scan.apps.isEmpty, !scan.diagnostics.isEmpty {
+                    Text("Root tool diagnostics")
+                        .font(AppFont.text(13, weight: .semibold))
+                        .padding(.top, 4)
+                    ForEach(scan.diagnostics, id: \.self) { line in
+                        Text(verbatim: line)
+                            .font(AppFont.mono(11))
+                            .foregroundStyle(Color.mwMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
     }
 

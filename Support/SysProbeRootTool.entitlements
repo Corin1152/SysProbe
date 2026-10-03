@@ -65,5 +65,37 @@
 	-->
 	<key>com.apple.private.security.no-sandbox</key>
 	<true/>
+
+	<!-- ── 容器：存储清理要读别的 App 的数据容器 ─────────────────────────── -->
+
+	<!--
+	  这两条是 2026-10-03 补上的，原因是一次真机对照实验：
+
+	    同一台设备上，原版 iOSCleanerPro 1.0 扫到应用缓存 1.28 GB，
+	    本工具扫到 **0**（界面显示「没有实测到任何应用缓存」）。
+
+	  差的就是这两条。原版二进制里提取到了它们，而它读容器的写法与本工具**完全一样**
+	  —— 直接遍历 `/var/mobile/Containers/Data/Application`、读每个容器根的
+	  `.com.apple.mobile_container_manager.metadata.plist` 取 `MCMMetadataIdentifier`
+	  （它没有链接 MobileContainerManager 框架，也没有 MCMContainer 之类的类符号，
+	  说明它靠的不是私有 API 而是这条 entitlement）。
+
+	  **`no-sandbox` 不够，这一点当初判断错了。** 当时（移植评估）的理由是
+	  「root + no-sandbox 对文件系统操作是充分权限，样本那两条是给沙箱内的 App 进程
+	  读别的容器用的」—— 实测证伪：本工具读 `/var/mobile/Library/Caches` 正常
+	  （能扫出 192.4 MB），唯独 `/var/mobile/Containers/Data/Application/<UUID>`
+	  进不去。也就是说 iOS 对容器路径另有一层规则，`no-sandbox` 不覆盖它。
+
+	  旁证：主 App 那份（`Support/SysProbe.entitlements`）一直带着这两条，
+	  是 `8150c1f` 移植充电守护进程时加的。但清理扫描跑在本工具进程里，
+	  主 App 有权限也救不了。
+
+	  两条都属于「放宽」，与上面 `no-container` / `no-sandbox` 同一性质；
+	  本工具本来就已经是 root + 脱沙箱，加它们不扩大攻击面。
+	-->
+	<key>com.apple.private.security.storage.AppDataContainers</key>
+	<true/>
+	<key>com.apple.private.MobileContainerManager.allowed</key>
+	<true/>
 </dict>
 </plist>

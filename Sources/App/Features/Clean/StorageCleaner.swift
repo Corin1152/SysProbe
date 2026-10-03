@@ -26,6 +26,12 @@ nonisolated struct StorageScanReport: Codable {
 
     let categories: [String: Category]
     let apps: [AppEntry]
+    /// 工具回传的逐项计数（已经是人读的字符串，App 原样显示、不解析）。
+    ///
+    /// 可选：工具版本比 App 旧时没有这个键，缺了不该让整次扫描判成失败。
+    /// 2026-10-03 加 —— 应用缓存恒为 0 时，「容器目录打不开」「MCM 元数据读不出」
+    /// 「Caches 真是空的」三种情况在界面上完全一样，靠这几行才能分开。
+    let diagnostics: [String]?
 }
 
 /// 清理报告（`clean-run` 写出的 JSON）。
@@ -79,6 +85,9 @@ nonisolated struct StorageScanResult {
     var totalBytes: Int64 {
         systemBytes + logsBytes + tempBytes + apps.reduce(0) { $0 + $1.bytes }
     }
+
+    /// 工具回传的诊断行，原样显示。空数组 = 工具没给（旧版本工具）。
+    let diagnostics: [String]
 }
 
 /// 一次清理的结果。
@@ -145,7 +154,8 @@ nonisolated enum StorageCleaner {
                                                       name: entry.name,
                                                       bundlePath: bundlePath,
                                                       bytes: entry.bytes)
-                }
+                },
+            diagnostics: report.diagnostics ?? []
         )
     }
 
