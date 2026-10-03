@@ -862,6 +862,37 @@ static int clean_read_mcm_identifier(const char *containerDir, char *out, size_t
     return clean_plist_string(path, CLEAN_MCM_KEY, out, outSize);
 }
 
+/// `clean-scan` 的逐项计数，随报告一起回传，用来定位「应用缓存恒为 0」这类问题。
+///
+/// 2026-10-03 加：真机上原版 iOSCleanerPro 扫到 1.28 GB 应用缓存，本工具扫到 0，
+/// 而单看报告分不清是「容器目录打不开」「MCM 元数据读不出」还是「Caches 真是空的」
+/// —— 三种情况的界面表现完全一样。所以把中间每一步的计数都带回来。
+///
+/// **定义必须排在 `clean_collect_names` / `clean_collect_apps` 之前**：C 的类型名
+/// 要先声明后使用，放到它们后面会得到 `error: unknown type name`（第一版就是这么挂的）。
+typedef struct {
+    /// 数据容器根能否打开；打不开时 `dataErrno` 是 errno。
+    int dataOpened;
+    int dataErrno;
+    /// `opendir` 失败时再 `stat` 一次，区分「路径不存在」与「权限不足」。
+    int dataStatOk;
+    /// 枚举到的条目数 / 其中确认是目录的。
+    int dataEntries;
+    int dataDirs;
+    /// MCM 元数据读取成功 / 失败数。
+    int mcmOk;
+    int mcmFailed;
+    /// 第一个读失败的容器及其原因（`access` 探测：文件不存在 / 存在但解析失败）。
+    char firstMcmFail[320];
+    /// `Library/Caches` 实测非零 / 为零（含不存在）的容器数。
+    int cachesNonEmpty;
+    int cachesEmpty;
+    /// 安装容器根能否打开，以及收集到的 bundle 条目数。
+    int bundleOpened;
+    int bundleErrno;
+    int nameEntries;
+} clean_app_diagnostics;
+
 /// bundle id → 显示名 / 安装路径 的映射节点。链表足够 —— 最多几百条，
 /// 查找是 O(n) 的 `strcmp`，总量可以忽略。
 typedef struct clean_name_entry {
@@ -988,34 +1019,6 @@ static void clean_free_names(clean_name_entry *head) {
         head = next;
     }
 }
-
-/// `clean-scan` 的逐项计数，随报告一起回传，用来定位「应用缓存恒为 0」这类问题。
-///
-/// 2026-10-03 加：真机上原版 iOSCleanerPro 扫到 1.28 GB 应用缓存，本工具扫到 0，
-/// 而单看报告分不清是「容器目录打不开」「MCM 元数据读不出」还是「Caches 真是空的」
-/// —— 三种情况的界面表现完全一样。所以把中间每一步的计数都带回来。
-typedef struct {
-    /// 数据容器根能否打开；打不开时 `dataErrno` 是 errno。
-    int dataOpened;
-    int dataErrno;
-    /// `opendir` 失败时再 `stat` 一次，区分「路径不存在」与「权限不足」。
-    int dataStatOk;
-    /// 枚举到的条目数 / 其中确认是目录的。
-    int dataEntries;
-    int dataDirs;
-    /// MCM 元数据读取成功 / 失败数。
-    int mcmOk;
-    int mcmFailed;
-    /// 第一个读失败的容器及其原因（`access` 探测：文件不存在 / 存在但解析失败）。
-    char firstMcmFail[320];
-    /// `Library/Caches` 实测非零 / 为零（含不存在）的容器数。
-    int cachesNonEmpty;
-    int cachesEmpty;
-    /// 安装容器根能否打开，以及收集到的 bundle 条目数。
-    int bundleOpened;
-    int bundleErrno;
-    int nameEntries;
-} clean_app_diagnostics;
 
 /// 按 bundle id 聚合后的应用缓存条目。
 typedef struct {
