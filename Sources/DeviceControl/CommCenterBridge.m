@@ -85,10 +85,15 @@ static id commCenterClient(void)
     return gClient;
 }
 
-/// `CTXPCServiceSubscriptionContext`，用 `-initWithSlot:` 造。
+/// `CTXPCServiceSubscriptionContext`。
 ///
-/// 注意这个类虽然叫 Context，但频段读写要的就是它 —— 上游也是直接
-/// `CTXPCServiceSubscriptionContext(slot:)`。
+/// **优先用「完整版」context**：`-getSubscriptionInfoWithError:` 回来的订阅列表里
+/// 按 `slotID` 匹配一个；拿不到才退回 `-initWithSlot:` 造的简化 context。
+///
+/// 上游 CellularInfo 的取法是 `fullyContext ?? context`，并在注释里写明
+/// `initWithSlot:` 造出来的「内部信息不全」。第一版这里只用了简化版，真机表现是
+/// **能读、但保存不生效** —— 读走的是 slot 就够用的那条路，写要精确定位订阅，
+/// 简化 context 缺 uuid 等字段就定位不到。改这段时别把完整版那条去掉。
 static id subscriptionContext(int slot)
 {
     Class contextClass = NSClassFromString(@"CTXPCServiceSubscriptionContext");
@@ -96,6 +101,33 @@ static id subscriptionContext(int slot)
         return nil;
     }
 
+    // 完整版。方法名是 `getSubscriptionInfoWithError:`（Swift 侧写作
+    // `try getSubscriptionInfo()`，`WithError:` 后缀被 importer 吃掉了）。
+    id client = commCenterClient();
+    if (client != nil) {
+        SEL infoSel = NSSelectorFromString(@"getSubscriptionInfoWithError:");
+        if ([client respondsToSelector:infoSel]) {
+            @try {
+                id (*send)(id, SEL, NSError **) = (id (*)(id, SEL, NSError **))objc_msgSend;
+                NSError *error = nil;
+                id info = send(client, infoSel, &error);
+                id subs = [info valueForKey:@"subscriptions"];
+                if ([subs isKindOfClass:[NSArray class]]) {
+                    for (id sub in (NSArray *)subs) {
+                        // slotID 在头文件里是 long long，KVC 取出来是 NSNumber。
+                        NSNumber *slotID = [sub valueForKey:@"slotID"];
+                        if ([slotID isKindOfClass:[NSNumber class]] && slotID.intValue == slot) {
+                            return sub;
+                        }
+                    }
+                }
+            } @catch (NSException *e) {
+                // 落到下面的兜底。
+            }
+        }
+    }
+
+    // 兜底：只有 slot 字段的简化 context。读还能用，写大概率不行。
     @try {
         id allocated = [contextClass alloc];
         SEL sel = NSSelectorFromString(@"initWithSlot:");
@@ -238,7 +270,23 @@ static BOOL writeBands(int slot, NSDictionary *activeBands, BOOL useSupported)
                 // 深拷一份：直接把手里的对象塞回去，等于把 active 和 supported 变成同一个引用。
                 [bandInfo setValue:[supported mutableCopy] forKey:@"fActiveBands"];
             } else {
-                NSMutableDictionary *updated = [NSMutableDictionary dictionary];
+                // **从原对象的 `fActiveBands` 起手再覆盖，不是新建一个空字典。**
+                //
+                // 传进来的 `activeBands` 只含 `supported` 里出现过的制式（见
+                // `BandSet.payload`）。直接拿它替换整个 `fActiveBands`，会把原集合里
+                // 那些「界面上不认识、或不在 supported 里」的键**整个删掉** ——
+                // 上游 CellularInfo 特意用 `mutableCopy` 起手就是为了避开这一点
+                // （它的注释：这样 UI 不认识的 RAT 或 SupportedBands 中不存在的内容
+                // 才不会被意外删除）。这里第一版写反了，真机表现是**保存不生效**。
+                NSMutableDictionary *updated = nil;
+                @try {
+                    id existing = [bandInfo valueForKey:@"fActiveBands"];
+                    updated = [existing isKindOfClass:[NSDictionary class]]
+                        ? [(NSDictionary *)existing mutableCopy]
+                        : [NSMutableDictionary dictionary];
+                } @catch (NSException *e) {
+                    updated = [NSMutableDictionary dictionary];
+                }
                 for (id key in activeBands) {
                     id value = activeBands[key];
                     if ([key isKindOfClass:[NSString class]] && [value isKindOfClass:[NSArray class]]) {
@@ -431,9 +479,42 @@ BOOL sysprobe_slot_has_sim(int slot)
     }
 }
 
-NSDictionary * _Nullable sysprobe_slot_info(int slot)
+int sysprobe_preferred_data_slot(void)
 {
     @autoreleasepool {
+        id client = commCenterClient();
+        if (client == nil) {
+            return -1;
+        }
+        // -(CTXPCServiceSubscriptionContext *)getPreferredDataSubscriptionContextSync:(NSError **)error;
+        // 上游注释：「获取的 context 信息是全的」。返回 -1 让调用方自己退回首卡槽。
+        SEL sel = NSSelectorFromString(@"getPreferredDataSubscriptionContextSync:");
+        if (![client respondsToSelector:sel]) {
+            return -1;
+        }
+        id (*send)(id, SEL, NSError **) = (id (*)(id, SEL, NSError **))objc_msgSend;
+        NSError *error = nil;
+        id context = nil;
+        @try {
+            context = send(client, sel, &error);
+        } @catch (NSException *e) {
+            return -1;
+        }
+        if (context == nil || error != nil) {
+            return -1;
+        }
+        NSNumber *slotID = [context valueForKey:@"slotID"];
+        if (![slotID isKindOfClass:[NSNumber class]]) {
+            return -1;
+        }
+        int slot = slotID.intValue;
+        // 只认 1 / 2：KVC 拿到 0 或越界值说明读回来的东西不对，退回首卡槽更安全。
+        return (slot == 1 || slot == 2) ? slot : -1;
+    }
+}
+
+NSDictionary * _Nullable sysprobe_slot_info(int slot)
+{    @autoreleasepool {
         // 空字典而不是 nil：调用方按「有没有这个键」决定那一行显不显示，
         // 一个 nil 会让它去区分「读失败」和「没有这一项」两件事，而这里没这个区别。
         NSMutableDictionary *info = [NSMutableDictionary dictionary];

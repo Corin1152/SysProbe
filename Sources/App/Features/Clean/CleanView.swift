@@ -50,15 +50,23 @@ struct CleanView: View {
         ZStack {
             Color.mwCanvas
             Backdrop(glow: .mwAccent)
-            Form {
-                scanSection
+            ScrollView {
+                VStack(spacing: 12) {
+                    totalHeader
+                    actionButtons
 
-                if scan != nil {
-                    detailSection
-                    appsSection
+                    if let scan {
+                        appsSection
+                        footerNotes(scan)
+                    } else {
+                        toolRow
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
+                .mwContainerWidth()
             }
-            .scrollContentBackground(.hidden)
         }
         .navigationTitle("Clean")
         .navigationBarTitleDisplayMode(.inline)
@@ -93,100 +101,142 @@ struct CleanView: View {
         }
     }
 
-    // MARK: 扫描
+    // MARK: 版式
 
-    /// 第一区：合计、清理全部、（重）扫描、以及工具状态。
+    // 这一页的版式照上游 iOSCleanerPro 1.0：**居中的合计 + 一条强调色分隔线 +
+    // 一列全宽圆角大按钮**，而不是设置页那种分组列表。配色与字体仍用本 App 的
+    // 设计 token（`mwAccent` / `AppFont`），不照搬上游的纯蓝 + 系统字体 ——
+    // 那会让这一页在 App 内部看起来是另一个程序。
+
+    /// 顶部：可清理量 + 分隔线。原版也是这两样，位置和含义都一致。
+    private var totalHeader: some View {
+        VStack(spacing: 10) {
+            Group {
+                if let scan {
+                    Text(Strings.text("Cleanable: %@", Formatting.bytes(UInt64(scan.totalBytes))))
+                } else if isScanning {
+                    Text("Measuring…")
+                } else {
+                    Text("Tap Scan to measure what can be cleaned.")
+                }
+            }
+            .font(AppFont.text(14))
+            .foregroundStyle(Color.mwMuted)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .multilineTextAlignment(.center)
+
+            Capsule()
+                .fill(Color.mwAccent)
+                .frame(height: 2)
+        }
+        .padding(.bottom, 2)
+    }
+
+    /// 一列全宽大按钮。顺序与上游一致：扫描 → 各分项 → 一键清理全部（红色）。
     ///
-    /// 「清理全部」放在最上面而不是埋进分项里：它是这页的主动作 —— 但它要过
-    /// 二次确认，且**扫描出结果之前不可用**：没数字就按钮能点，用户等于在
-    /// 蒙着眼同意删除。
-    private var scanSection: some View {
-        Section {
-            if let scan {
-                LabeledContent("Total", value: Formatting.bytes(UInt64(scan.totalBytes)))
-            }
-
-            Button {
+    /// 每个按钮**自带金额**（`detail`），因为「清哪个更划算」是用户按按钮前唯一
+    /// 想知道的事 —— 上游也是把大小写在标题里。区别是这里不做「清理应用缓存」
+    /// 之外的合并：上游那一个按钮清全部应用，这里也保留，另加「日志」一项
+    /// （上游把日志并进了系统缓存）。
+    private var actionButtons: some View {
+        VStack(spacing: 10) {
+            bigButton(title: Strings.text(scan == nil ? "Scan" : "Rescan"),
+                      detail: nil,
+                      icon: "magnifyingglass",
+                      busy: isScanning,
+                      enabled: toolReady == true && !isScanning && !isCleaning) {
                 Task { await runScan() }
-            } label: {
-                HStack {
-                    // 三元表达式要显式过一遍 `Strings.text`：`Label` 收到裸的
-                    // `String` 会走 `StringProtocol` 那个重载，**不查本地化表**，
-                    // 于是这里会永远显示英文（同 `AdapterView` 里那句
-                    // `Strings.text(wireless ? "Wireless" : "USB-C")`）。
-                    Label(Strings.text(scan == nil ? "Scan" : "Rescan"),
-                          systemImage: "magnifyingglass")
-                    Spacer()
-                    if isScanning {
-                        ProgressView()
-                    }
+            }
+
+            ForEach(detailScopes, id: \.rawValue) { scope in
+                bigButton(title: title(for: scope),
+                          detail: bytesText(for: scope),
+                          icon: icon(for: scope),
+                          busy: false,
+                          enabled: toolReady == true && scan != nil && !isCleaning) {
+                    request(.category(scope))
                 }
             }
-            .disabled(toolReady != true || isScanning || isCleaning)
 
-            Button(role: .destructive) {
+            bigButton(title: Strings.text("Clean app caches"),
+                      detail: appBytesText,
+                      icon: "square.grid.2x2",
+                      busy: false,
+                      enabled: toolReady == true && scan != nil && !isCleaning) {
+                request(.category(.apps))
+            }
+
+            bigButton(title: Strings.text("Clean All"),
+                      detail: totalBytesText,
+                      icon: "paintbrush.fill",
+                      busy: isCleaning,
+                      enabled: toolReady == true && scan != nil && !isCleaning,
+                      destructive: true) {
                 request(.all)
-            } label: {
-                HStack {
-                    Label("Clean All", systemImage: "paintbrush")
-                    Spacer()
-                    if isCleaning {
-                        ProgressView()
-                    }
-                }
-            }
-            .disabled(toolReady != true || scan == nil || isCleaning)
-
-            LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
-        } header: {
-            Text("Storage cleaning")
-        } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                if let freed = lastFreed, freed > 0 {
-                    Text(Strings.text("Freed %@", Formatting.bytes(UInt64(freed))))
-                        .foregroundStyle(Color.mwAccent)
-                }
-                Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
-                // 排除名单的存在要在这里说，而不是只在确认弹窗里 —— 弹窗一闪就没，
-                // 页脚才是用户会回头核对的地方。
-                Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
             }
         }
     }
 
-    // MARK: 分项
-
-    /// 三类目录的分项。逐行给「清理」按钮 —— 每个按钮各自持有命中区域
-    /// （`.borderless`，理由见 `MaintenanceView` 那段长注释）。
-    private var detailSection: some View {
-        Section {
-            ForEach(detailScopes, id: \.rawValue) { scope in
-                HStack {
-                    Text(title(for: scope))
-                    Spacer()
-                    Text(bytesText(for: scope))
-                        .font(AppFont.mono(13))
-                        .foregroundStyle(Color.mwMuted)
-                    Button {
-                        request(.category(scope))
-                    } label: {
-                        Text("Clean")
-                            .font(AppFont.text(13, weight: .semibold))
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(isCleaning)
+    /// 一个全宽按钮。`detail` 为 nil 时不显示后缀（「扫描」就没有量可写）。
+    ///
+    /// 底色是实心的 `mwAccent`／`mwDanger`，所以前景色写死白色 —— 这是这一页
+    /// 唯一一处不用 `mwInk` 的地方，理由是它压在强调色上而不是画布上。
+    private func bigButton(title: String,
+                           detail: String?,
+                           icon: String,
+                           busy: Bool,
+                           enabled: Bool,
+                           destructive: Bool = false,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 22)
+                Text(verbatim: title)
+                    .font(AppFont.text(15, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                if let detail {
+                    Text(verbatim: detail)
+                        .font(AppFont.text(14))
+                        .opacity(0.85)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                Spacer(minLength: 0)
+                if busy {
+                    ProgressView().tint(.white)
                 }
             }
-        } header: {
-            Text("Details")
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 54)
+            .foregroundStyle(.white)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(destructive ? Color.mwDanger : Color.mwAccent)
+            )
+            .opacity(enabled ? 1 : 0.35)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     /// 分项里出现的三类目录。照片缓存与下载目录是评估时砍掉的，别加回来。
     private let detailScopes: [StorageCleanScope] = [.system, .logs, .temp]
 
-    private func bytesText(for scope: StorageCleanScope) -> String {
-        guard let scan else { return "—" }
+    private func icon(for scope: StorageCleanScope) -> String {
+        switch scope {
+        case .system: return "shippingbox"
+        case .logs: return "doc.text"
+        case .temp: return "clock.arrow.circlepath"
+        default: return "folder"
+        }
+    }
+
+    private func bytesText(for scope: StorageCleanScope) -> String? {
+        guard let scan else { return nil }
         let bytes: Int64
         switch scope {
         case .system: bytes = scan.systemBytes
@@ -199,22 +249,88 @@ struct CleanView: View {
 
     private func title(for scope: StorageCleanScope) -> String {
         switch scope {
-        case .system: return Strings.text("System cache")
-        case .logs: return Strings.text("Logs")
-        case .temp: return Strings.text("Temp files")
+        case .system: return Strings.text("Clean system cache")
+        case .logs: return Strings.text("Clean logs")
+        case .temp: return Strings.text("Clean temp files")
         default: return scope.rawValue
         }
+    }
+
+    /// 全部应用缓存的合计，给「清理应用缓存」那个按钮。
+    private var appBytesText: String? {
+        guard let scan else { return nil }
+        let total = scan.apps.reduce(Int64(0)) { $0 + $1.bytes }
+        return Formatting.bytes(UInt64(total))
+    }
+
+    private var totalBytesText: String? {
+        guard let scan else { return nil }
+        return Formatting.bytes(UInt64(scan.totalBytes))
+    }
+
+    /// 工具状态一行 + 页脚说明。扫完之前显示工具状态，扫完之后并进页脚。
+    private var toolRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
+                .font(AppFont.text(13))
+            Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
+                .font(AppFont.text(11))
+                .foregroundStyle(Color.mwMuted)
+            Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
+                .font(AppFont.text(11))
+                .foregroundStyle(Color.mwMuted)
+        }
+        .padding(Theme.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Color.mwCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
+        )
+    }
+
+    private func footerNotes(_ scan: StorageScanResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let freed = lastFreed, freed > 0 {
+                Text(Strings.text("Freed %@", Formatting.bytes(UInt64(freed))))
+                    .font(AppFont.text(13, weight: .semibold))
+                    .foregroundStyle(Color.mwAccent)
+            }
+            LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
+                .font(AppFont.text(12))
+            Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
+                .font(AppFont.text(11))
+                .foregroundStyle(Color.mwMuted)
+            // 排除名单的存在要在这里说，而不是只在确认弹窗里 —— 弹窗一闪就没，
+            // 页脚才是用户会回头核对的地方。
+            Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
+                .font(AppFont.text(11))
+                .foregroundStyle(Color.mwMuted)
+        }
+        .padding(.top, 4)
     }
 
     // MARK: 应用缓存
 
     /// 按 App 的缓存列表。每行一个清理按钮；整行不是点击区域，
     /// 名字那一列不带任何动作 —— 误触面越小越好。
+    ///
+    /// 卡片而不是 Form 分组：这一页已经改成「大按钮 + 卡片」的版式，再混一个
+    /// 系统分组列表进来，两种行高与边距会互相打架。卡片底色、描边、圆角用的
+    /// 是同一组设计 token。
     private var appsSection: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("App caches")
+                .font(AppFont.text(13, weight: .semibold))
+                .foregroundStyle(Color.mwMuted)
+
             if let scan {
                 if scan.apps.isEmpty {
                     Text("No app caches were measured.")
+                        .font(AppFont.text(13))
                         .foregroundStyle(Color.mwMuted)
                 }
                 ForEach(scan.apps) { app in
@@ -225,11 +341,11 @@ struct CleanView: View {
                                 .font(AppFont.text(15, weight: .medium))
                                 .lineLimit(1)
                             Text(verbatim: app.bundle)
-                                .font(.footnote)
+                                .font(AppFont.text(11))
                                 .foregroundStyle(Color.mwMuted)
                                 .lineLimit(1)
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
                         Text(Formatting.bytes(UInt64(app.bytes)))
                             .font(AppFont.mono(13))
                             .foregroundStyle(Color.mwMuted)
@@ -237,25 +353,26 @@ struct CleanView: View {
                             request(.app(bundle: app.bundle, name: app.name))
                         } label: {
                             Image(systemName: "trash")
+                                .font(.system(size: 15))
                                 .foregroundStyle(Color.mwDanger)
+                                .contentShape(Rectangle())
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.plain)
                         .disabled(isCleaning)
                     }
                 }
-            }
-        } header: {
-            Text("App caches")
-        } footer: {
-            VStack(alignment: .leading, spacing: 6) {
+
                 Text("Only apps whose cache could actually be measured are listed. Names and icons come from the app bundles; when they cannot be read, the bundle identifier is shown.")
+                    .font(AppFont.text(11))
+                    .foregroundStyle(Color.mwMuted)
+
                 // 一个应用缓存都没实测到时，把工具回传的诊断行摊开。三种失败原因
                 // （容器目录打不开 / MCM 元数据读不出 / Caches 真是空的）在界面上
                 // 长得一模一样，不给这几行就只能靠猜。正常扫到东西时不显示。
-                if let scan, scan.apps.isEmpty, !scan.diagnostics.isEmpty {
+                if scan.apps.isEmpty, !scan.diagnostics.isEmpty {
                     Text("Root tool diagnostics")
-                        .font(AppFont.text(13, weight: .semibold))
-                        .padding(.top, 4)
+                        .font(AppFont.text(12, weight: .semibold))
+                        .padding(.top, 2)
                     ForEach(scan.diagnostics, id: \.self) { line in
                         Text(verbatim: line)
                             .font(AppFont.mono(11))
@@ -265,6 +382,16 @@ struct CleanView: View {
                 }
             }
         }
+        .padding(Theme.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Color.mwCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
+        )
     }
 
     // MARK: 确认与执行
@@ -280,8 +407,9 @@ struct CleanView: View {
         case .category(.system): return Strings.text("Delete the system cache?")
         case .category(.logs): return Strings.text("Delete the logs?")
         case .category(.temp): return Strings.text("Delete the temporary files?")
+        case .category(.apps): return Strings.text("Delete every app's cache?")
         case .app(_, let name): return Strings.text("Delete the cache of %@?", name)
-        case .none, .category(.apps), .category(.app), .category(.all):
+        case .none, .category(.app), .category(.all):
             return ""
         }
     }
@@ -300,9 +428,11 @@ struct CleanView: View {
             return Strings.text("The contents of the system log directories are deleted.")
         case .category(.temp):
             return Strings.text("The contents of /var/tmp are deleted.")
+        case .category(.apps):
+            return Strings.text("Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards.")
         case .app(_, _):
             return Strings.text("This app rebuilds its cache as needed. If it is running, restart it afterwards.")
-        case .none, .category(.apps), .category(.app), .category(.all):
+        case .none, .category(.app), .category(.all):
             return ""
         }
     }

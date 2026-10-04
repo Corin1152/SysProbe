@@ -150,6 +150,25 @@ final class BandService: ObservableObject {
         (1...2).filter { $0 != primary && sysprobe_slot_has_sim(Int32($0)) }
     }
 
+    /// 一进页面该选哪个卡槽。
+    ///
+    /// 上游 CellularInfo 的规则是「卡 1 未启用而卡 2 启用就选卡 2；两张都启用就选
+    /// **首选数据卡**」。这里合并成一条，因为它天然覆盖那两种情形：
+    ///
+    ///   1. 拿首选数据卡槽（`getPreferredDataSubscriptionContextSync`）；
+    ///   2. 它必须**确实插着卡**（`sysprobe_slot_has_sim`）才采用 —— 否则退回第一个
+    ///      插着卡的卡槽；
+    ///   3. 一个都没有（无卡 / 无基带）才退回 1。
+    ///
+    /// 不照搬上游那两条 if 的原因：它用 `getDeviceSlotEnabled` 判断「卡槽启用」，
+    /// 那个接口本身也依赖完整 context；而这里已经有「插着卡吗」这个更直接的判据。
+    nonisolated static func preferredSlot() -> Int {
+        let available = (1...2).filter { sysprobe_slot_has_sim(Int32($0)) }
+        guard !available.isEmpty else { return 1 }
+        let preferred = Int(sysprobe_preferred_data_slot())
+        return available.contains(preferred) ? preferred : (available.first ?? 1)
+    }
+
     private nonisolated static func readBandsSync(slot: Int) -> BandSet? {
         var entity: BandSet?
         bandQueue.sync {

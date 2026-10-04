@@ -362,3 +362,19 @@
 "The root tool did not return a result. Check the Root tool line on the About page." = "The root tool did not return a result. Check the Root tool line on the About page.";
 "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced." = "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced.";
 "Root tool diagnostics" = "Root tool diagnostics";
+
+/* Clean page: upstream iOSCleanerPro layout (2026-10-03) */
+"Cleanable: %@" = "Cleanable: %@";
+"Tap Scan to measure what can be cleaned." = "Tap Scan to measure what can be cleaned.";
+"Measuring…" = "Measuring…";
+"Clean system cache" = "Clean system cache";
+"Clean logs" = "Clean logs";
+"Clean temp files" = "Clean temp files";
+"Clean app caches" = "Clean app caches";
+"Delete every app's cache?" = "Delete every app's cache?";
+"Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards." = "Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards.";
+
+/* Band page: save/refresh moved to the navigation bar (2026-10-03) */
+"Refresh" = "Refresh";
+"If something goes wrong" = "If something goes wrong";
+"You have unsaved changes. Use the checkmark in the top right to save them." = "You have unsaved changes. Use the checkmark in the top right to save them.";

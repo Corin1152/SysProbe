@@ -362,3 +362,19 @@
 "The root tool did not return a result. Check the Root tool line on the About page." = "维护工具没有返回结果。请到「关于」页查看「维护工具」一行。";
 "Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced." = "存储清理由本仓库自行实现。目录集合与按应用容器清理的思路参照了对 iOSCleanerPro 1.0（一个未授权的第三方样本）的分析结果，未复用其任何代码；它内置的占位应用列表也刻意没有照搬。";
 "Root tool diagnostics" = "维护工具诊断";
+
+/* 清理页：按上游 iOSCleanerPro 的版式重排（2026-10-03） */
+"Cleanable: %@" = "可清理缓存：%@";
+"Tap Scan to measure what can be cleaned." = "点「扫描」测量可清理的量。";
+"Measuring…" = "正在测量…";
+"Clean system cache" = "清理系统缓存";
+"Clean logs" = "清理日志";
+"Clean temp files" = "清理临时文件";
+"Clean app caches" = "清理应用缓存";
+"Delete every app's cache?" = "删除所有应用的缓存？";
+"Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards." = "会清空每个应用的缓存目录。应用会按需重建缓存；如果某个应用正在运行，清完之后重启一下它。";
+
+/* 频段页：保存与刷新移到导航栏（2026-10-03） */
+"Refresh" = "刷新";
+"If something goes wrong" = "出问题时";
+"You have unsaved changes. Use the checkmark in the top right to save them." = "有未保存的修改。用右上角的对勾保存。";

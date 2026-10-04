@@ -93,7 +93,44 @@ struct BandEditorView: View {
         .task {
             // 首次进入先给整屏警告。它挡在加载之前 —— 让人先看懂风险，再看数据。
             if !entryTipsDone { showEntryTips = true }
-            service.load(slot: slot)
+            // 一进来选哪张卡：上游的规则是「卡 1 未启用而卡 2 启用就选卡 2，否则选首选
+            // 数据卡」，这里落到 `BandService.preferredSlot()`（首选数据卡，且它必须
+            // 确实插着卡）。换卡槽会触发 `.onChange(of: slot)` 去重读，所以那条路不再
+            // 重复 load 一次。
+            let initial = BandService.preferredSlot()
+            if initial != slot {
+                slot = initial
+            } else {
+                service.load(slot: slot)
+            }
+        }
+        // 保存与刷新放导航栏右上 —— 与上游 CellularInfo 一致（它的
+        // `navigationItem.rightBarButtonItems` 就是这两个，顺序也一样：刷新在左、
+        // 保存在右）。放在这里的好处是**不随内容滚动**：频段列表很长时，
+        // 页面内的保存按钮要滚到底才能按到。
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    service.load(slot: slot)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(service.isLoading || service.availability == .unavailable)
+                .accessibilityLabel(Text("Refresh"))
+
+                Button {
+                    // 第 2 层：默认还要再确认一次。
+                    if saveConfirm {
+                        showSaveConfirm = true
+                    } else {
+                        save()
+                    }
+                } label: {
+                    Image(systemName: "checkmark")
+                }
+                .disabled(!hasUnsavedChanges)
+                .accessibilityLabel(Text("Save"))
+            }
         }
         .onChange(of: service.bandInfo) { _ in
             syncSelectionFromModem()
@@ -324,21 +361,13 @@ struct BandEditorView: View {
 
     // MARK: - 动作
 
+    /// 逃生通道。**保存不在这里** —— 它按上游的位置放在导航栏右上。
+    ///
+    /// 剩下这两件都与「保存」刻意解耦：恢复默认是写错之后的主要逃生通道，
+    /// 重启蜂窝网络是另一个。把它们并进保存流程等于替用户做了决定。
     private var actionPanel: some View {
-        Panel("Actions", systemImage: "wrench.adjustable") {
+        Panel("If something goes wrong", systemImage: "lifepreserver") {
             VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    // 第 2 层：默认还要再确认一次。
-                    if saveConfirm {
-                        showSaveConfirm = true
-                    } else {
-                        save()
-                    }
-                } label: {
-                    actionLabel("Save", systemImage: "checkmark.circle", enabled: hasUnsavedChanges)
-                }
-                .disabled(!hasUnsavedChanges)
-
                 Button {
                     showRestoreConfirm = true
                 } label: {
@@ -346,7 +375,6 @@ struct BandEditorView: View {
                 }
 
                 // 与保存**刻意解耦**：改完频段不一定要立刻重启，而且重启会短暂断网。
-                // 把它并进保存流程等于替用户做了决定。
                 Button {
                     showRestartConfirm = true
                 } label: {
@@ -356,7 +384,7 @@ struct BandEditorView: View {
                 }
 
                 Text(hasUnsavedChanges
-                     ? "You have unsaved changes."
+                     ? "You have unsaved changes. Use the checkmark in the top right to save them."
                      : "Saved changes are written to the modem straight away.")
                     .font(AppFont.text(11))
                     .foregroundStyle(Color.mwMuted)

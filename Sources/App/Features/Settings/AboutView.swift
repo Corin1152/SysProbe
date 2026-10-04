@@ -29,32 +29,9 @@ struct AboutView: View {
                     Text("Version")
                 }
 
-                Section {
-                    Text("Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.mwMuted)
-                    Text("Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.mwMuted)
-                    // 署名照实写：代码是本仓库自己写的，只有两个「在真机上验证过的
-                    // 取值」参考了 RebootTools。别把这条写成「移植自某某」——那不准。
-                    Text("Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.mwMuted)
-                    // 「频段设置」是后加的功能，署名同样照实写。
-                    Text("Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.mwMuted)
-                    // 「存储清理」是重写而非搬运的最直接的证据：样本无 LICENSE，
-                    // 而且它列表里有硬编码的占位数据 —— 这一句把两件事都说清楚。
-                    Text("Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced.")
-                        .font(.footnote)
-                        .foregroundStyle(Color.mwMuted)
-                } header: {
-                    Text("Credits")
-                }
-
                 diagnosticsSection
+
+                creditsSection
             }
             .scrollContentBackground(.hidden)
         }
@@ -64,6 +41,37 @@ struct AboutView: View {
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
         .task {
             toolReady = await Task.detached { DeviceActions.probe() }.value
+        }
+    }
+
+    /// 致谢。**刻意排在最后**（2026-10-03 从顶部移下来）：
+    /// 这一页前面回答的是「我装的是哪一版、什么能用」，那才是用户来这儿要找的；
+    /// 署名是法律义务，不是给用户的答案，放在最下面既满足署名要求，
+    /// 又不会让每次打开关于页都先滚过五段法律文本。
+    private var creditsSection: some View {
+        Section {
+            Text("Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only.")
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+            Text("Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository.")
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+            // 署名照实写：代码是本仓库自己写的，只有两个「在真机上验证过的
+            // 取值」参考了 RebootTools。别把这条写成「移植自某某」——那不准。
+            Text("Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core.")
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+            // 「频段设置」是后加的功能，署名同样照实写。
+            Text("Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3.")
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+            // 「存储清理」是重写而非搬运的最直接的证据：样本无 LICENSE，
+            // 而且它列表里有硬编码的占位数据 —— 这一句把两件事都说清楚。
+            Text("Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced.")
+                .font(.footnote)
+                .foregroundStyle(Color.mwMuted)
+        } header: {
+            Text("Credits")
         }
     }
 

@@ -65,6 +65,16 @@ NSDictionary * _Nullable sysprobe_slot_info(int slot);
 /// 进页面多等一秒不划算。
 BOOL sysprobe_slot_has_sim(int slot);
 
+/// 当前「首选数据卡」的卡槽号；读不到返回 -1。
+///
+/// 用来决定频段页**一进来选哪张卡**。上游 CellularInfo 的规则是：
+/// 卡 1 未启用而卡 2 启用就选卡 2，两张都启用就选首选数据卡。这里只提供后者的取值，
+/// 判断在 `BandService` 里 —— 那边才知道「哪些卡槽确实插着卡」。
+///
+/// 走的是 `-getPreferredDataSubscriptionContextSync`（上游同款，返回的是**完整版**
+/// context）。失败（无权限、无卡、iPad 无基带）返回 -1，调用方退回第一个可用卡槽。
+int sysprobe_preferred_data_slot(void);
+
 /// 上一次读写的状态。
 SysProbeBandStatus sysprobe_band_status(void);
 
