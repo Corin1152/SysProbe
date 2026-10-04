@@ -216,7 +216,13 @@ struct CleanView: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(destructive ? Color.mwDanger : Color.mwAccent)
             )
-            .opacity(enabled ? 1 : 0.35)
+            // **只按「工具能不能用」决定浓淡，不按「有没有扫描结果」。**
+            //
+            // 上一版是按 `enabled` 来的，于是没扫描时下面五个按钮全是 0.35 的淡蓝，
+            // 只有最上面的「扫描」是实心 —— 一排按钮两种深浅，看着像坏了。
+            // 未扫描时它们本来就点不动（没有目标），但那属于「还不能点」，
+            // 不属于「这个功能不可用」，不该用同一种视觉表达。
+            .opacity(toolReady == true ? 1 : 0.35)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

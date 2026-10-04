@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// 「关于」页。版本号 + 移植来源的署名 + 诊断信息。
+/// 「关于」页。版本号 + 诊断信息。
 ///
-/// 署名不是客套：MiniWatts 是 Apache-2.0、ChargeLimiter 是 GPL-3.0，
-/// 用了别人的代码就得说清楚。第三段刻意写成「本仓库自己实现、只参考了两个常量」——
-/// 照实写比含糊地写「移植自某某」更准确。
+/// **署名不在这里**（2026-10-04 按要求从界面上移除）。署名义务本身没有消失 ——
+/// MiniWatts 是 Apache-2.0、ChargeLimiter 是 GPL-3.0，它们要求保留版权与许可声明，
+/// 这些仍然完整地写在仓库根目录的 `NOTICE` 与 `LICENSE` 里，随源码一起分发。
+/// 改这一页时不要顺手把 NOTICE 删掉。
 ///
 /// 诊断区原来在「维护」页，2026-10-02 迁到这里：维护页在「清理」并入菜单之后
 /// 只该剩「动手改系统」的东西，而诊断是**信息** —— 它归属关于页，与版本号
@@ -30,8 +31,6 @@ struct AboutView: View {
                 }
 
                 diagnosticsSection
-
-                creditsSection
             }
             .scrollContentBackground(.hidden)
         }
@@ -41,37 +40,6 @@ struct AboutView: View {
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
         .task {
             toolReady = await Task.detached { DeviceActions.probe() }.value
-        }
-    }
-
-    /// 致谢。**刻意排在最后**（2026-10-03 从顶部移下来）：
-    /// 这一页前面回答的是「我装的是哪一版、什么能用」，那才是用户来这儿要找的；
-    /// 署名是法律义务，不是给用户的答案，放在最下面既满足署名要求，
-    /// 又不会让每次打开关于页都先滚过五段法律文本。
-    private var creditsSection: some View {
-        Section {
-            Text("Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only.")
-                .font(.footnote)
-                .foregroundStyle(Color.mwMuted)
-            Text("Charge control is ported from ChargeLimiter, © lich4, licensed under the GNU GPL v3. Its daemon is fetched from the upstream release at build time rather than stored in this repository.")
-                .font(.footnote)
-                .foregroundStyle(Color.mwMuted)
-            // 署名照实写：代码是本仓库自己写的，只有两个「在真机上验证过的
-            // 取值」参考了 RebootTools。别把这条写成「移植自某某」——那不准。
-            Text("Reboot and respring are implemented in this repository rather than reused from another app. The two constants they rely on — reboot(0) and the signal sent to SpringBoard — follow RebootTools by dongchenshuo, which credits 肖博vlog for the reboot core.")
-                .font(.footnote)
-                .foregroundStyle(Color.mwMuted)
-            // 「频段设置」是后加的功能，署名同样照实写。
-            Text("Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3.")
-                .font(.footnote)
-                .foregroundStyle(Color.mwMuted)
-            // 「存储清理」是重写而非搬运的最直接的证据：样本无 LICENSE，
-            // 而且它列表里有硬编码的占位数据 —— 这一句把两件事都说清楚。
-            Text("Storage cleaning is implemented in this repository. The directory set and the per-app container approach follow the analysis of iOSCleanerPro 1.0 — an unlicensed third-party sample whose code was not reused. Its hardcoded placeholder app list is deliberately not reproduced.")
-                .font(.footnote)
-                .foregroundStyle(Color.mwMuted)
-        } header: {
-            Text("Credits")
         }
     }
 

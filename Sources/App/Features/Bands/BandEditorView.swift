@@ -70,10 +70,12 @@ struct BandEditorView: View {
                         unavailablePanel
                     } else {
                         infoPanel
+                        // 两个逃生通道紧跟信息卡，排在**第二张**（2026-10-04 从页面
+                        // 底部移上来）：它们是频段写错之后的主要补救手段，留在最下面
+                        // 要滚过整页频段网格才够得着，而那时候人往往正着急。
+                        actionPanel
                         if service.slots.count > 1 { slotPanel }
                         bandPanels
-                        actionPanel
-                        entryPanel
                     }
                 }
                 .padding(.horizontal, 16)
@@ -339,18 +341,24 @@ struct BandEditorView: View {
         )
     }
 
+    /// 一个频段格子。
+    ///
+    /// 圆圈与文字在 2026-10-04 整体放大（15→19 / 13→15）：4 列网格里每个格子还有
+    /// 富余宽度，而原来那个尺寸在手机上偏小 —— 手指按得中，但**看得清**是另一回事，
+    /// 而这一页的每一次勾选都会写进基带，看清楚再点是前提。
+    /// 缩小时用 `minimumScaleFactor`，所以放大不会把「TD 34」这类长标签挤断行。
     private func bandCell(rat: RadioAccessTechnology, band: Band, isOn: Bool) -> some View {
         Button {
             toggle(rat, band.number)
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15))
+                    .font(.system(size: 19))
                     .foregroundStyle(isOn ? Color.mwAccent : Color.mwMuted.opacity(0.45))
                 Text(verbatim: band.label)
-                    .font(AppFont.text(13, weight: .medium))
+                    .font(AppFont.text(15, weight: .medium))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
             }
             // 让整个格子都是命中区域，而不是只有图标和文字那一小块。
@@ -361,27 +369,33 @@ struct BandEditorView: View {
 
     // MARK: - 动作
 
-    /// 逃生通道。**保存不在这里** —— 它按上游的位置放在导航栏右上。
+    /// 两个逃生通道，并排一行。
     ///
-    /// 剩下这两件都与「保存」刻意解耦：恢复默认是写错之后的主要逃生通道，
-    /// 重启蜂窝网络是另一个。把它们并进保存流程等于替用户做了决定。
+    /// **保存不在这里** —— 它按上游的位置放在导航栏右上。剩下这两件都与「保存」
+    /// 刻意解耦：恢复默认是写错之后的主要逃生通道，重启蜂窝网络是另一个；
+    /// 把它们并进保存流程等于替用户做了决定。
+    ///
+    /// 布局照维护页那两个破坏性按钮（`HStack` + 等宽 + 上图标下文字）：两页都是
+    /// 「按下去会立刻改变系统状态」的操作，长得不一样只会让人多犹豫一次。
+    /// 上面那句提示文案保留 —— 它回答「我改的东西存了没」。
     private var actionPanel: some View {
         Panel("If something goes wrong", systemImage: "lifepreserver") {
             VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    showRestoreConfirm = true
-                } label: {
-                    actionLabel("Restore Default", systemImage: "arrow.counterclockwise", enabled: true)
+                HStack(spacing: 12) {
+                    rescueButton(title: "Restore Default",
+                                 systemImage: "arrow.counterclockwise",
+                                 tint: .mwAccent) {
+                        showRestoreConfirm = true
+                    }
+                    rescueButton(title: "Restart Cellular Service",
+                                 systemImage: "antenna.radiowaves.left.and.right.slash",
+                                 tint: .mwDanger) {
+                        showRestartConfirm = true
+                    }
                 }
-
-                // 与保存**刻意解耦**：改完频段不一定要立刻重启，而且重启会短暂断网。
-                Button {
-                    showRestartConfirm = true
-                } label: {
-                    actionLabel("Restart Cellular Service",
-                                systemImage: "antenna.radiowaves.left.and.right.slash",
-                                enabled: true)
-                }
+                // 与维护页同一条理由：一行里放多个按钮时默认样式会把整行当成一个
+                // 命中区域，点哪儿都会把行内所有按钮一起触发。
+                .buttonStyle(.borderless)
 
                 Text(hasUnsavedChanges
                      ? "You have unsaved changes. Use the checkmark in the top right to save them."
@@ -392,29 +406,39 @@ struct BandEditorView: View {
         }
     }
 
-    private func actionLabel(_ title: LocalizedStringKey, systemImage: String, enabled: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 20)
-            Text(title)
-                .font(AppFont.text(14, weight: .semibold))
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(enabled ? Color.mwAccent : Color.mwMuted)
-        .contentShape(Rectangle())
-    }
-
-    private var entryPanel: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Show in Settings", isOn: $showBandEditor)
-                    .font(AppFont.text(13))
-                Text("Turning this off hides this page from the gear menu. There is no way to bring it back from inside the app — reinstall to restore it.")
-                    .font(AppFont.text(11))
-                    .foregroundStyle(Color.mwMuted)
+    /// 与维护页 `DeviceActionButton` 同构：上图标、下文字、等宽、居中。
+    ///
+    /// 闭包类型写成 `@MainActor () -> Void` 而不是 `() -> Void`：闭包体里要碰主
+    /// actor 隔离的状态，而项目默认主 actor 隔离，`() -> Void` 会在这里丢掉隔离域。
+    private func rescueButton(title: LocalizedStringKey,
+                              systemImage: String,
+                              tint: Color,
+                              tap: @escaping @MainActor () -> Void) -> some View {
+        // 用 `Button { tap() } label:` 而不是 `Button(action: tap)`：后者要把闭包直接
+        // 交给 SwiftUI，会再撞一次上面那个隔离域转换的问题。
+        Button {
+            tap()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(title)
+                    .font(AppFont.text(12, weight: .semibold))
+                    // 英文「Restart Cellular Service」比中文长得多，窄屏上要能缩。
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                    .multilineTextAlignment(.center)
             }
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(tint.opacity(0.12))
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     private var unavailablePanel: some View {
