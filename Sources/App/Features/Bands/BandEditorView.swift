@@ -285,7 +285,7 @@ struct BandEditorView: View {
     @ViewBuilder
     private var bandPanels: some View {
         if let info = service.bandInfo {
-            let rats = info.editable
+            let rats = visibleRats
             if rats.isEmpty {
                 Panel("Bands", systemImage: "antenna.radiowaves.left.and.right") {
                     Text("No bands reported")
@@ -300,11 +300,25 @@ struct BandEditorView: View {
         }
     }
 
-    /// 一个制式的频段网格。
+    /// 界面上画哪些制式。**只画 4G**（2026-10-05 按要求收窄）。
+    ///
+    /// 3G / 2G / 5G 的分组不再展示，但**它们不会被清空**：`save()` 只把这一组交给
+    /// 写回，其余制式由桥接层从原 `fActiveBands` 里原样带回去（见 `BandSet.payload`
+    /// 的 `only:`）。**「不展示」和「禁用」是两件事** —— 改这里时别顺手把 `only:`
+    /// 换成 `info.editable`，那等于把 3G / 2G 全部关掉。
+    ///
+    /// 判据用 `family == .lte` 而不是比对 rawKey：rawKey 在不同 iOS 版本上有
+    /// `LTE` / `kCTCellMonitorRadioAccessTechnologyLTE` 等写法，`Family` 已经
+    /// 把这件事收敛过了。
+    private var visibleRats: [RadioAccessTechnology] {
+        (service.bandInfo?.editable ?? []).filter { $0.family == .lte }
+    }
+
+    /// 一个制式的频段网格。现在页面上只有 4G 一个（见 `visibleRats`）。
     ///
     /// 没有用 `Panel`：它的 `trailing` 只收一个 `Text`，放不下「全选 / 取消全选」两个
-    /// 按钮，而把这两个按钮挪到内容里会多占一整行 —— 一屏要放好几个制式，那一行不划算。
-    /// 卡片底色、描边、圆角用的是同一组设计 token，视觉上与 `Panel` 一致。
+    /// 按钮，而把这两个按钮挪到内容里会多占一整行。卡片底色、描边、圆角用的是同一组
+    /// 设计 token，视觉上与 `Panel` 一致。
     private func bandPanel(rat: RadioAccessTechnology, info: BandSet) -> some View {
         let bands = info.supportedBands(of: rat)
         let active = selection[rat] ?? []
@@ -499,7 +513,9 @@ struct BandEditorView: View {
     // MARK: - 动作
 
     private func save() {
-        let ok = service.write(selection: selection, slot: slot)
+        // 只提交界面上画出来的制式（现在就是 4G）。没画出来的 3G / 2G 由桥接层
+        // 从原对象里原样带回去 —— 不展示不等于禁用。
+        let ok = service.write(selection: selection, only: visibleRats, slot: slot)
         banner = ok
             ? Strings.text("Band settings saved.")
             : Strings.text("Could not write the band settings. Nothing was changed.")

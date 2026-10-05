@@ -137,11 +137,22 @@ nonisolated struct BandSet: Equatable {
 
     /// 把界面上的勾选状态转成桥接层要的字典：`@{原始键: @[频段号, …]}`。
     ///
-    /// 只输出 `supported` 里有的制式 —— 没动过的制式由桥接层从原对象带回去。
+    /// `only` 限定**只输出这些制式**。这一条是安全约束，不是优化：
+    ///
+    ///   - 桥接层写回时是从原 `fActiveBands` 的 mutableCopy 起手、只覆盖传进去的键
+    ///     （见 `CommCenterBridge.m`），所以**没传的键会原样保留**；
+    ///   - 而界面现在只画 4G（见 `BandEditorView.visibleRats`）。如果这里仍然输出
+    ///     全部 supported 制式，「界面上没画出来」的那些就会被按当前 selection 重写，
+    ///     一旦哪次 selection 没初始化全，它们就被静默清空 —— 那是「禁用 3G/2G」，
+    ///     不是「不展示 3G/2G」。
+    ///
+    /// 所以：**只对界面上真正可编辑的制式负责，其余一概不碰。**
     static func payload(selection: [RadioAccessTechnology: Set<Int>],
-                        supported: [RadioAccessTechnology: [Band]]) -> [String: [NSNumber]] {
+                        supported: [RadioAccessTechnology: [Band]],
+                        only: [RadioAccessTechnology]) -> [String: [NSNumber]] {
         var out: [String: [NSNumber]] = [:]
-        for (technology, bands) in supported {
+        for technology in only {
+            guard let bands = supported[technology] else { continue }
             let picked = selection[technology] ?? []
             out[technology.rawKey] = bands
                 .filter { picked.contains($0.number) }

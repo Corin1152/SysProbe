@@ -205,9 +205,15 @@ final class BandService: ObservableObject {
     ///
     /// **写之前必须已经读过同一个卡槽** —— 桥接层是从读回来的那个对象出发改的，
     /// 没有它就没得改。界面上的流程天然满足这一点（进页面先读）。
-    func write(selection: [RadioAccessTechnology: Set<Int>], slot: Int) -> Bool {
+    ///
+    /// `only` 限定只写这些制式，界面上没画出来的那些一概不碰（理由见
+    /// `BandSet.payload` 的注释）。现在界面只画 4G，所以这里传的也是 4G ——
+    /// **3G / 2G 的勾选状态原样留在 Modem 里**，不受这一页影响。
+    func write(selection: [RadioAccessTechnology: Set<Int>],
+               only: [RadioAccessTechnology],
+               slot: Int) -> Bool {
         guard let supported = bandInfo?.supported else { return false }
-        let payload = BandSet.payload(selection: selection, supported: supported)
+        let payload = BandSet.payload(selection: selection, supported: supported, only: only)
 
         var ok = false
         bandQueue.sync {
