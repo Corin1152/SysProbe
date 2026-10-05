@@ -53,12 +53,17 @@ final class PowerMonitor: ObservableObject {
     @Published private(set) var thermalStateSince: Date = .now
     @Published private(set) var lowPowerMode: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled
 
-    /// Called at the end of every tick. `RootView` installs it and fans the reading
-    /// out to the live activity, the widget and the floating meter.
+    /// Called at the end of every tick.
     ///
     /// A closure rather than SwiftUI's `onChange`, which is what this used to be:
     /// view updates stop when the app leaves the screen, and off screen is exactly
-    /// when the floating meter is the only thing still showing a number.
+    /// when a floating meter would be the only thing still showing a number.
+    ///
+    /// **当前仓库里没有任何地方安装它**（2026-10-05 核实：全仓只有这里声明、
+    /// 下面调用一次，没有赋值点）。原来那段注释说「`RootView` 装上它、再分发给
+    /// live activity / widget / 浮窗」—— 那三样在本仓库里都不存在。留着它是给
+    /// 以后真要做浮窗时用的挂钩，不是已经接好的线。改这段注释时别把「已经有人
+    /// 在用」写回去。
     var onTick: ((PowerSnapshot) -> Void)?
 
     /// Usable pack energy, used to turn %/h into watts. Read from IOKit where the

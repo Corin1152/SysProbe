@@ -57,7 +57,7 @@ struct CleanView: View {
 
                     if let scan {
                         appsSection
-                        footerNotes(scan)
+                        footerNotes()
                     } else {
                         toolRow
                     }
@@ -241,6 +241,16 @@ struct CleanView: View {
         }
     }
 
+    /// 按钮上那个大小文案。
+    ///
+    /// **0 单独处理**：`ByteCountFormatter` 在 `allowedUnits` 不含 byte 时会把 0
+    /// 格式化成 "Zero KB" 这种半截结果 —— 而这一页「某项是 0」是很常见的状态
+    /// （刚清完、或本来就没有日志）。统一成 `0 B`，所有语言都读得通，
+    /// 也不用为它新引一条本地化键。
+    private func bytesLabel(_ value: Int64) -> String {
+        value <= 0 ? "0 B" : Formatting.bytes(UInt64(value))
+    }
+
     private func bytesText(for scope: StorageCleanScope) -> String? {
         guard let scan else { return nil }
         let bytes: Int64
@@ -250,7 +260,7 @@ struct CleanView: View {
         case .temp: bytes = scan.tempBytes
         default: bytes = 0
         }
-        return Formatting.bytes(UInt64(bytes))
+        return bytesLabel(bytes)
     }
 
     private func title(for scope: StorageCleanScope) -> String {
@@ -266,12 +276,12 @@ struct CleanView: View {
     private var appBytesText: String? {
         guard let scan else { return nil }
         let total = scan.apps.reduce(Int64(0)) { $0 + $1.bytes }
-        return Formatting.bytes(UInt64(total))
+        return bytesLabel(total)
     }
 
     private var totalBytesText: String? {
         guard let scan else { return nil }
-        return Formatting.bytes(UInt64(scan.totalBytes))
+        return bytesLabel(scan.totalBytes)
     }
 
     /// 工具状态一行 + 页脚说明。扫完之前显示工具状态，扫完之后并进页脚。
@@ -298,7 +308,11 @@ struct CleanView: View {
         )
     }
 
-    private func footerNotes(_ scan: StorageScanResult) -> some View {
+    /// 扫完之后的页脚：释放量 + 工具状态 + 两条说明。
+    ///
+    /// 不接 `scan` 参数 —— 它要的东西（`lastFreed` / `toolReady`）都在 `self` 上，
+    /// 传进来反而让读者以为用了扫描结果。
+    private func footerNotes() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let freed = lastFreed, freed > 0 {
                 Text(Strings.text("Freed %@", Formatting.bytes(UInt64(freed))))

@@ -131,8 +131,9 @@
 
     el('val-tstop').textContent = fmtDeg(conf.charge_temp_above);
     el('val-tstart').textContent = fmtDeg(conf.charge_temp_below);
-    el('rg-tstop').value = conf.charge_temp_above || 40;
-    el('rg-tstart').value = conf.charge_temp_below || 35;
+    // 回退值 35 / 10 与守护进程 initConf、以及 App 侧 ChargeBridge 的默认值保持一致。
+    el('rg-tstop').value = conf.charge_temp_above || 35;
+    el('rg-tstart').value = conf.charge_temp_below || 10;
 
     // 档位文案直接复用原版的键（off / nominal / light / moderate / heavy）。
     // 原版这两个值默认为空串，空串按 off 显示 —— 否则那一行会是空白。

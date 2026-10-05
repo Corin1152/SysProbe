@@ -62,21 +62,30 @@ nonisolated enum WakeService {
 
     // MARK: - 本机地址
 
-    /// 本机第一个正在用的 IPv4（跳过 loopback）。取不到返回 `nil`。
+    /// 本机用于发广播的 IPv4。取不到返回 `nil`。
     ///
-    /// 用 `getifaddrs` 而不是查某个固定接口名：Wi-Fi 与蜂窝各有一个接口，
-    /// 而且接口名在不同机型上不保证一致。
+    /// **只认 Wi-Fi / 蜂窝接口，并按 `NetworkKind.priority` 取最优的那个**
+    /// （2026-10-05 修）。
+    ///
+    /// 原来只判「up 且非 loopback」，取 `getifaddrs` 里第一个满足条件的 —— 那会在
+    /// 设备挂着 VPN 时取到 `utun*`，在有 AirDrop 活动时取到 `awdl0`（169.254.x.x
+    /// 链路本地地址）。按它们的网段算出来的广播地址会把魔术包发进隧道或链路本地网段，
+    /// **局域网里那台机器根本收不到**；而 `sendto` 照样返回成功，界面显示「已发送」——
+    /// 取错了没有任何人知道。`NetworkKind` 已经把这层判据收敛过了，直接复用。
     static func localIPv4() -> String? {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return nil }
         defer { freeifaddrs(list) }
 
+        var best: (kind: NetworkKind, address: String)?
         var pointer: UnsafeMutablePointer<ifaddrs>? = first
         while let entry = pointer {
             defer { pointer = entry.pointee.ifa_next }
 
             let flags = Int32(entry.pointee.ifa_flags)
             guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
+                  let name = entry.pointee.ifa_name,
+                  let kind = NetworkKind(interfaceName: String(cString: name)),
                   let address = entry.pointee.ifa_addr,
                   address.pointee.sa_family == UInt8(AF_INET) else { continue }
 
@@ -84,9 +93,13 @@ nonisolated enum WakeService {
             guard getnameinfo(address, socklen_t(address.pointee.sa_len),
                               &host, socklen_t(host.count),
                               nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            return String(cString: host)
+
+            let value = String(cString: host)
+            // Wi-Fi 优先于蜂窝（`priority` 数字越小越优先），同类取先出现的那个。
+            if let current = best, current.kind.priority <= kind.priority { continue }
+            best = (kind, value)
         }
-        return nil
+        return best?.address
     }
 
     /// `192.168.1.20` → `192.168.1.255`。

@@ -299,7 +299,16 @@ final class HardwareMonitor: ObservableObject {
         ticks.reserveCapacity(Int(cpuCount) * stateCount)
         for core in 0..<Int(cpuCount) {
             for state in 0..<stateCount {
-                ticks.append(UInt64(cpuInfo[core * stateCount + state]))
+                // **必须按无符号重解释，不能直接 `UInt64(...)`。**
+                //
+                // `processor_info_array_t` 的元素是 `integer_t`（有符号 32 位），但内核
+                // 往里写的是 `natural_t` 的累计 tick。开机够久之后（idle tick 涨得最快）
+                // 最高位会被置上，那个元素读出来就是**负数**，而 `UInt64(负数)` 在
+                // Swift 里是**运行时 trap** —— 不是取到怪值，是整个采样线程崩掉。
+                //
+                // 用 `UInt32(bitPattern:)` 保留原字节再零扩展，这才是这段代码本来的
+                // 意思：下面 `now >= before ? now - before : 0` 那句就是按无符号回绕写的。
+                ticks.append(UInt64(UInt32(bitPattern: cpuInfo[core * stateCount + state])))
             }
         }
 

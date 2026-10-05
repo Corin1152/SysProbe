@@ -99,7 +99,12 @@ struct BandEditorView: View {
             // 数据卡」，这里落到 `BandService.preferredSlot()`（首选数据卡，且它必须
             // 确实插着卡）。换卡槽会触发 `.onChange(of: slot)` 去重读，所以那条路不再
             // 重复 load 一次。
-            let initial = BandService.preferredSlot()
+            //
+            // **必须丢到 detached 里跑**：这个探测是几次**同步 XPC**
+            // （`sysprobe_slot_has_sim` 每次两下、`sysprobe_preferred_data_slot` 一下，
+            // 单卡机上卡槽 2 那次还必然失败），而 `.task` 是在主 actor 上执行的 ——
+            // 留在主线程会卡住进页面的第一帧。与 `load` 同一个理由。
+            let initial = await Task.detached { BandService.preferredSlot() }.value
             if initial != slot {
                 slot = initial
             } else {

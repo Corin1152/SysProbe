@@ -108,12 +108,31 @@ int sysprobe_spawn_root_daemon(const char *path) {
         return EINVAL;
     }
 
+    // **先把上一轮的尸体收掉，再拉新的。**
+    //
+    // 守护进程是常驻的，正常情况下一个就够。但它如果**启动即失败**（端口被占、
+    // 配置读不出来、二进制缺依赖），看门狗每 10 秒会再拉一个 —— 而 App 从不 `wait`
+    // 它，于是每失败一次就留一个僵尸进程，长时间停在前台会越积越多。
+    //
+    // `WNOHANG` 是必需的：还活着的那个（正常情况）不能被阻塞等待。
+    // 这个 `static` 是刻意的跨调用状态，与上面那条串行队列在同一个进程里使用。
+    static pid_t lastDaemonPid = -1;
+    if (lastDaemonPid > 0) {
+        waitpid(lastDaemonPid, NULL, WNOHANG);
+        lastDaemonPid = -1;
+    }
+
     // 守护进程靠 `argc == 1` 判定自己该常驻。多传一个参数它就会去走
     // 「悬浮窗」那条分支 —— 那条分支要求包里还有一个 `SysProbe` 可执行文件，
     // 而那是 App 自己，会当场再拉起一个 App。所以这里必须一个参数都不给。
     char *const argv[] = { (char *const)path, NULL };
 
-    return sysprobe_spawn_root(path, argv, NULL);
+    pid_t pid = -1;
+    int err = sysprobe_spawn_root(path, argv, &pid);
+    if (err == 0 && pid > 0) {
+        lastDaemonPid = pid;
+    }
+    return err;
 }
 
 int sysprobe_spawn_root_tool(const char *toolPath, const char *command) {
@@ -194,16 +213,22 @@ int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
     if (command == NULL || command[0] == '\0') {
         return EINVAL;
     }
-    // 空位只允许在尾部：`arg2` 有值而 `arg1` 为空只会把参数传错位，
-    // 那种调用是调用方的 bug，当场拒绝比静默传错好。
-    if ((arg2 != NULL || arg3 != NULL) && arg1 == NULL) {
+    // 空位只允许在**尾部**。
+    //
+    // `execve` 的 argv 以**第一个 NULL** 结尾 —— 中间出现空位不是「跳过这一位」，
+    // 而是「从这里整个截断」，后面的参数会被静默丢掉。第一版只拦了
+    // 「arg1 为空但 arg2/arg3 非空」，漏掉了「arg1 非空、arg2 为空、arg3 非空」
+    // 这一种，那种调用会把 arg3 丢掉而调用方毫不知情。两种都当场拒绝。
+    if (arg1 == NULL && (arg2 != NULL || arg3 != NULL)) {
+        return EINVAL;
+    }
+    if (arg2 == NULL && arg3 != NULL) {
         return EINVAL;
     }
 
     // `posix_spawn` 返回时已经把 argv 拷进内核，栈数组活不到子进程结束也没关系
-    //（与上面两个入口同一个理由）。为 `NULL` 的参数直接进数组没问题：
-    // `execve` 约定 argv 以 `NULL` 结尾，中间的 `NULL` 会被当成结尾跳过 ——
-    // 而这恰好就是「为空的参数不进 argv」想达到的效果。
+    //（与上面两个入口同一个理由）。上面的校验已经保证空位只出现在尾部，
+    // 所以这个数组里不会出现「中间的 NULL」。
     char *const argv[] = {
         (char *const)toolPath,
         (char *const)command,

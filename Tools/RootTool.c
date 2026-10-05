@@ -370,6 +370,31 @@ static int thermal_store(CFMutableDictionaryRef dict, CFPropertyListFormat forma
         return -1;
     }
 
+    // **先落盘，再 rename。**
+    //
+    // 上面那段注释说「任何时刻磁盘上的 disabled.plist 要么旧内容要么新内容」，
+    // 但那只在**数据确实落到盘上**时成立。`CFPropertyListWrite` 写完只进了页缓存，
+    // `rename` 又是元数据操作 —— 两者都不保证数据落盘。掉电时完全可能出现
+    // 「文件名换过去了、内容是空的」，而这是 launchd 的配置：读不出来它会
+    // **把所有已禁用的服务一起恢复**，正好是这个函数想避免的后果。
+    //
+    // `CFWriteStream` 关掉之后拿不到 fd，只能重新打开一次。用 `fsync` 而不是
+    // `F_FULLFSYNC`：后者更彻底也更慢，而这里只在用户拨开关时写一次，
+    // 慢一点无所谓，但没必要为它多等一次硬件刷盘。
+    int syncFd = open(tmp, O_RDONLY);
+    if (syncFd < 0) {
+        unlink(tmp);
+        *error = "open-sync";
+        return -1;
+    }
+    if (fsync(syncFd) != 0) {
+        close(syncFd);
+        unlink(tmp);
+        *error = "fsync";
+        return -1;
+    }
+    close(syncFd);
+
     if (rename(tmp, SYSPROBE_DISABLED_PLIST) != 0) {
         unlink(tmp);
         *error = "rename";

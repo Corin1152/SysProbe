@@ -65,8 +65,12 @@ nonisolated struct ChargeConfig: Equatable {
         chargeBelow = Self.int(raw["charge_below"]) ?? 20
         chargeAbove = Self.int(raw["charge_above"]) ?? 80
         enableTemperature = Self.bool(raw["enable_temp"])
-        temperatureAbove = Self.int(raw["charge_temp_above"]) ?? 40
-        temperatureBelow = Self.int(raw["charge_temp_below"]) ?? 35
+        // 这两个回退值必须与上面属性的默认值（35 / 10）**一致**，也必须与守护进程
+        // `initConf` 里的值一致。原来这里写的是 40 / 35 —— 属性默认值改对了、回退漏改了，
+        // 于是守护进程没起来（或 conf 里缺这两个键）时界面显示的是一组并非生效中的值，
+        // 正好是上面那段注释要避免的情形。
+        temperatureAbove = Self.int(raw["charge_temp_above"]) ?? 35
+        temperatureBelow = Self.int(raw["charge_temp_below"]) ?? 10
         preferSmartBattery = Self.bool(raw["adv_prefer_smart"])
         predictiveInhibit = Self.bool(raw["adv_predictive_inhibit_charge"])
         disableInflow = Self.bool(raw["adv_disable_inflow"])

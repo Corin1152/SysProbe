@@ -213,6 +213,16 @@ final class BandService: ObservableObject {
                only: [RadioAccessTechnology],
                slot: Int) -> Bool {
         guard let supported = bandInfo?.supported else { return false }
+
+        // `only` 为空 = 一个可写的制式都没有。这时候不能往下走：桥接层会拿一个
+        // 空字典去调 `setActiveBandInfo:`，那一下**可能照样返回成功** ——
+        // 界面就会显示「已保存」而其实什么都没变，而且白白触发一次基带重配置。
+        // 直接判失败，让 banner 说实话。
+        //
+        // 正常情况下走不到这里（没有可编辑的制式时，界面上也就没有能勾的东西，
+        // 保存按钮是灰的）；这是给「读了半天但没读出 4G」那种边角情况兜底。
+        guard !only.isEmpty else { return false }
+
         let payload = BandSet.payload(selection: selection, supported: supported, only: only)
 
         var ok = false
