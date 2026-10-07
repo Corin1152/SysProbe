@@ -2,17 +2,6 @@ import Foundation
 
 // MARK: - 共享 CPU 指标（由 Statusbar / Helium 的 HUD 发布）
 
-/// 共享文件的候选路径。发布方（Helium 的 HUD）两个都写，这里按序取第一个能读的。
-///
-/// `/var/tmp` 是主路径；Caches 那份重启后仍在，覆盖 `/var/tmp` 不可写的情况。
-private let cpuMetricsPaths = [
-    "/var/tmp/cpu_metrics.json",
-    "/var/mobile/Library/Caches/cpu_metrics.json",
-]
-
-/// 超过这个秒数就认为发布方已经停了 —— 宁可自己采，也不显示一个陈旧的数。
-private let cpuMetricsFreshnessWindow: TimeInterval = 5
-
 /// 读取 Statusbar（Helium）发布的 CPU 指标。
 ///
 /// **为什么要有这一层**：两个进程各自采样永远不可能显示同一个数 —— 采样相位错开，
@@ -36,7 +25,22 @@ nonisolated enum CPUSharedMetrics {
     }
 
     static func read(now: Date = .now) -> Reading? {
-        for path in cpuMetricsPaths {
+        // 这两个常量**刻意写在函数体里**，不放文件作用域：本工程设了
+        // `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，它会把文件作用域的 `let`
+        // 也判成主 actor 隔离，于是 `nonisolated` 的 static func 里访问不到 ——
+        // CI 会直接报 "main actor-isolated let ... can not be referenced from a
+        // nonisolated context"。
+        //
+        // 候选路径：发布方（Helium 的 HUD）两个都写，这里按序取第一个能读的。
+        // `/var/tmp` 是主路径；Caches 那份重启后仍在，覆盖 `/var/tmp` 不可写的情况。
+        let paths = [
+            "/var/tmp/cpu_metrics.json",
+            "/var/mobile/Library/Caches/cpu_metrics.json",
+        ]
+        // 超过这个秒数就认为发布方已经停了 —— 宁可自己采，也不显示一个陈旧的数。
+        let freshnessWindow: TimeInterval = 5
+
+        for path in paths {
             guard let data = FileManager.default.contents(atPath: path),
                   let json = try? JSONSerialization.jsonObject(with: data),
                   let object = json as? [String: Any],
@@ -46,7 +50,7 @@ nonisolated enum CPUSharedMetrics {
 
             let date = Date(timeIntervalSince1970: timestamp)
             // 允许一点点时钟回拨，但拒绝明显过期的文件。
-            guard now.timeIntervalSince(date) <= cpuMetricsFreshnessWindow else { continue }
+            guard now.timeIntervalSince(date) <= freshnessWindow else { continue }
 
             let usage = (object["usage"] as? Double) ?? 0
             let perCore = (object["per_core"] as? [Double]) ?? []
