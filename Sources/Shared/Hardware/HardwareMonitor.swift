@@ -190,10 +190,30 @@ final class HardwareMonitor: ObservableObject {
 
         var next = HardwareSnapshot()
         next.date = .now
-        next.cpu = Self.readCPU(previous: &previousTicks)
-        next.cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
-        // 探针的结果优先；没测到（或结果不可信）就用机型表的标称值兜底。
-        next.cpu.frequencyMHz = measuredFrequencyMHz ?? Self.cpuIdentity.nominalFrequencyMHz
+
+        // 先照常采一次自己的 CPU —— 即使这次会用共享值，也必须推进 `readCPU` 的
+        // tick 基线，否则一旦发布方停下、切回自采，第一次差分会因为基线太旧而算出
+        // 一个离谱的占用。
+        let ownCPU = Self.readCPU(previous: &previousTicks)
+
+        if let shared = CPUSharedMetrics.read() {
+            // 走共享：数值来自 Statusbar（Helium）的 HUD，两个 App 显示同一个数。
+            var cpu = ownCPU
+            cpu.usage = shared.usage
+            cpu.perCore = shared.perCore.isEmpty ? ownCPU.perCore : shared.perCore
+            cpu.frequencyMHz = shared.frequencyMHz
+            cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
+            next.cpu = cpu
+        } else {
+            // 回落自采。频率**只用实测值**：探针没测到就显示「—」，
+            // 不再回落机型标称值 —— 那是一个静态的「设计频率」，
+            // 把它当实时频率显示出来是误导（也是两 App 数值对不上的主因之一）。
+            var cpu = ownCPU
+            cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
+            cpu.frequencyMHz = measuredFrequencyMHz ?? 0
+            next.cpu = cpu
+        }
+
         next.memory = Self.readMemory()
         // 容量一次查询是一次文件系统往返，而数字几分钟都不会变。十秒问一次足够，
         // 中间直接复用上次的结果。
