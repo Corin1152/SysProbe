@@ -20,7 +20,12 @@ import Foundation
 ///   gas gauge battery      battery temperature
 ///   Charger TQ0j / TQ0d    charger junction / die temperature
 ///   PMU tdie1…n            SoC die temperatures
-nonisolated final class HIDSensors {
+///
+/// `@unchecked Sendable`：可变的只有 `services` 这一个数组，而它只在 `rescan()` 里
+/// **整体替换**。约定是「这个类的所有方法都只在 `PowerMonitor.samplingQueue` 上调用」
+/// —— 在主线程直接读 `services` 会和采样队列上的 `rescan()` 构成并发读写，Swift 的
+/// 独占访问检查会当场 trap，所以连 `serviceCount` 都要在采样那一拍顺带带回来。
+nonisolated final class HIDSensors: @unchecked Sendable {
     enum Kind: Int {
         case current = 2
         case voltage = 3

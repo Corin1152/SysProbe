@@ -11,7 +11,11 @@ import Foundation
 /// - powerd `IOPSCopyPowerSourcesInfo`: percent, charging flags, low power mode.
 /// - powerd `IOPSCopyExternalPowerAdapterDetails`: the full USB-PD handshake.
 /// - `IOPSCopyChargeStatus`: refused (kIOReturnNotPrivileged), kept for the record.
-nonisolated final class IOKitBattery {
+///
+/// `@unchecked Sendable`：实例本身没有需要保护的共享可变状态（函数指针都是 `let`），
+/// 唯一的可写项是 `chargeStatusError`，而它只由 `readChargeStatus()` 写。整个类的约定
+/// 是「只在 `PowerMonitor.samplingQueue` 上访问」—— 读取已经搬到主线程之外了。
+nonisolated final class IOKitBattery: @unchecked Sendable {
     private typealias ServiceMatchingFn =
         @convention(c) (UnsafePointer<CChar>) -> Unmanaged<CFDictionary>?
     private typealias GetMatchingServiceFn =

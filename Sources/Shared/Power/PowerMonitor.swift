@@ -10,6 +10,28 @@ nonisolated struct LiveSample: Identifiable, Hashable {
     var id: Date { date }
 }
 
+/// 一次采样从 IOKit / HID 读回来的**原始**数据。
+///
+/// 存在的理由：读取搬到了 `PowerMonitor.samplingQueue` 上，而 `PowerSnapshot` 是主线程
+/// 状态机的产物，不该跨隔离传。这一层只装「读回来的东西」，装完交给主线程去构造快照。
+///
+/// 标 `@unchecked Sendable` 是因为 `[String: Any]` 里的 `Any` 通不过检查。里面装的全是
+/// `IORegistryEntryCreateCFProperties` / `IOPSCopyPowerSourcesInfo` 当场新建的
+/// CFString / CFNumber / CFArray / CFData，读出来就没有别的持有者，跨线程只读是安全的。
+nonisolated struct PowerReadings: @unchecked Sendable {
+    let registry: [String: Any]
+    let powerSources: [[String: Any]]
+    let adapterDetails: [String: Any]?
+    let sensors: [HIDSensors.Reading]
+    /// 采样那一刻 `HIDSensors` 的服务数量。
+    ///
+    /// 之所以要把它一起带回来，而不是在主线程读 `sensors.serviceCount`：那个数组会被
+    /// 采样队列上的 `rescan()` 整体替换，主线程直接读就是并发读写 —— Swift 的独占访问
+    /// 检查会当场 trap，而不是给你一个旧值。
+    let sensorServiceCount: Int
+    let chargeStatus: [String: Any]?
+}
+
 /// Drives every probe on a one-second tick and merges the results into one
 /// observable object the whole UI reads from.
 ///
@@ -81,7 +103,13 @@ final class PowerMonitor: ObservableObject {
         didSet { UserDefaults.standard.set(configuredBatteryWattHours, forKey: Self.wattHoursKey) }
     }
 
-    var sensorsAvailable: Bool { sensors != nil && !(sensors?.isEmpty ?? true) }
+    /// 传感器列表是否非空。
+    ///
+    /// **是 `@Published`，不再是计算属性。** 原来在主线程直接读 `HIDSensors.services`，
+    /// 而那个数组会被采样队列上的 `rescan()` 整体替换 —— 并发读写，Swift 的独占访问
+    /// 检查会当场 trap。现在改成在采样那一拍顺带把服务数量带回来
+    /// （见 `PowerReadings.sensorServiceCount`），这里只读那个结论。
+    @Published private(set) var sensorsAvailable = false
     var deviceModelIdentifier: String { Self.machineIdentifier }
 
     // MARK: Private
@@ -90,14 +118,25 @@ final class PowerMonitor: ObservableObject {
     private static let wattHoursKey = "batteryWattHours"
     private static let liveWindow = 180
 
-    private let battery = IOKitBattery()
-    private let sensors = HIDSensors()
+    /// 传感器实例。**只在 `samplingQueue` 上使用** —— 读取已经搬到主线程之外，而
+    /// `HIDSensors.services` 与 `IOKitBattery.chargeStatusError` 都是可变的。
+    nonisolated private let battery = IOKitBattery()
+    nonisolated private let sensors = HIDSensors()
     private let energy = EnergyAccumulator()
     private let resistance = PathResistanceMeter()
     private let store = SessionStore()
 
     private var ticker: AnyCancellable?
     private var tick = 0
+    /// 跑 IOKit / HID 读取的串行队列。
+    ///
+    /// 搬离主线程的理由：`IORegistryEntryCreateCFProperties` 会把整份属性字典物化，
+    /// `IOPSCopyPowerSourcesInfo` 要枚举所有电源，`HIDSensors.read()` 要逐服务取一次
+    /// 事件 —— 每秒把这些按顺序砸进主线程，就是每秒一次的卡顿。现在主线程只做
+    /// 「构造快照 + 跑会话状态机 + 发布」。
+    private let samplingQueue = DispatchQueue(label: "com.corin.sysprobe.power", qos: .utility)
+    /// 一次读取还没回来时置位，用来**丢拍**而不是让任务在队列上堆积。
+    private var samplingInFlight = false
     /// 实时曲线的原始序列。`live` 是它的发布副本，落盘频率低一半（见 `appendLive`）。
     private var samples: [LiveSample] = []
     private var lastSampleWrite: Date = .distantPast
@@ -150,6 +189,12 @@ final class PowerMonitor: ObservableObject {
 
     func start() {
         guard ticker == nil else { return }
+        // 注意：这里**不像 `HardwareMonitor.start` 那样同步跑首拍**。
+        //
+        // 那一拍要遍历 IOKit 注册表、再加一轮 HID 服务枚举，是几十毫秒的量级；而这条
+        // 路径在负一屏扩展里属于启动路径，那里的 watchdog 预算撑不起。代价只是负一屏的
+        // 第一帧功率数据是空的，一秒后补上 —— 硬件页那边不同，它的首拍只有几百微秒的
+        // Mach 调用，而异步会让首屏闪一帧全 0，所以那边选了同步。
         refresh()
         // 用挂在 `.default` 模式上的 `Timer`，而不是 `Task.sleep`。
         //
@@ -185,6 +230,9 @@ final class PowerMonitor: ObservableObject {
 
     // MARK: Refresh
 
+    /// 每拍被 `Timer` 调一次。**只做两件必须在主线程做的事**：更新那几个从
+    /// `ProcessInfo` 直接读来的状态，以及守卫。真正的 IOKit / HID 读取跑在
+    /// `samplingQueue` 上（见 `readSensors`），结果回到 `apply`。
     func refresh() {
         tick += 1
         thermal.update()
@@ -194,8 +242,36 @@ final class PowerMonitor: ObservableObject {
         thermalStateSince = thermal.stateSince
         lowPowerMode = thermal.lowPowerMode
 
-        let registry = battery?.readRegistryProperties() ?? [:]
-        let sources = battery?.readPowerSources() ?? []
+        // 上一次的读取还没回来就丢这一拍 —— 理由同 `HardwareMonitor.refresh`。
+        guard !samplingInFlight else { return }
+        samplingInFlight = true
+
+        samplingQueue.async { [weak self] in
+            guard let self else { return }
+            let readings = Self.readSensors(battery: self.battery, sensors: self.sensors)
+            Task { @MainActor in
+                self.apply(readings)
+                self.samplingInFlight = false
+            }
+        }
+    }
+
+    // MARK: 采样（后台）
+
+    /// 把 IOKit / HID 读一遍。**不碰任何主线程状态**，所以整块跑在 `samplingQueue` 上。
+    nonisolated private static func readSensors(battery: IOKitBattery?,
+                                                sensors: HIDSensors?) -> PowerReadings {
+        PowerReadings(registry: battery?.readRegistryProperties() ?? [:],
+                      powerSources: battery?.readPowerSources() ?? [],
+                      adapterDetails: battery?.readAdapterDetails(),
+                      sensors: sensors?.read() ?? [],
+                      sensorServiceCount: sensors?.serviceCount ?? 0,
+                      chargeStatus: battery?.readChargeStatus())
+    }
+
+    /// 主线程那一半：构造快照、跑会话状态机、发布。
+    private func apply(_ readings: PowerReadings) {
+        let sources = readings.powerSources
         // Only Raw data reads this. It used to be assigned under `#if DEBUG`, when that
         // screen was Debug-only; now that the page ships, the guard made its "powerd
         // power sources" panel report none in every release build — a false statement
@@ -203,20 +279,23 @@ final class PowerMonitor: ObservableObject {
         // write costs nothing while that page is closed: `@Observable` invalidates only
         // views that read the property, and no other view does.
         powerSources = sources
+        sensorsAvailable = readings.sensorServiceCount > 0
         let internalBattery = sources.first { ($0["Type"] as? String) == "InternalBattery" } ?? sources.first
 
         let current = PowerSnapshot(date: .now,
-                                    registry: registry,
+                                    registry: readings.registry,
                                     powerSource: internalBattery,
-                                    adapterDetails: battery?.readAdapterDetails(),
-                                    sensors: sensors?.read() ?? [],
-                                    chargeStatus: battery?.readChargeStatus())
+                                    adapterDetails: readings.adapterDetails,
+                                    sensors: readings.sensors,
+                                    chargeStatus: readings.chargeStatus)
         snapshot = current
 
         // Charger-side sensors only exist while something is plugged in, so the
         // service list is re-enumerated on every plug event and occasionally after.
+        // `rescan()` replaces `HIDSensors.services`, so it has to run on the sampling
+        // queue — never here.
         if lastExternalConnected != current.externalConnected || tick % 15 == 0 {
-            sensors?.rescan()
+            samplingQueue.async { [weak self] in self?.sensors?.rescan() }
         }
 
         appendLive(current)
@@ -454,7 +533,10 @@ final class PowerMonitor: ObservableObject {
     private func collectDiagnostics() {
         var lines: [String] = []
         lines.append("IOKit: \(battery == nil ? "unavailable" : "loaded")")
-        lines.append("HID sensors: \(sensors == nil ? "unavailable" : "\(sensors?.serviceCount ?? 0) services")")
+        // `serviceCount` 读的是 `HIDSensors.services`，所以同样走采样队列取 ——
+        // 与 `sensorsAvailable` 是同一个理由。`init` 里没有并发，但走队列不用特判。
+        let serviceCount = samplingQueue.sync { sensors?.serviceCount ?? 0 }
+        lines.append("HID sensors: \(sensors == nil ? "unavailable" : "\(serviceCount) services")")
         lines.append("Device: \(Self.machineIdentifier)")
         #if targetEnvironment(simulator)
         lines.append("Simulator: IOKit reads the Mac's battery, HID sensors are absent.")
@@ -463,8 +545,13 @@ final class PowerMonitor: ObservableObject {
     }
 
     /// Every HID service in the system, for the debug view.
+    ///
+    /// **同步进采样队列取。** `fullInventory()` 会先 `discover(matching: nil)` 再
+    /// `rescan()`，两者都改 `HIDSensors.services` —— 只能在采样队列上做。这里是全工程
+    /// 唯一一处主线程需要进那条队列的地方，而它是 Debug 页的按钮：等采样跑完（几十
+    /// 毫秒）可以接受。采样块回主线程走的是异步 `Task`，所以这里的 `sync` 不会死锁。
     func hidInventory() -> [HIDSensors.ServiceInfo] {
-        sensors?.fullInventory() ?? []
+        samplingQueue.sync { sensors?.fullInventory() ?? [] }
     }
 
     private static let machineIdentifier: String = {
