@@ -202,16 +202,12 @@ final class HardwareMonitor: ObservableObject {
             cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
             next.cpu = cpu
         } else {
-            // 回落自采 —— 只有这时才需要自己的探针。
+            // 回落：没有新鲜的共享文件（HUD 没在写）。
             //
-            // 实测主频每三秒一次：探针要起线程、热身、再跑三轮计测，合计 15–20 ms
-            // 的满速忙循环。一秒一次是白烧电：频率不会那么快变，而三秒一次的代价
-            // 不到 1% 的单核占用。
-            if tick % 3 == 1 {
-                refreshFrequencyIfNeeded()
-            }
-            // 频率**只用实测值**：探针没测到就显示「—」，不再回落机型标称值 ——
-            // 那是一个静态的「设计频率」，把它当实时频率显示出来是误导。
+            // **这里不再跑自己的忙循环探针。** 两个 App 各自跑探针会互抢性能核、
+            // 还会把时钟顶高发热 —— 这正是要避免的。HUD 是常驻的、唯一采集者，
+            // 正常情况下文件总是新鲜的；所以这里只显示**上一次已知**的值
+            // （还没有就显示「—」），不再自测。
             var cpu = ownCPU
             cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
             cpu.frequencyMHz = measuredFrequencyMHz ?? 0
