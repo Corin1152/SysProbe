@@ -161,9 +161,13 @@ done < <(find "$BUILD_DIR/Payload/$SCHEME.app" -name '*.appex' -type d -print0)
 #
 # 顺序是 strip 之后才签，反过来会被 strip 作废。
 #
-# **扩展不签。** 它现在没有 entitlements、跑得好好的，就别动它 —— 这一条不是
-# 省事，是「不要在没有设备可测的情况下改动已经在工作的东西」。
+# 扩展（负一屏）也要签一份**最小** entitlements。它默认被沙箱挡住，读不到 HUD
+# 写在 /var/tmp 与 Caches 里的共享指标文件（两个路径都在它容器之外），于是退化成
+# **自己采样** —— 结果就是负一屏的占用/频率和主 App、Statusbar 不是同一个数，
+# 而且静默、无任何报错。这里只授「读文件」这一件事，别把主 App 那套
+# posix_spawn / 电源权限也塞进去。
 ENTITLEMENTS="Support/SysProbe.entitlements"
+EXTENSION_ENTITLEMENTS="Support/TodayExtension.entitlements"
 # 维护工具用**自己那份**：它要的权限（platform-application / no-container /
 # no-sandbox）与主 App 那份完全是两回事，别合并 —— 见那个文件的注释。
 TOOL_ENTITLEMENTS="Support/SysProbeRootTool.entitlements"
@@ -176,7 +180,13 @@ for binary in "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME" \
   ldid -S"$ENTITLEMENTS" "$binary"
 done
 ldid -S"$TOOL_ENTITLEMENTS" "$TOOL"
-echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS, SysProbeRootTool with $TOOL_ENTITLEMENTS"
+# 每个 .appex 单独签它的可执行文件。
+for appex in "$BUILD_DIR/Payload/$SCHEME.app"/PlugIns/*.appex; do
+  [ -d "$appex" ] || continue
+  ext_binary="$appex/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
+  ldid -S"$EXTENSION_ENTITLEMENTS" "$ext_binary"
+done
+echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS, SysProbeRootTool with $TOOL_ENTITLEMENTS, extension(s) with $EXTENSION_ENTITLEMENTS"
 
 # 包名带上版本号：`SysProbe-0.0.6.ipa`。取不到版本号时退回 `unsigned` ——
 # 宁可叫 `SysProbe-unsigned.ipa`，也不要出现 `SysProbe-.ipa` 这种残名。
@@ -268,6 +278,26 @@ for target in "$main_binary" "$daemon"; do
     fi
   done
   echo "  entitlements: $(basename "$target") ok"
+done
+
+# 扩展（负一屏）也必须有 entitlements —— 否则它读不到共享指标文件、自己采样，
+# 负一屏就会和主 App / Statusbar 显示不一样的数。同样是静默失败：界面照常显示，
+# 只是对不上，不会有任何报错。所以这里卡死。
+for appex in "$app_dir"/PlugIns/*.appex; do
+  [ -d "$appex" ] || continue
+  ext_binary="$appex/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$appex/Info.plist")"
+  ext_entitlements="$(ldid -e "$ext_binary" 2>/dev/null || true)"
+  if [ -z "$ext_entitlements" ]; then
+    echo "::error::$(basename "$appex") carries no entitlements. It would be sandboxed, could not read the shared CPU metrics file, and would fall back to sampling on its own — so the Today widget would silently disagree with the app." >&2
+    exit 1
+  fi
+  for key in com.apple.private.security.no-sandbox com.apple.security.exception.files.absolute-path.read-write; do
+    if ! printf '%s' "$ext_entitlements" | grep -q "$key"; then
+      echo "::error::$(basename "$appex") is missing the '$key' entitlement; it would not be able to read the shared CPU metrics file." >&2
+      exit 1
+    fi
+  done
+  echo "  entitlements: $(basename "$appex") ok"
 done
 
 # 频段设置要的权限。**只有主 App 需要** —— 守护进程不碰蜂窝网络，所以它不在上面

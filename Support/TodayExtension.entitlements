@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  负一屏 Today 扩展（TodayExtension.appex）的 entitlements。
+
+	  由 CI（`scripts/build-ipa.sh`）用 `ldid -S` 签进 appex 的可执行文件；
+	  TrollStore 安装时会**保留** IPA 里已经存在的 entitlements。
+
+	  ══════════════════════════════════════════════════════════════════════════
+	  为什么扩展现在也要签
+	  ══════════════════════════════════════════════════════════════════════════
+
+	  之前扩展**不签**，靠系统默认沙箱跑。结果是：它读不到 HUD 写在
+	  `/var/tmp/cpu_metrics.json` 与 `/var/mobile/Library/Caches/cpu_metrics.json`
+	  的共享指标（两个路径都在它自己的容器之外）→ `CPUSharedMetrics.read()` 返回
+	  nil → `HardwareMonitor` 退化成**自己采样**。
+
+	  于是负一屏的 CPU 占用 / 频率和主 App、Statusbar 显示的不是同一个数 ——
+	  而且这是个**静默**差异：负一屏照常显示，只是对不上，没有任何报错。
+
+	  这里只授「读文件」这一件事，**刻意不**照抄主 App 那份（它带
+	  posix_spawn / 电源 / 蜂窝等一堆扩展用不到的权限）。
+	-->
+
+	<!-- 关掉沙箱，让扩展能读到容器外的共享文件。 -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<!-- 绝对路径读写例外。主 App 用的是同一把钥匙（值都是 "/"）；这里保持一致的
+	     写法，避免依赖「no-sandbox 是否已足够」这种不确定的假设。 -->
+	<key>com.apple.security.exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+</dict>
+</plist>

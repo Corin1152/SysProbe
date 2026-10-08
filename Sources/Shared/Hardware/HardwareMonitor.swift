@@ -180,13 +180,6 @@ final class HardwareMonitor: ObservableObject {
 
     func refresh() {
         tick += 1
-        // 实测主频每三秒一次。
-        //
-        // 探针要起线程、热身、再跑三轮计测，合计 15–20 ms 的满速忙循环。一秒一次是白
-        // 烧电：频率不会那么快变，而三秒一次的代价不到 1% 的单核占用。
-        if tick % 3 == 1 {
-            refreshFrequencyIfNeeded()
-        }
 
         var next = HardwareSnapshot()
         next.date = .now
@@ -198,6 +191,10 @@ final class HardwareMonitor: ObservableObject {
 
         if let shared = CPUSharedMetrics.read() {
             // 走共享：数值来自 Statusbar（Helium）的 HUD，两个 App 显示同一个数。
+            //
+            // **这时不跑自己的忙循环探针。** 探针会把自己那个核顶到最高频，还会和
+            // HUD 的探针互抢性能核 —— 多个探针同时跑，谁的读数都被污染。既然频率
+            // 直接用共享文件里的值，就没有必要再自测一次。
             var cpu = ownCPU
             cpu.usage = shared.usage
             cpu.perCore = shared.perCore.isEmpty ? ownCPU.perCore : shared.perCore
@@ -205,9 +202,16 @@ final class HardwareMonitor: ObservableObject {
             cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
             next.cpu = cpu
         } else {
-            // 回落自采。频率**只用实测值**：探针没测到就显示「—」，
-            // 不再回落机型标称值 —— 那是一个静态的「设计频率」，
-            // 把它当实时频率显示出来是误导（也是两 App 数值对不上的主因之一）。
+            // 回落自采 —— 只有这时才需要自己的探针。
+            //
+            // 实测主频每三秒一次：探针要起线程、热身、再跑三轮计测，合计 15–20 ms
+            // 的满速忙循环。一秒一次是白烧电：频率不会那么快变，而三秒一次的代价
+            // 不到 1% 的单核占用。
+            if tick % 3 == 1 {
+                refreshFrequencyIfNeeded()
+            }
+            // 频率**只用实测值**：探针没测到就显示「—」，不再回落机型标称值 ——
+            // 那是一个静态的「设计频率」，把它当实时频率显示出来是误导。
             var cpu = ownCPU
             cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
             cpu.frequencyMHz = measuredFrequencyMHz ?? 0
