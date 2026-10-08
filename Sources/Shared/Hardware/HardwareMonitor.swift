@@ -204,10 +204,19 @@ final class HardwareMonitor: ObservableObject {
         guard ticker == nil else { return }
         // 首拍**同步**跑完，之后每一拍才走 `samplingQueue`。
         //
-        // 理由只有一个：`TodayViewController` 在 `viewDidAppear` 里同步读一次
-        // `snapshot` 去铺首屏。异步的话那一帧拿到的还是全 0 的初始值，负一屏会先闪
-        // 一下空白。这一次 Mach 调用（几百微秒）换掉那次闪烁是划算的 —— 而且它只
-        // 发生在启动路径上，稳态里一次都不会有。
+        // 理由只有一条：这一次便宜 —— 两次 Mach 调用加一次共享文件读取，几百微秒到
+        // 一毫秒，放在 `viewDidAppear` 上无所谓，而且它只发生在启动路径上，稳态里一次
+        // 都不会有。同步跑掉最省事，不必为它单独考虑「第一次重绘时它还没回来」。
+        //
+        // 但要说清楚：负一屏的第一帧**并不等**这个首拍。`TodayViewController` 是先
+        // `installContentIfNeeded()`（里面同步读一次两份 `snapshot`，此刻两份都还是初始
+        // 值）再依次 `start()`；真正把数据铺上去的是 `power.$snapshot` 第一次发布触发的
+        // 那次重绘，而那时这一拍早就跑完了。所以同步的价值是「省掉一个本来要权衡的时序
+        // 问题」，不是「救下第一帧」—— 真要追究，它甚至是可以去掉的，但那是一次行为改动，
+        // 得单独验证。
+        //
+        // 对照 `PowerMonitor.start`：它那一拍要遍历 IOKit 注册表再加一轮 HID 服务枚举，
+        // 是几十毫秒的量级，在扩展的启动 watchdog 窗口里就不能同步。
         //
         // 此刻 `ticker` 还没建起来，不可能有采样在飞，所以这里直接碰 `samplingState`
         // 是安全的（平时的约定是「只在 `samplingQueue` 上访问」）。

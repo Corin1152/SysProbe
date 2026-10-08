@@ -191,10 +191,18 @@ final class PowerMonitor: ObservableObject {
         guard ticker == nil else { return }
         // 注意：这里**不像 `HardwareMonitor.start` 那样同步跑首拍**。
         //
-        // 那一拍要遍历 IOKit 注册表、再加一轮 HID 服务枚举，是几十毫秒的量级；而这条
-        // 路径在负一屏扩展里属于启动路径，那里的 watchdog 预算撑不起。代价只是负一屏的
-        // 第一帧功率数据是空的，一秒后补上 —— 硬件页那边不同，它的首拍只有几百微秒的
-        // Mach 调用，而异步会让首屏闪一帧全 0，所以那边选了同步。
+        // 两边的结构是一样的（先跑一拍，再挂上 1 Hz 的 `Timer`），差别只在那一次有多贵。
+        // 这一拍要遍历 IOKit 注册表（`IORegistryEntryCreateCFProperties` 会把整份属性
+        // 字典物化）再加一轮 HID 服务枚举，是几十毫秒的量级；而 `start()` 由
+        // `TodayViewController.viewDidAppear` 调用，还在扩展的启动 watchdog 窗口里，
+        // 那里撑不起这个数。硬件页那边是两次 Mach 调用加一次共享文件读取，几百微秒到
+        // 一毫秒，同步跑掉无所谓。
+        //
+        // 代价是这一拍的结果要等几十毫秒才到：`refresh()` 只是把读取派发出去，`apply`
+        // 回主 actor 时才发布 `snapshot`。所以负一屏第一次铺数据（由 `power.$snapshot`
+        // 的第一次发布驱动，见 `TodayViewController.installContentIfNeeded`）之前会先
+        // 有一帧是空的 —— 与改动前相比，这一帧本来也是空的（`installContentIfNeeded`
+        // 里那次同步读发生在 `start()` 之前），差别只是空的时间从 0 变成几十毫秒。
         refresh()
         // 用挂在 `.default` 模式上的 `Timer`，而不是 `Task.sleep`。
         //
