@@ -104,12 +104,16 @@ final class TodayWidgetView: UIView {
                           ? "\(hardware.cpu.frequencyMHz) MHz"
                           : "—")
 
+        // 这一格整个走 CPU-X 的口径：百分比和下面那个容量都是「只有完全空闲的页
+        // 才算数」（`strictUsage` + `free`），也就是 CPU-X 的 `Mem Free`。
+        // 不这么统一的话，93% 配一个 199 MB 的脚注会读不通 —— 3 GB 的机器剩 199 MB
+        // 对应的是 93%，剩 87 MB 对应的是 97%，两个数必须出自同一套算法。
         memoryCell.apply(caption: Strings.text("Memory"),
-                         value: Formatting.number(hardware.memory.usage * 100),
+                         value: Formatting.number(hardware.memory.strictUsage * 100),
                          unit: "%",
-                         tint: TodayStyle.loadTint(hardware.memory.usage),
+                         tint: TodayStyle.loadTint(hardware.memory.strictUsage),
                          // 只出容量，不带「空闲」二字 —— 这一格的位置本来就说明了它是剩余。
-                         footnote: Formatting.bytes(hardware.memory.available))
+                         footnote: Formatting.bytes(hardware.memory.free))
 
         chargerCell.apply(caption: Strings.text("Charger"),
                           value: Formatting.watts(power.inputWatts ?? 0),

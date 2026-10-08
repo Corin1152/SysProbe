@@ -29,6 +29,9 @@ struct MemoryStats: Hashable {
     var active: UInt64 = 0
     var inactive: UInt64 = 0
     var compressed: UInt64 = 0
+    /// `vm_statistics64.free_count` —— **完全空闲**的页。
+    ///
+    /// 这是 CPU-X 的 `Mem Free` 口径（它只取这一项），所以拿它去跟 CPU-X 比才对得上。
     var free: UInt64 = 0
     /// 内核随时可以丢弃的页（`purgeable_count`）。
     var purgeable: UInt64 = 0
@@ -45,10 +48,14 @@ struct MemoryStats: Hashable {
     /// 那正是「优化完已用/可用都没变化」的由来。所以这里看的是**此刻真能用的页**，
     /// 不是「理论上可回收的总量」。
     ///
-    /// CPU-X 的内存清理报的也是 `Mem Free`（空闲内存），口径一致。
-    ///
     /// `MemoryReclaimer.memoryPools()` 用的是同一套口径，两处必须一致，
     /// 否则优化报出来的数字跟面板对不上。
+    ///
+    /// **和 CPU-X 对不上，别拿它去对。** 拆开 ARMCPUZ 的内存页看过了，它报的
+    /// `Mem Free` 就是 `vm_statistics64.free_count` 一项，不含 purgeable/speculative，
+    /// 所以同一时刻它那个数会明显小于这里的「可用」（本机实测 87 MB 对 199 MB，
+    /// 差值基本就是那两项）。想跟 CPU-X 对齐时看 `free`，不要看 `available` ——
+    /// 界面上的 "Free" 指标就是为这个摆出来的。
     var available: UInt64 { free &+ purgeable &+ speculative }
 
     /// 已用 = 总量 − 可用。与「可用」互补，两者相加恒等于总量 ——
@@ -59,6 +66,20 @@ struct MemoryStats: Hashable {
     var used: UInt64 { total > available ? total - available : 0 }
     var usage: Double {
         total == 0 ? 0 : min(1, Double(used) / Double(total))
+    }
+
+    /// 只把**完全空闲**的页算作可用的占用率：`(总量 − free) / 总量`。
+    ///
+    /// 和 `usage` 的区别就是分母里那两项（purgeable + speculative）算不算数。
+    /// 单看数值 `strictUsage` 必然更大，而且大得不少 —— 本机实测差出 100 MB 上下，
+    /// 在 3 GB 的机器上就是三个百分点。
+    ///
+    /// 存在的理由只有一个：**跟 CPU-X 对得上**。负一屏那一格只放一个百分比加一个
+    /// 「还剩多少」，两者必须出自同一口径才读得通；而那一格摆出来的目的就是拿去和
+    /// CPU-X 比，所以它整个走 CPU-X 的口径（`free` + `strictUsage`），主 App 的
+    /// 硬件页则两套口径并列，好让人看见差在哪。
+    var strictUsage: Double {
+        total == 0 ? 0 : min(1, Double(total > free ? total - free : 0) / Double(total))
     }
 }
 
@@ -411,6 +432,31 @@ final class HardwareMonitor: ObservableObject {
 
     private static func readStorage() -> StorageStats {
         var stats = StorageStats()
+
+        // 首选 CPU-X 的那条路：`statfs("/var")`，总量取 `f_blocks × f_bsize`、
+        // 可用取 `f_bavail × f_bsize`。
+        //
+        // 这不是随便挑的。ARMCPUZ 里读存储的那段（0x10012dff8）就是
+        // `adrp/add` 拼出 "/var" → `statfs` → `ldr f_bsize` / `ldr f_bavail` / `mul`，
+        // 一个字段不多。之前这里用的是 `volumeAvailableCapacityForImportantUsage`，
+        // 那是 NSURL 的**乐观**口径（把系统认为「可清除」的空间也算进可用），
+        // 天然比 `f_bavail` 大，两个 App 摆在一起当然对不上。
+        //
+        // 用 `f_bavail` 而不是 `f_bfree`：前者扣掉了 APFS 给系统留的那部分，
+        // 正是 `df` 报给普通用户的「可用」，也是 CPU-X 用的那个。
+        var fs = statfs()
+        let statfsResult = withUnsafeMutablePointer(to: &fs) { pointer in
+            statfs("/var", pointer)
+        }
+        if statfsResult == 0 && fs.f_bsize > 0 {
+            let blockSize = UInt64(fs.f_bsize)
+            stats.total = UInt64(fs.f_blocks) &* blockSize
+            stats.free = UInt64(fs.f_bavail) &* blockSize
+            return stats
+        }
+
+        // 兜底：`statfs` 失败时（在设备上不该发生）退回 NSURL 口径，
+        // 总比整块面板空着强。
         let url = URL(fileURLWithPath: NSHomeDirectory())
         guard let values = try? url.resourceValues(forKeys: [
             .volumeTotalCapacityKey,

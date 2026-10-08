@@ -124,17 +124,19 @@ struct HardwareView: View {
                            value: Formatting.bytes(snapshot.memory.available),
                            tint: .mwBattery,
                            size: Self.valueSize)
-                    Metric(caption: "Pressure",
-                           value: Formatting.percent(snapshot.memory.usage * 100),
-                           unit: "%",
-                           tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwMuted,
+                    // 与 CPU-X 的 `Mem Free` 同一个口径（纯 `free_count`），
+                    // 拿它去跟 CPU-X 对才对得上；「Available」比它多算了
+                    // purgeable + speculative，所以天生更大。见 `MemoryStats`。
+                    Metric(caption: "Free",
+                           value: Formatting.bytes(snapshot.memory.free),
+                           tint: .mwMuted,
                            size: Self.valueSize)
                 }
 
                 BarRow(title: Text("Memory usage"),
                        detail: Formatting.percent(snapshot.memory.usage * 100) + "%",
                        fraction: snapshot.memory.usage,
-                       tint: .mwAccent)
+                       tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwAccent)
 
                 HStack(spacing: 14) {
                     Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: Self.valueSize)
