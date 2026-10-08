@@ -23,7 +23,6 @@ struct HardwareView: View {
             cpuPanel
             memoryPanel
             storagePanel
-            networkPanel
         }
         // 优化一结束就立刻重读一次内存。
         //
@@ -75,7 +74,7 @@ struct HardwareView: View {
 
                 HStack(spacing: 14) {
                     Metric(caption: "Usage",
-                           value: Formatting.percent(snapshot.cpu.usage * 100),
+                           value: Formatting.number(snapshot.cpu.usage * 100),
                            unit: "%",
                            tint: .mwPower(snapshot.cpu.usage * 100),
                            size: Self.valueSize)
@@ -99,7 +98,7 @@ struct HardwareView: View {
                               spacing: 8) {
                         ForEach(Array(snapshot.cpu.perCore.enumerated()), id: \.offset) { index, load in
                             BarRow(title: Text("Core \(index)"),
-                                   detail: Formatting.percent(load * 100) + "%",
+                                   detail: Formatting.percent(load * 100),
                                    fraction: load,
                                    tint: .mwPower(load * 100))
                         }
@@ -134,7 +133,7 @@ struct HardwareView: View {
                 }
 
                 BarRow(title: Text("Memory usage"),
-                       detail: Formatting.percent(snapshot.memory.usage * 100) + "%",
+                       detail: Formatting.percent(snapshot.memory.usage * 100),
                        fraction: snapshot.memory.usage,
                        tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwAccent)
 
@@ -157,7 +156,7 @@ struct HardwareView: View {
                 Spacer(minLength: 8)
                 switch optimizer.phase {
                 case .running(let progress, let allocated):
-                    Text(verbatim: "\(Formatting.percent(progress * 100))%  ·  \(Formatting.bytes(allocated))")
+                    Text(verbatim: "\(Formatting.percent(progress * 100))  ·  \(Formatting.bytes(allocated))")
                         .mwMono(size: 11)
                         .foregroundStyle(Color.mwAccent)
                 case .finished:
@@ -220,7 +219,7 @@ struct HardwareView: View {
                     Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: Self.valueSize)
                 }
                 BarRow(title: Text("Capacity"),
-                       detail: Formatting.percent(snapshot.storage.usage * 100) + "%",
+                       detail: Formatting.percent(snapshot.storage.usage * 100),
                        fraction: snapshot.storage.usage,
                        tint: .mwLoss)
             }
@@ -228,56 +227,11 @@ struct HardwareView: View {
     }
 
     // MARK: 网络
-
-    private var networkPanel: some View {
-        Panel("Network", systemImage: networkIcon, trailing: networkKindText) {
-            VStack(alignment: .leading, spacing: 12) {
-                // 接口名（`en0` / `pdp_ip0`）是技术细节，压在地址下面而不是占着面板右上角
-                // —— 那个位置留给「这条链路是 Wi-Fi 还是蜂窝」，那才是用户要判断的东西。
-                Metric(caption: "IPv4 address",
-                       value: snapshot.network.ipv4,
-                       footnote: Text(verbatim: snapshot.network.interfaceName),
-                       size: Self.valueSize)
-                HStack(spacing: 14) {
-                    Metric(caption: "Download",
-                           value: Formatting.rate(snapshot.network.downloadBytesPerSecond),
-                           tint: .mwAccent,
-                           size: Self.valueSize)
-                    Metric(caption: "Upload",
-                           value: Formatting.rate(snapshot.network.uploadBytesPerSecond),
-                           tint: .mwWireless,
-                           size: Self.valueSize)
-                }
-                HStack(spacing: 14) {
-                    Metric(caption: "Total received",
-                           value: Formatting.bytes(snapshot.network.receivedBytes),
-                           size: Self.valueSize)
-                    Metric(caption: "Total sent",
-                           value: Formatting.bytes(snapshot.network.sentBytes),
-                           size: Self.valueSize)
-                }
-            }
-        }
-    }
-
-    /// 面板图标跟着链路走。
-    private var networkIcon: String {
-        switch snapshot.network.kind {
-        case .some(.wifi): return "wifi"
-        case .some(.cellular): return "antenna.radiowaves.left.and.right"
-        case .none: return "wifi.slash"
-        }
-    }
-
-    /// 右上角那颗小标签：连着 Wi-Fi 就是 Wi-Fi，断了才轮到蜂窝。
-    ///
-    /// 两个 `Text("…")` 字面量分开写，不合成一个三元表达式 —— 键要各自能查到译文。
-    /// 取值逻辑（含优先级）在 `HardwareMonitor.readNetwork`。
-    private var networkKindText: Text {
-        switch snapshot.network.kind {
-        case .some(.wifi): return Text("Wi-Fi")
-        case .some(.cellular): return Text("Cellular")
-        case .none: return Text(verbatim: "—")
-        }
-    }
+    //
+    // 这一页原来最下方还有一张 Network 卡片（接口地址、实时上下行、累计流量）。
+    // 按用户要求去掉了：这一页的定位是「设备硬件」，而网络是链路状态、不是硬件；
+    // 何况实时上下行只有盯着看才有意义，放在第一屏既占高度又要一秒一刷。
+    //
+    // `HardwareMonitor.readNetwork` 保留着（数据照采，只是这一页不再画），
+    // 要恢复就把 `networkPanel` 加回 `body` 即可 —— 实现见 git 历史。
 }

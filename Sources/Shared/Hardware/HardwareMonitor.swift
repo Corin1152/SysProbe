@@ -433,30 +433,16 @@ final class HardwareMonitor: ObservableObject {
     private static func readStorage() -> StorageStats {
         var stats = StorageStats()
 
-        // 首选 CPU-X 的那条路：`statfs("/var")`，总量取 `f_blocks × f_bsize`、
-        // 可用取 `f_bavail × f_bsize`。
+        // 走 NSURL 的 `volumeAvailableCapacityForImportantUsage` 口径。
         //
-        // 这不是随便挑的。ARMCPUZ 里读存储的那段（0x10012dff8）就是
-        // `adrp/add` 拼出 "/var" → `statfs` → `ldr f_bsize` / `ldr f_bavail` / `mul`，
-        // 一个字段不多。之前这里用的是 `volumeAvailableCapacityForImportantUsage`，
-        // 那是 NSURL 的**乐观**口径（把系统认为「可清除」的空间也算进可用），
-        // 天然比 `f_bavail` 大，两个 App 摆在一起当然对不上。
+        // 0.0.25 曾把这里换成 `statfs("/var")` + `f_bavail`，好让数字和 CPU-X 逐字节
+        // 对得上。**0.0.26 按要求撤销了**：那一版报出来的「可用」明显偏小（`f_bavail`
+        // 扣掉了 APFS 给系统留的那部分），跟设置里的「iPhone 储存空间」以及系统自己的
+        // 提示都对不上，为了对齐一个第三方 App 而让自家的数字显得更紧张，不划算。
         //
-        // 用 `f_bavail` 而不是 `f_bfree`：前者扣掉了 APFS 给系统留的那部分，
-        // 正是 `df` 报给普通用户的「可用」，也是 CPU-X 用的那个。
-        var fs = statfs()
-        let statfsResult = withUnsafeMutablePointer(to: &fs) { pointer in
-            statfs("/var", pointer)
-        }
-        if statfsResult == 0 && fs.f_bsize > 0 {
-            let blockSize = UInt64(fs.f_bsize)
-            stats.total = UInt64(fs.f_blocks) &* blockSize
-            stats.free = UInt64(fs.f_bavail) &* blockSize
-            return stats
-        }
-
-        // 兜底：`statfs` 失败时（在设备上不该发生）退回 NSURL 口径，
-        // 总比整块面板空着强。
+        // `…ForImportantUsage` 是**乐观**口径（把系统认为「可清除」的空间也算进可用），
+        // 比 `volumeAvailableCapacity` 大；这正是用户看到的「可用」该有的样子。
+        // 代价是它和 CPU-X 对不上 —— 这是有意接受的，不再为了对齐去改口径。
         let url = URL(fileURLWithPath: NSHomeDirectory())
         guard let values = try? url.resourceValues(forKeys: [
             .volumeTotalCapacityKey,
