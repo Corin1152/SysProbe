@@ -4,8 +4,13 @@ import Darwin
 import UIKit
 
 // MARK: - 快照模型
+//
+// 这一组结构体全部标 `nonisolated`，不是随手加的：本工程设了
+// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，不加就会被判成主 actor 隔离，
+// 于是 `nonisolated` 的采样函数既不能返回它们、也不能接收它们。
+// 它们本来就是纯数据（值类型、无可变共享状态），标 `nonisolated` 是它们本来的样子。
 
-struct CPUStats: Hashable {
+nonisolated struct CPUStats: Hashable {
     var model: String = "—"
     var physicalCores: Int = 0
     var logicalCores: Int = 0
@@ -23,7 +28,7 @@ struct CPUStats: Hashable {
     var perCore: [Double] = []
 }
 
-struct MemoryStats: Hashable {
+nonisolated struct MemoryStats: Hashable {
     var total: UInt64 = 0
     var wired: UInt64 = 0
     var active: UInt64 = 0
@@ -83,7 +88,7 @@ struct MemoryStats: Hashable {
     }
 }
 
-struct StorageStats: Hashable {
+nonisolated struct StorageStats: Hashable {
     var total: UInt64 = 0
     var free: UInt64 = 0
     var used: UInt64 { total > free ? total - free : 0 }
@@ -123,19 +128,7 @@ nonisolated enum NetworkKind: Hashable, Sendable {
     }
 }
 
-struct NetworkStats: Hashable {
-    /// 当前这条链路是 Wi-Fi 还是蜂窝。没有可用接口时为 nil。
-    var kind: NetworkKind?
-    var interfaceName: String = "—"
-    var ipv4: String = "—"
-    var receivedBytes: UInt64 = 0
-    var sentBytes: UInt64 = 0
-    /// 每秒速率，来自两次采样的差值
-    var downloadBytesPerSecond: Double = 0
-    var uploadBytesPerSecond: Double = 0
-}
-
-struct SystemStats: Hashable {
+nonisolated struct SystemStats: Hashable {
     var deviceName: String = "—"
     var modelIdentifier: String = "—"
     var systemVersion: String = "—"
@@ -144,47 +137,76 @@ struct SystemStats: Hashable {
     var physicalMemory: UInt64 = 0
 }
 
-struct HardwareSnapshot: Hashable {
+nonisolated struct HardwareSnapshot: Hashable {
     var date: Date = .now
     var cpu = CPUStats()
     var memory = MemoryStats()
     var storage = StorageStats()
-    var network = NetworkStats()
     var system = SystemStats()
+}
+
+/// 采样过程中要跨帧保留的状态。
+///
+/// 从 `HardwareMonitor` 的实例属性里拆出来，是因为**计算整体搬到了后台队列上**：
+/// 状态挂在那个 `@MainActor` 的实例上，就等于把它钉死在主线程。
+nonisolated struct SamplingState {
+    /// `readCPU` 上一次的 tick 计数。占用率靠两次采样差分。
+    var previousTicks: [UInt64] = []
+    /// 存储容量上一次真正去问文件系统的时间。见 `HardwareMonitor.sample`。
+    var lastStorageRead: Date = .distantPast
+    /// 上一次问到的容量。
+    var cachedStorage = StorageStats()
 }
 
 // MARK: - 采样器
 
-/// 每秒采一次 CPU / 内存 / 存储 / 网络 / 系统信息。
+/// 每秒采一次 CPU / 内存 / 存储 / 系统信息。
 ///
 /// 全部走公开或半公开的 Mach / BSD 接口，只读，不写任何注册表：
 /// - CPU 占用：`host_processor_info(PROCESSOR_CPU_LOAD_INFO)`，两次采样求差值
 /// - 内存分项：`host_statistics64(HOST_VM_INFO64)`
 /// - 存储容量：`URLResourceValues`
-/// - 网络吞吐：`sysctl(NET_RT_IFLIST2)` 的 64 位字节计数，两次采样求速率
 /// - 系统信息：`sysctl` / `uname` / `ProcessInfo`
 final class HardwareMonitor: ObservableObject {
     @Published private(set) var snapshot = HardwareSnapshot()
 
     private var ticker: AnyCancellable?
-    private var previousTicks: [UInt64] = []
-    private var previousCounters: [String: (rx: UInt64, tx: UInt64, date: Date)] = [:]
-    private var lastInterface: String?
-    /// 存储容量上一次真正去问文件系统的时间。见 `refresh`。
-    private var lastStorageRead: Date = .distantPast
-    private var cachedStorage = StorageStats()
-    private var tick = 0
-    /// 实测主频（MHz）。`nil` 表示还没测到，界面回落成机型表的标称值。
-    private var measuredFrequencyMHz: Int?
-    /// 探针一次要占住一条核约 15–20 ms，同一时间只允许跑一次。
-    private var frequencyProbeInFlight = false
-    /// 探针跑的队列。它不碰 UI，只把最后那个 `Int?` 送回主 actor。
-    private let frequencyQueue = DispatchQueue(label: "com.corin.sysprobe.cpufrequency",
-                                               qos: .userInitiated)
+    /// 采样过程中要跨帧保留的状态（CPU tick 基线、容量缓存）。
+    ///
+    /// 标 `nonisolated(unsafe)` 是刻意的：本类是 `@MainActor` 的，而采样恰恰要跑到
+    /// 主线程之外（见 `samplingQueue`）。**它只允许在 `samplingQueue` 上访问** ——
+    /// 那是条串行队列，加上 `samplingInFlight` 的守卫，同一时刻只有一个采样在跑，
+    /// 所以不存在并发读写。
+    nonisolated(unsafe) private var samplingState = SamplingState()
+    /// 一次采样还没回来时置位。用来**丢拍**，而不是让任务在队列上堆积。
+    private var samplingInFlight = false
+    /// 跑采样的串行队列。
+    ///
+    /// 搬离主线程的理由：`host_processor_info` / `host_statistics64` 是 Mach 调用，
+    /// `CPUSharedMetrics.read` 是文件读加 JSON 解析，`readStorage` 更是一次文件系统
+    /// 往返 —— 每秒把它们按顺序砸进主线程，就是在给每秒一次的触摸响应制造延迟。
+    /// `qos: .utility` 是明确的：后台维护性工作，不跟 UI 抢资源。
+    ///
+    /// 这块逻辑**不碰 UIKit、不碰 `UIDevice`**（那是 `readSystem` 的事，它留在主线程，
+    /// 见 `refresh`），所以整块可以安全地跑在这里。
+    private let samplingQueue = DispatchQueue(label: "com.corin.sysprobe.sampling",
+                                              qos: .utility)
 
     func start() {
         guard ticker == nil else { return }
-        refresh()
+        // 首拍**同步**跑完，之后每一拍才走 `samplingQueue`。
+        //
+        // 理由只有一个：`TodayViewController` 在 `viewDidAppear` 里同步读一次
+        // `snapshot` 去铺首屏。异步的话那一帧拿到的还是全 0 的初始值，负一屏会先闪
+        // 一下空白。这一次 Mach 调用（几百微秒）换掉那次闪烁是划算的 —— 而且它只
+        // 发生在启动路径上，稳态里一次都不会有。
+        //
+        // 此刻 `ticker` 还没建起来，不可能有采样在飞，所以这里直接碰 `samplingState`
+        // 是安全的（平时的约定是「只在 `samplingQueue` 上访问」）。
+        var first = Self.sample(state: &samplingState)
+        first.system = Self.readSystem()
+        snapshot = first
+
         // 与 `PowerMonitor.start` 同样的理由：挂在 `.default` 模式上的 `Timer` 会在
         // 滚动期间自动让路，`Task.sleep` 不会。详见那边的注释。
         ticker = Timer.publish(every: 1, on: .main, in: .default)
@@ -199,18 +221,48 @@ final class HardwareMonitor: ObservableObject {
         ticker = nil
     }
 
+    /// 每拍被 `Timer` 调一次。**只做两件必须在主线程做的事**：守卫、把结果赋给
+    /// `snapshot`。真正的采样在 `samplingQueue` 上跑（见 `sample`）。
     func refresh() {
-        tick += 1
+        // 上一拍还没回来就丢这一拍。
+        //
+        // 采样本身只要几百微秒，1 Hz 的节奏远宽于它；但设备被压住时
+        // `host_processor_info` 也可能变慢。那时**丢一拍**远好过让任务在队列上堆积 ——
+        // 堆积既会让延迟越滚越大，刷出来的又都是过期数据。
+        guard !samplingInFlight else { return }
+        samplingInFlight = true
 
+        samplingQueue.async { [weak self] in
+            guard let self else { return }
+            let sampled = Self.sample(state: &self.samplingState)
+            Task { @MainActor in
+                var next = sampled
+                // `UIDevice.current` 是主 actor 隔离的，只能在这里读。剩下的是静态
+                // 快照加一次 `systemUptime`，留在主线程不构成开销。
+                next.system = Self.readSystem()
+                self.snapshot = next
+                self.samplingInFlight = false
+            }
+        }
+    }
+
+    // MARK: 采样（后台）
+
+    /// 一次完整采样。**不碰 UI、不碰 `UIDevice`**，所以整块跑在 `samplingQueue` 上。
+    ///
+    /// 跨帧状态通过 `state` 进出 —— 它是 `nonisolated(unsafe)` 的，只允许在这条
+    /// 串行队列上访问。返回值里**不含** `system`：那一项要读 `UIDevice`，由调用方
+    /// 在主线程补上。
+    nonisolated private static func sample(state: inout SamplingState) -> HardwareSnapshot {
         var next = HardwareSnapshot()
         next.date = .now
 
         // 先照常采一次自己的 CPU —— 即使这次会用共享值，也必须推进 `readCPU` 的
         // tick 基线，否则一旦发布方停下、切回自采，第一次差分会因为基线太旧而算出
         // 一个离谱的占用。
-        let ownCPU = Self.readCPU(previous: &previousTicks)
+        let ownCPU = readCPU(previous: &state.previousTicks)
 
-        if let shared = CPUSharedMetrics.read() {
+        if let shared = CPUSharedMetrics.read(now: next.date) {
             // 走共享：数值来自 Statusbar（Helium）的 HUD，两个 App 显示同一个数。
             //
             // **这时不跑自己的忙循环探针。** 探针会把自己那个核顶到最高频，还会和
@@ -220,32 +272,30 @@ final class HardwareMonitor: ObservableObject {
             cpu.usage = shared.usage
             cpu.perCore = shared.perCore.isEmpty ? ownCPU.perCore : shared.perCore
             cpu.frequencyMHz = shared.frequencyMHz
-            cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
+            cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
             next.cpu = cpu
         } else {
             // 回落：没有新鲜的共享文件（HUD 没在写）。
             //
             // **这里不再跑自己的忙循环探针。** 两个 App 各自跑探针会互抢性能核、
             // 还会把时钟顶高发热 —— 这正是要避免的。HUD 是常驻的、唯一采集者，
-            // 正常情况下文件总是新鲜的；所以这里只显示**上一次已知**的值
-            // （还没有就显示「—」），不再自测。
+            // 正常情况下文件总是新鲜的；所以这里频率直接留 0，界面显示「—」，
+            // 不再自测。
             var cpu = ownCPU
-            cpu.nominalFrequencyMHz = Self.cpuIdentity.nominalFrequencyMHz
-            cpu.frequencyMHz = measuredFrequencyMHz ?? 0
+            cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
+            cpu.frequencyMHz = 0
             next.cpu = cpu
         }
 
-        next.memory = Self.readMemory()
+        next.memory = readMemory()
         // 容量一次查询是一次文件系统往返，而数字几分钟都不会变。十秒问一次足够，
         // 中间直接复用上次的结果。
-        if next.date.timeIntervalSince(lastStorageRead) > 10 {
-            cachedStorage = Self.readStorage()
-            lastStorageRead = next.date
+        if next.date.timeIntervalSince(state.lastStorageRead) > 10 {
+            state.cachedStorage = readStorage()
+            state.lastStorageRead = next.date
         }
-        next.storage = cachedStorage
-        next.network = Self.readNetwork(previous: &previousCounters, lastInterface: &lastInterface)
-        next.system = Self.readSystem()
-        snapshot = next
+        next.storage = state.cachedStorage
+        return next
     }
 
     // MARK: CPU
@@ -265,7 +315,7 @@ final class HardwareMonitor: ObservableObject {
     /// 前者查表，后者实测。
     ///
     /// 静态数据，不猜、不编；认不出来的机型留 0，界面显示「—」。
-    private static let cpuIdentity: (model: String, physicalCores: Int, logicalCores: Int, nominalFrequencyMHz: Int) = {
+    nonisolated private static let cpuIdentity: (model: String, physicalCores: Int, logicalCores: Int, nominalFrequencyMHz: Int) = {
         let machine = sysctlString("hw.machine") ?? ""
         // 个别机型／系统版本上这个键仍然是通的，能读到就优先用它（那才是真正的
         // 内核口径），读不到再退回机型表。
@@ -283,11 +333,11 @@ final class HardwareMonitor: ObservableObject {
     /// 数值取自公开的芯片规格。**只列有把握的** —— 认不出来的机型返回 nil、
     /// 界面显示「—」，比编一个数字出来好。设备族限定为 iPhone
     /// （`TARGETED_DEVICE_FAMILY = 1`），所以不列 iPad。
-    private static func nominalClockMHz(machine: String) -> Int? {
+    nonisolated private static func nominalClockMHz(machine: String) -> Int? {
         clocks[machine]
     }
 
-    private static let clocks: [String: Int] = {
+    nonisolated private static let clocks: [String: Int] = {
         let chips: [(machines: [String], megahertz: Int)] = [
             (["iPhone8,1", "iPhone8,2", "iPhone8,4"], 1850),                   // A9
             (["iPhone9,1", "iPhone9,2", "iPhone9,3", "iPhone9,4"], 2340),      // A10 Fusion
@@ -310,7 +360,7 @@ final class HardwareMonitor: ObservableObject {
         return table
     }()
 
-    private static func readCPU(previous: inout [UInt64]) -> CPUStats {
+    nonisolated private static func readCPU(previous: inout [UInt64]) -> CPUStats {
         var stats = CPUStats()
         stats.model = cpuIdentity.model
         stats.physicalCores = cpuIdentity.physicalCores
@@ -381,30 +431,9 @@ final class HardwareMonitor: ObservableObject {
         return stats
     }
 
-    /// 在后台线程上跑一次实测，结果回主 actor。
-    ///
-    /// 探针是**阻塞**的（15–20 ms 的满速忙循环），放主线程上就是一次肉眼可见的卡顿，
-    /// 所以整件事丢给一个专用队列；它不碰任何 UI，只把最后那个 `Int?` 送回来。
-    ///
-    /// 回主 actor 用 `Task { @MainActor in }` 而不是 `DispatchQueue.main.async`：
-    /// 后者在 Swift 6 的类型系统里并不建立主 actor 隔离，直接写主 actor 属性会报错。
-    private func refreshFrequencyIfNeeded() {
-        guard !frequencyProbeInFlight else { return }
-        frequencyProbeInFlight = true
-        let nominal = Self.cpuIdentity.nominalFrequencyMHz
-        frequencyQueue.async { [weak self] in
-            let measured = CPUFrequency.measureMHz(nominalMHz: nominal)
-            Task { @MainActor in
-                guard let self else { return }
-                self.measuredFrequencyMHz = measured
-                self.frequencyProbeInFlight = false
-            }
-        }
-    }
-
     // MARK: 内存
 
-    private static func readMemory() -> MemoryStats {
+    nonisolated private static func readMemory() -> MemoryStats {
         var stats = MemoryStats()
         stats.total = ProcessInfo.processInfo.physicalMemory
 
@@ -430,7 +459,7 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: 存储
 
-    private static func readStorage() -> StorageStats {
+    nonisolated private static func readStorage() -> StorageStats {
         var stats = StorageStats()
 
         // 走 NSURL 的 `volumeAvailableCapacityForImportantUsage` 口径。
@@ -460,174 +489,20 @@ final class HardwareMonitor: ObservableObject {
         return stats
     }
 
-    // MARK: 网络
-
-    /// `<sys/socket.h>` / `<net/route.h>` 里的常量，以及 `if_msghdr2` 的字段偏移。
-    ///
-    /// 写成字面量而不是直接用那几个宏：`PF_ROUTE` 在头文件里是 `AF_ROUTE` 的别名
-    /// （宏套宏），Swift 的宏导入对它并不可靠；`NET_RT_IFLIST2`、`RTM_IFINFO2` 同理，
-    /// 一并写死更省事。偏移按 Darwin 的 ABI 写 —— 这几个结构自 64 位 Darwin 起没变过。
-    private enum Route {
-        /// `CTL_NET`
-        static let ctlNet: Int32 = 4
-        /// `PF_ROUTE`（= `AF_ROUTE`）
-        static let pfRoute: Int32 = 17
-        /// `NET_RT_IFLIST2`
-        static let netRTIFList2: Int32 = 6
-        /// `RTM_VERSION`
-        static let rtmVersion: UInt8 = 5
-        /// `RTM_IFINFO2`
-        static let rtmIfInfo2: UInt8 = 0x12
-        /// `IF_NAMESIZE`（= `IFNAMSIZ`）。宏套宏，同样写成字面量。
-        static let ifNameSize = 16
-
-        /// `struct if_msghdr2` 里 `ifm_data`（`struct if_data64`）的起始偏移。
-        static let ifData64Offset = 32
-        /// `struct if_data64.ifi_ibytes` 的绝对偏移。
-        static let ifIBytesOffset = ifData64Offset + 64
-        /// `struct if_data64.ifi_obytes` 的绝对偏移。
-        static let ifOBytesOffset = ifData64Offset + 72
-        /// 一条 `RTM_IFINFO2` 至少要有这么长才读得到两个计数器。
-        static let minimumIfInfo2Length = ifOBytesOffset + 8
-    }
-
-    /// 各接口的累计字节数，来自 `NET_RT_IFLIST2`。
-    ///
-    /// **为什么不用 `getifaddrs` 的 `ifa_data`** —— 这正是「下载 / 上传与累计流量一直
-    /// 是 0」的根因，值得写清楚：
-    ///
-    /// 1. `ifa_data` **只在 `AF_LINK` 那条记录上非空**。之前是在 `AF_INET` 记录上读它，
-    ///    那里恒为 NULL，于是 `ifi_ibytes` / `ifi_obytes` 永远是 0 —— 地址显示得出来
-    ///    （地址本来就走 `AF_INET`），流量却一直是零，症状正是「一半对一半不对」；
-    /// 2. 即便读对了记录，`ifa_data` 指向的是 32 位的 `struct if_data`
-    ///    （`ifi_ibytes` 是 `u_int32_t`），4 GB 就回绕 —— 累计流量根本没法用。
-    ///
-    /// `NET_RT_IFLIST2` 返回的是 `if_msghdr2` + `if_data64`：计数器 64 位，
-    /// 也正是 `netstat` 在 64 位系统上走的那条路。
-    private static func interfaceCounters() -> [String: (received: UInt64, sent: UInt64)] {
-        var mib: [Int32] = [Route.ctlNet, Route.pfRoute, 0, 0, Route.netRTIFList2, 0]
-        var length = 0
-        guard sysctl(&mib, 6, nil, &length, nil, 0) == 0, length > 0 else { return [:] }
-        var buffer = [UInt8](repeating: 0, count: length)
-        guard sysctl(&mib, 6, &buffer, &length, nil, 0) == 0 else { return [:] }
-
-        var counters: [String: (received: UInt64, sent: UInt64)] = [:]
-        buffer.withUnsafeBytes { raw in
-            var offset = 0
-            while offset + Route.minimumIfInfo2Length <= length {
-                let messageLength = Int(raw.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
-                let version = raw.loadUnaligned(fromByteOffset: offset + 2, as: UInt8.self)
-                let type = raw.loadUnaligned(fromByteOffset: offset + 3, as: UInt8.self)
-                // 缓冲区是内核按 `ifm_msglen` 串起来的消息流。长度或版本走歪了就停 ——
-                // 继续按偏移读下去只会读到垃圾。
-                guard messageLength > 0, version == Route.rtmVersion else { break }
-
-                if type == Route.rtmIfInfo2,
-                   messageLength >= Route.minimumIfInfo2Length,
-                   offset + Route.minimumIfInfo2Length <= length {
-                    let index = UInt32(raw.loadUnaligned(fromByteOffset: offset + 12, as: UInt16.self))
-                    let received = raw.loadUnaligned(fromByteOffset: offset + Route.ifIBytesOffset,
-                                                     as: UInt64.self)
-                    let sent = raw.loadUnaligned(fromByteOffset: offset + Route.ifOBytesOffset,
-                                                 as: UInt64.self)
-                    var name = [CChar](repeating: 0, count: Route.ifNameSize + 1)
-                    if if_indextoname(index, &name) != nil {
-                        counters[nullTerminatedString(name)] = (received, sent)
-                    }
-                }
-                offset += messageLength
-            }
-        }
-        return counters
-    }
-
-    /// 各接口的 IPv4 地址，来自 `getifaddrs`。
-    ///
-    /// 地址与计数器分两个来源取，是因为它们本来就在两条不同的记录上：
-    /// 地址在 `AF_INET` 记录，字节计数在 `AF_LINK`（或 `NET_RT_IFLIST2`）里。
-    /// 硬凑到一次遍历里，就是上一版踩的那个坑。
-    private static func ipv4Addresses() -> [String: String] {
-        var result: [String: String] = [:]
-        var addresses: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&addresses) == 0, let first = addresses else { return result }
-        defer { freeifaddrs(addresses) }
-
-        var pointer: UnsafeMutablePointer<ifaddrs>? = first
-        while let entry = pointer {
-            defer { pointer = entry.pointee.ifa_next }
-            let flags = Int32(entry.pointee.ifa_flags)
-            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
-            guard let address = entry.pointee.ifa_addr,
-                  address.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let name = nullTerminatedString(at: entry.pointee.ifa_name)
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(address, socklen_t(address.pointee.sa_len),
-                           &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-                result[name] = nullTerminatedString(host)
-            }
-        }
-        return result
-    }
-
-    private static func readNetwork(
-        previous: inout [String: (rx: UInt64, tx: UInt64, date: Date)],
-        lastInterface: inout String?
-    ) -> NetworkStats {
-        var stats = NetworkStats()
-        let counters = interfaceCounters()
-        let addresses = ipv4Addresses()
-        guard !counters.isEmpty else { return stats }
-
-        let now = Date()
-        var candidates: [(name: String, kind: NetworkKind, ipv4: String, rx: UInt64, tx: UInt64)] = []
-        for (name, counter) in counters {
-            // 只认 Wi-Fi（`en*`）与蜂窝（`pdp_ip*`），虚拟隧道一律跳过。
-            guard let kind = NetworkKind(interfaceName: name) else { continue }
-            // 没有 IPv4 就不显示：这个面板要的是「现在走哪条路、地址是多少」，
-            // 只有 IPv6 的接口放进来会让地址那一栏变成空白。
-            guard let ipv4 = addresses[name] else { continue }
-            candidates.append((name, kind, ipv4, counter.received, counter.sent))
-        }
-
-        // 选哪条链路：**先看类型，再看谁在跑流量。**
-        //
-        // 手机插着 SIM 卡时 `pdp_ip0` 一直是 up、也一直有地址，所以「有 IPv4」分不出
-        // Wi-Fi 和蜂窝；按累计字节数挑同样会挑错 —— 后台同步、推送常常悄悄走蜂窝，
-        // 累计量比 Wi-Fi 还大。规则改成确定的：连着 Wi-Fi 就是 Wi-Fi，断了才轮到蜂窝。
-        //
-        // 同一档内仍然优先沿用上次选中的接口，避免同档两个接口来回跳导致速率失真。
-        let ranked = candidates.sorted { lhs, rhs in
-            if lhs.kind != rhs.kind { return lhs.kind.priority < rhs.kind.priority }
-            let lhsSticky = lhs.name == lastInterface
-            let rhsSticky = rhs.name == lastInterface
-            if lhsSticky != rhsSticky { return lhsSticky }
-            let lhsLoad = lhs.rx &+ lhs.tx
-            let rhsLoad = rhs.rx &+ rhs.tx
-            if lhsLoad != rhsLoad { return lhsLoad > rhsLoad }
-            // `sorted(by:)` 不保证稳定，补一个确定的次序。
-            return lhs.name < rhs.name
-        }
-        guard let chosen = ranked.first else { return stats }
-
-        stats.kind = chosen.kind
-        stats.interfaceName = chosen.name
-        stats.ipv4 = chosen.ipv4
-        stats.receivedBytes = chosen.rx
-        stats.sentBytes = chosen.tx
-        lastInterface = chosen.name
-
-        if let before = previous[chosen.name] {
-            let seconds = now.timeIntervalSince(before.date)
-            if seconds > 0.2 {
-                let down = chosen.rx >= before.rx ? Double(chosen.rx - before.rx) : 0
-                let up = chosen.tx >= before.tx ? Double(chosen.tx - before.tx) : 0
-                stats.downloadBytesPerSecond = down / seconds
-                stats.uploadBytesPerSecond = up / seconds
-            }
-        }
-        previous[chosen.name] = (chosen.rx, chosen.tx, now)
-        return stats
-    }
+    // MARK: 网络（已移除）
+    //
+    // 这里原来有一整块网络采样：接口地址（`getifaddrs`）、累计字节数与实时上下行
+    // （`sysctl(NET_RT_IFLIST2)` 的 `if_msghdr2` + `if_data64`，64 位计数器 ——
+    // 用 `ifa_data` 那个 32 位 `if_data` 会在 4 GB 回绕，是上一版「流量恒为 0 /
+    // 一过 4 GB 就乱跳」的根因）。
+    //
+    // 0.0.26 按用户要求把硬件页最下方的 Network 卡片去掉了，但采样没停 —— 每秒
+    // 仍然跑一次 `sysctl` 加一次 `getifaddrs`，结果没有任何消费方。0.0.27 把这
+    // 部分整体删掉（含 `NetworkStats`、`HardwareSnapshot.network` 与两个采样
+    // 计数器）。要恢复看 git 历史。
+    //
+    // **`NetworkKind` 枚举保留在文件顶部**：WakeControl 的 `WakeService` 靠它把
+    // 接口收敛成「Wi-Fi / 蜂窝」并挑出口，删不得。
 
     // MARK: 系统
 
@@ -650,7 +525,7 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: sysctl 辅助
 
-    private static func sysctlString(_ name: String) -> String? {
+    nonisolated private static func sysctlString(_ name: String) -> String? {
         var size = 0
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: size)
@@ -658,7 +533,7 @@ final class HardwareMonitor: ObservableObject {
         return nullTerminatedString(buffer)
     }
 
-    private static func sysctlInt(_ name: String) -> Int? {
+    nonisolated private static func sysctlInt(_ name: String) -> Int? {
         var value: Int64 = 0
         var size = MemoryLayout<Int64>.size
         guard sysctlbyname(name, &value, &size, nil, 0) == 0, value > 0 else { return nil }
@@ -671,7 +546,7 @@ final class HardwareMonitor: ObservableObject {
     /// 沙箱里读不到。硬件信息 App 里这一栏要的是「这台机器装的是哪颗芯片」，那就只能
     /// 按机型标识推 —— 一张静态表而已，认不出来的机型老老实实显示机型标识本身，
     /// 不猜。设备族限定为 iPhone（TARGETED_DEVICE_FAMILY = 1），所以只列 iPhone。
-    private static func cpuName(machine: String) -> String {
+    nonisolated private static func cpuName(machine: String) -> String {
         let table: [String: String] = [
             "iPhone8,1": "Apple A9", "iPhone8,2": "Apple A9", "iPhone8,4": "Apple A9",
             "iPhone9,1": "Apple A10 Fusion", "iPhone9,2": "Apple A10 Fusion",
@@ -699,7 +574,7 @@ final class HardwareMonitor: ObservableObject {
         return machine.isEmpty ? "—" : machine
     }
 
-    private static func machineIdentifier() -> String {
+    nonisolated private static func machineIdentifier() -> String {
         if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] {
             return "\(simulated) (simulator)"
         }

@@ -12,7 +12,11 @@ import Foundation
 /// （热限频、低电量模式）误判成失效 —— 那是这台机器此刻真实的主频。
 ///
 /// 线程：`measure` 是 `nonisolated` 且会阻塞约 15–20 ms，**必须在主线程之外调用**。
-/// 见 `HardwareMonitor.refreshFrequencyIfNeeded`。
+///
+/// **当前全仓没有调用点，是备用路径。** SysProbe 从 0.0.25 起只读 Statusbar 发布的
+/// 共享文件（`CPUSharedMetrics`）：两个 App 各自跑探针会互抢性能核、把彼此的读数一起
+/// 污染 —— 详见 `HardwareMonitor.sample` 里那段注释。留着这一层是为了「共享文件读不到
+/// 而确实需要自己量一次」的场合，不是为了现在就在用。
 nonisolated enum CPUFrequency {
 
     /// 实测主频（MHz）。测不出或结果不可信时返回 nil。

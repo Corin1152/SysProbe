@@ -232,6 +232,8 @@ struct HardwareView: View {
     // 按用户要求去掉了：这一页的定位是「设备硬件」，而网络是链路状态、不是硬件；
     // 何况实时上下行只有盯着看才有意义，放在第一屏既占高度又要一秒一刷。
     //
-    // `HardwareMonitor.readNetwork` 保留着（数据照采，只是这一页不再画），
-    // 要恢复就把 `networkPanel` 加回 `body` 即可 —— 实现见 git 历史。
+    // `HardwareMonitor` 里对应的网络采样（`readNetwork` / `interfaceCounters` /
+    // `ipv4Addresses`）在 0.0.27 一并删掉了 —— 视图没了之后它就没有消费方，
+    // 每秒一次 `sysctl(NET_RT_IFLIST2)` 加一次 `getifaddrs` 纯属浪费。
+    // 要恢复看 git 历史；`NetworkKind` 仍在（WakeService 依赖它）。
 }
