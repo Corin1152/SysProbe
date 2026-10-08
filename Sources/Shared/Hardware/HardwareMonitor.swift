@@ -16,11 +16,19 @@ nonisolated struct CPUStats: Hashable {
     var logicalCores: Int = 0
     /// 界面显示的主频（MHz）。
     ///
-    /// **是实测值**，见 `CPUFrequency` 与 `CPUFrequencyProbe.c`：iOS 不给沙箱 App 读
-    /// 主频的接口，所以在一段**周期数已知**的汇编循环上量时间反推。探针测不出、或结果
-    /// 落在可信窗口之外时，回落成机型表里的标称主频。机型认不出来时为 0，界面显示「—」。
+    /// **来自 Statusbar（Helium）的 HUD 实测并写进共享文件的值**，见 `CPUSharedMetrics`
+    /// 与 Helium 那边 `CPUFrequencyProbe.mm` 的注释：iOS 不给沙箱 App 读主频的接口，
+    /// 所以只能在一段**周期数已知**的汇编循环上量时间反推。SysProbe 从 0.0.25 起不再
+    /// 自测 —— 两个进程各跑一次探针会互抢性能核，把彼此的读数一起压低。
+    ///
+    /// 读不到共享文件时为 0，界面显示「—」。**刻意不回落成标称主频**：那是个常数，
+    /// 摆在「当前频率」的位置上会让人以为读数有效。
     var frequencyMHz: Int = 0
-    /// 该机型芯片的标称主频（MHz）。只作参照与探针的校验基准，界面不直接显示。
+    /// 该机型芯片的标称主频（MHz）。
+    ///
+    /// **当前没有任何读取方**（0.0.27 核实过全仓）。留着是因为它连同 `cpuIdentity`
+    /// 把「这台机器应该跑多快」记在结构里 —— 排查「频率读数偏低」时第一个要对照的
+    /// 就是它。界面不显示。
     var nominalFrequencyMHz: Int = 0
     /// 0…1，整体占用
     var usage: Double = 0
