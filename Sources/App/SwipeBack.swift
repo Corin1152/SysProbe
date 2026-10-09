@@ -1,6 +1,22 @@
 import SwiftUI
 import UIKit
 
+/// 把当前环境整包交给子托管控制器。
+///
+/// `SwipeBackContainer` 的内容闭包是塞进独立 `UIHostingController` 的，**不会**
+/// 自动继承环境（locale、environmentObject 都得手动带过去）。用这个固定类型的
+/// 包装而不是 `AnyView`：`AnyView` 的类型擦除会让子树的 identity 无法比较，
+/// 每次 `updateUIViewController` 都可能把设置页内部的 `@State` 重建掉
+/// （例如清理页正在跑的扫描结果）。
+struct EnvironmentInjector<C: View>: View {
+    let content: C
+    let environment: EnvironmentValues
+
+    var body: some View {
+        content.environment(\.self, environment)
+    }
+}
+
 /// 全屏「左滑返回」手势容器 —— 手势识别逻辑对齐系统交互式 pop 转场
 /// （目标 dylib 的实现方式），按要求**不含触感反馈**。
 ///
@@ -50,17 +66,20 @@ struct SwipeBackContainer<Content: View>: UIViewControllerRepresentable {
         controller.mode = mode
         controller.onCommit = onCommit
         controller.setGestureEnabled(enabled)
-        controller.setRootView(AnyView(content().environment(\.self, environment)))
+        controller.setRootView(
+            EnvironmentInjector(content: content(), environment: environment)
+        )
     }
 
     @MainActor
-    final class HostViewController: UIViewController, UIGestureRecognizerDelegate {
+    final class HostViewController: UIViewController {
 
         var mode: Mode = .tab
         var onCommit: (() -> Void)?
 
-        private var hosting: UIHostingController<AnyView>?
+        private var hosting: UIHostingController<EnvironmentInjector<Content>>?
         private var pan: UIPanGestureRecognizer?
+        private let panDelegate = PanDelegate()
         /// 提交滑出动画期间不再响应新的平移，避免页面被拖回去。
         private var isCommitting = false
 
@@ -71,7 +90,8 @@ struct SwipeBackContainer<Content: View>: UIViewControllerRepresentable {
                 action: #selector(handlePan(_:))
             )
             recognizer.maximumNumberOfTouches = 1
-            recognizer.delegate = self
+            panDelegate.owner = self
+            recognizer.delegate = panDelegate
             view.addGestureRecognizer(recognizer)
             pan = recognizer
         }
@@ -80,7 +100,7 @@ struct SwipeBackContainer<Content: View>: UIViewControllerRepresentable {
             pan?.isEnabled = enabled
         }
 
-        func setRootView(_ content: AnyView) {
+        func setRootView(_ content: EnvironmentInjector<Content>) {
             if let hosting {
                 hosting.rootView = content
                 return
@@ -176,27 +196,39 @@ struct SwipeBackContainer<Content: View>: UIViewControllerRepresentable {
 
         // MARK: - 让位规则（dylib 的 delegate 逻辑的等价实现）
 
-        // `UIViewController` 自身就声明了这个方法（系统 pop 手势会问它），
-        // 所以要 `override`；delegate 回调 self 时也会走到这里。
-        override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let recognizer = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-            let velocity = recognizer.velocity(in: view)
-            // 横向主导、且向右 —— 与 dylib（也即系统 pop 手势）同一套判定。
-            guard velocity.x > 0, abs(velocity.x) > abs(velocity.y) else { return false }
-            // 落在控件（滑杆、开关等）上的触摸一律让位。
-            return !touchLandsOnControl(recognizer.location(in: view))
+        /// 手势的 delegate。
+        ///
+        /// 单独一个对象，而不是让 `HostViewController` 自己当 delegate：
+        /// `UIViewController` 在 ObjC 里就带着 `gestureRecognizerShouldBegin:` 的
+        /// 实现（系统 pop 手势会问它），在 Swift 子类里重新实现它到底算不算
+        /// 覆盖，随 SDK 版本而变 —— 编译期就报过 `does not override any method
+        /// from its superclass`。独立的 `NSObject` 没有这层历史包袱。
+        final class PanDelegate: NSObject, UIGestureRecognizerDelegate {
+
+            weak var owner: HostViewController?
+
+            func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+                guard let owner,
+                      let recognizer = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+                let velocity = recognizer.velocity(in: owner.view)
+                // 横向主导、且向右 —— 与 dylib（也即系统 pop 手势）同一套判定。
+                guard velocity.x > 0, abs(velocity.x) > abs(velocity.y) else { return false }
+                // 落在控件（滑杆、开关等）上的触摸一律让位。
+                return !owner.touchLandsOnControl(recognizer.location(in: owner.view))
+            }
+
+            func gestureRecognizer(
+                _ gestureRecognizer: UIGestureRecognizer,
+                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+            ) -> Bool {
+                // 只与滚动视图并存：横向拖动不被竖向列表吃掉；竖向拖动时
+                // `shouldBegin` 已经拒绝，不会误触发返回。
+                otherGestureRecognizer.view is UIScrollView
+            }
         }
 
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            // 只与滚动视图并存：横向拖动不被竖向列表吃掉；竖向拖动时
-            // `shouldBegin` 已经拒绝，不会误触发返回。
-            otherGestureRecognizer.view is UIScrollView
-        }
-
-        private func touchLandsOnControl(_ point: CGPoint) -> Bool {
+        /// 触摸落点是否在控件（滑杆、开关等）里。
+        func touchLandsOnControl(_ point: CGPoint) -> Bool {
             guard let hit = view.hitTest(point, with: nil) else { return false }
             var current: UIView? = hit
             while let node = current, node !== view {
