@@ -9,37 +9,63 @@ struct RootView: View {
             // 而不是窗口底色（浅色下白、深色下黑）—— 后者正是「闪一下」的来源。
             Color.mwCanvas.ignoresSafeArea()
 
-            tabs
-                // 语言是喂给环境的，不是喂给 `Bundle.main` 的。
-                //
-                // SwiftUI 的 `Text("…")` 不看 `Bundle.main.localizedString(...)`，它按环境里
-                // 这个 `locale` 直接去 bundle 的 `.lproj` 里挑译文 —— 全 App 一起换语言，
-                // 靠的就是这一句。挂在这里而不是 `tabs` 里面，设置面板（sheet）才继承得到。
-                .environment(\.locale, app.language.locale)
-                // 负一屏那一下点击会带 `sysprobe://open` 进来（见
-                // `TodayViewController.openApp`）。这里刻意**不动分页** ——
-                // 用户是来看数据的，停在上次看的那一屏更自然。
-                .onOpenURL { _ in }
-                // 采样的生命周期单独放进一个零尺寸视图。
-                //
-                // 独立出来是为了把每秒一次的 `PowerSnapshot` 发布挡在 `RootView` 之外：
-                // 这里 body 里是整棵 `TabView` 加一个 sheet 修饰符，让它跟着每秒重算，
-                // 既白费功夫，也会让设置面板在呈现动画里被反复重建。
-                .overlay(
-                    MonitorLifecycle()
-                        .frame(width: 0, height: 0)
-                        .allowsHitTesting(false)
-                )
-        }
-        // 设置子页：**盖住整个窗口**（含底部分页栏），而不是推进某个分页内部的栈。
-        //
-        // 挂在这里（树根）而不是 `tabs` 上，还有第二层原因：语言切换会按 `.id` 重建
-        // 整棵分页树，挂在分页里的呈现会随之被关掉 —— 那个症状是「设置页自己消失了」。
-        // 关掉的唯一途径是左上角那个返回按钮（见 `SettingsDestinationHost`）。
-        .fullScreenCover(item: $app.settingsDestination) { destination in
-            SettingsDestinationHost(destination: destination) {
-                app.settingsDestination = nil
+            // 四个分页整体包一层全屏「左滑返回」手势：不在第一屏（硬件页）时，
+            // 横向右滑切回第一屏。设置子页打开期间关掉（见 `enabled`）。
+            SwipeBackContainer(
+                enabled: app.settingsDestination == nil && app.selectedTab != 0,
+                mode: .tab,
+                onCommit: { app.selectedTab = 0 }
+            ) {
+                tabs
+                    // 语言是喂给环境的，不是喂给 `Bundle.main` 的。
+                    //
+                    // SwiftUI 的 `Text("…")` 不看 `Bundle.main.localizedString(...)`，它按环境里
+                    // 这个 `locale` 直接去 bundle 的 `.lproj` 里挑译文 —— 全 App 一起换语言，
+                    // 靠的就是这一句。
+                    .environment(\.locale, app.language.locale)
+                    // 负一屏那一下点击会带 `sysprobe://open` 进来（见
+                    // `TodayViewController.openApp`）。这里刻意**不动分页** ——
+                    // 用户是来看数据的，停在上次看的那一屏更自然。
+                    .onOpenURL { _ in }
             }
+            .ignoresSafeArea()
+
+            // 设置子页：**盖住整个窗口**（含底部分页栏），而不是推进某个分页内部的栈。
+            //
+            // ── 为什么从 `fullScreenCover` 改成树根覆盖层 ──────────────────────────
+            //
+            // 仍然是「盖住整个窗口、底栏被盖住」的呈现（原来用 `fullScreenCover`），
+            // 但 `fullScreenCover` 的收起动画是系统下滑式，而它呈现后**下层的
+            // 主页面会从视图层级里摘掉** —— 手势拖动时露出来的是黑底，做不出
+            // 交互式 pop 那种「页面跟着手指滑出、下层主页面原样可见」的动画。
+            // 挂在 `ZStack` 里，下层页面全程留在层级里，手势才能真滑出。
+            //
+            // 挂在树根而不是 `tabs` 里，原因不变：语言切换会按 `.id` 重建整棵
+            // 分页树，挂在分页里的呈现会随之被关掉 —— 那个症状是「设置页自己消失了」。
+            // 关闭途径有二：左上角返回按钮（带动画滑出，见 `SettingsDestinationHost`）
+            // 与全屏左滑手势（页面先滑出、再摘层，见 `SwipeBackContainer`）。
+            if let destination = app.settingsDestination {
+                SettingsDestinationHost(
+                    destination: destination,
+                    close: {
+                        withAnimation(.easeIn(duration: 0.3)) { app.settingsDestination = nil }
+                    },
+                    gestureClose: {
+                        // 手势路径里页面已经滑出屏幕，直接摘层即可，不再补动画。
+                        app.settingsDestination = nil
+                    }
+                )
+                .transition(.move(edge: .trailing))
+            }
+
+            // 采样的生命周期单独放进一个零尺寸视图。
+            //
+            // 独立出来是为了把每秒一次的 `PowerSnapshot` 发布挡在 `RootView` 之外：
+            // 这里 body 里是整棵 `TabView` 加一层设置覆盖，让它跟着每秒重算，
+            // 既白费功夫，也会让设置页在呈现动画里被反复重建。
+            MonitorLifecycle()
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
         }
     }
 

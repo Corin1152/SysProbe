@@ -341,13 +341,34 @@ IP 那一栏的用途是**指定往哪儿发**，留空就用本机网段的广�
 
 ## 设置页是全屏覆盖的
 
-齿轮里那三页（维护 / 频段 / 关于）由 `RootView` 用 `fullScreenCover` 呈现，
-**盖住整个窗口**——包括底部分页栏。返回只有左上角那个按钮。
+齿轮里那四页（维护 / 频段 / 清理 / 关于）由 `RootView` 盖在**整个窗口**上——
+包括底部分页栏。回到主页面有两条路：左上角的返回按钮，以及**全屏左滑**手势。
+
+呈现方式从 `fullScreenCover` 换成了树根 `ZStack` 里的覆盖层。原因不是「盖不住」
+（两者都盖得住），而是 `fullScreenCover` 呈现后会把下层的**主页面从视图层级里摘掉**，
+手势拖动时露出来的是黑底，做不出交互式 pop 那种「页面跟着手指滑出、下层原样可见」
+的效果。挂在 `ZStack` 里，下层页面全程留在层级中。
 
 之所以不能用 `NavigationLink`：齿轮挂在 `PageScaffold` 里，那是**每个分页各自**
 的 `NavigationStack`，而 `TabView` 在它外面。push 进去的子页盖不住底部分页栏，
 栏还在却点了不跳转（选中态属于外层 `TabView`，屏幕上却是内层栈的视图）。
 详见 `Sources/App/Features/Settings/SettingsDestination.swift`。
+
+## 全屏左滑返回
+
+两条规则：
+
+- **设置子页**：横向右滑，整页跟手滑出、露出下层的主页面，松手过阈值即关闭；
+- **其余分页**：横向右滑，切回第一屏（硬件页）。
+
+识别逻辑对齐系统交互式 pop 转场（`Sources/App/SwipeBack.swift`）：整页大小的
+`UIPanGestureRecognizer`，只在**横向主导且向右**（`|vx| > |vy|` 且 `vx > 0`）时启动；
+与竖向滚动并存（横拖不被列表吃掉），落在滑杆、开关这类 `UIControl` 上的触摸一律让位。
+
+之所以不用 SwiftUI 的 `DragGesture`：它没有「手势器之间让位」的语义，会和充电页滑杆的
+拖动同时触发。UIKit 的 delegate 链才是那套冲突规则的原生载体。
+
+（注意：**没有触感反馈**。参考实现里有一记 `UIImpactFeedbackGenerator`，这里刻意没带。）
 
 ## 频段设置
 
