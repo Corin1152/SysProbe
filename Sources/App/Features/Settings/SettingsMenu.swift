@@ -3,9 +3,8 @@ import SwiftUI
 /// 右上角的齿轮。**点开就在齿轮下面展开菜单**，不再先推一页菜单出来。
 ///
 /// 四行（频段被关掉时三行）各自写一个 `AppState.settingsDestination`，由 `RootView`
-/// 盖成**覆盖全屏**的一层 —— 底部分页栏被盖住。赋值包在 `withAnimation` 里：
-/// 覆盖层以系统 push 的样式从右缘滑入（`RootView` 上挂了对应的
-/// `.transition(.move(edge: .trailing))`）。
+/// 用 `fullScreenCover` 呈现成**覆盖全屏**的一层 —— 底部分页栏被盖住，返回只能走
+/// 左上角的返回按钮。
 ///
 /// 之前这里是 `Menu` 装 `NavigationLink`，推进**当前分页**的 `NavigationStack`。
 /// 那样做有两个问题，都是这次改掉的：
@@ -27,14 +26,14 @@ struct SettingsMenu: View {
     var body: some View {
         Menu {
             Button {
-                open(.maintenance)
+                app.settingsDestination = .maintenance
             } label: {
                 Label("Maintenance", systemImage: "wrench.and.screwdriver")
             }
 
             if showBandEditor {
                 Button {
-                    open(.bands)
+                    app.settingsDestination = .bands
                 } label: {
                     Label("Bands", systemImage: "antenna.radiowaves.left.and.right")
                 }
@@ -44,13 +43,13 @@ struct SettingsMenu: View {
             // 一个可能很长的按 App 列表，塞进去会把维护页顶成「先滚过温控和
             // 重启才能看到清理」—— 两件事各自成页，菜单里各占一行。
             Button {
-                open(.clean)
+                app.settingsDestination = .clean
             } label: {
                 Label("Clean", systemImage: "sparkles")
             }
 
             Button {
-                open(.about)
+                app.settingsDestination = .about
             } label: {
                 Label("About", systemImage: "info.circle")
             }
@@ -59,11 +58,5 @@ struct SettingsMenu: View {
         }
         .tint(.mwAccent)
         .accessibilityLabel(Text("Settings"))
-    }
-
-    private func open(_ destination: SettingsDestination) {
-        withAnimation(.easeOut(duration: 0.35)) {
-            app.settingsDestination = destination
-        }
     }
 }
