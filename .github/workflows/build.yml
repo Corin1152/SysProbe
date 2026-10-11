@@ -289,7 +289,7 @@ jobs:
             [ -d "$bundle" ] || continue
             for lang in en zh-Hans; do
               if [ ! -f "$bundle/$lang.lproj/Localizable.strings" ]; then
-                echo "::error::$lang.lproj/Localizable.strings is missing from $(basename "$bundle"). SwiftUI resolves Text(\"…\") against these files, so without them the in-app language switch silently does nothing."
+                echo "::error::$lang.lproj/Localizable.strings is missing from $(basename "$bundle"). SwiftUI resolves Text(\"…\") against these files, so without them that language silently falls back to the key itself (i.e. English)."
                 fail=1
               fi
             done

@@ -2,9 +2,16 @@ import SwiftUI
 
 /// 「维护」分页的分段 1 —— 维护。原来是齿轮菜单里的第一页。
 ///
-/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、网络唤醒、语言切换。
+/// 内容：两个破坏性动作（重启设备 / 注销）、网络唤醒、关闭温控降频。
 /// 诊断区在「关于」页（2026-10-02 迁走）：这一页只该剩真正「动手改系统」的东西，
 /// 诊断放回关于更符合它的信息属性。
+///
+/// 区段顺序（2026-10-11）：维护动作 → **网络唤醒** → **性能**（关温控降频）。
+/// 后两区互换过：网络唤醒是「配好就不用再碰」的一次性设置，性能那个开关则可能
+/// 被反复开关来试效果，排在更靠下不碍事。
+///
+/// **语言选项在这一版删掉了**（同一天）：App 现在固定跟随系统语言，
+/// 没有可切的东西 —— 见 `AppState` 类型头上的说明。
 ///
 /// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题全部由
 /// `MaintenanceHubView` 提供，这里只剩 `Form`。**`Form` 自己就是滚动容器** ——
@@ -12,7 +19,6 @@ import SwiftUI
 /// 症状是「这一页滑不动」，而且不报任何错；外壳那边用的是 `PageHubScaffold`，
 /// 存在的唯一理由就是避开这件事。
 struct MaintenancePanels: View {
-    @EnvironmentObject private var app: AppState
 
     /// 正在等确认的动作。`nil` 表示没有待确认的操作。
     ///
@@ -61,25 +67,10 @@ struct MaintenancePanels: View {
         Form {
             maintenanceSection
 
-            performanceSection
-
+            // 2026-10-11：这两区互换 —— 「网络唤醒」在上、「性能」在下。
             WakeSection()
 
-            Section {
-                Picker("Language", selection: $app.language) {
-                    // 语言名一律用该语言自己的写法，且不参与翻译 —— 把「简体中文」
-                    // 翻成 "Simplified Chinese" 之后，只会中文的人反而找不到它。
-                    ForEach(AppLanguage.allCases) { language in
-                        Text(verbatim: language.endonym).tag(language)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } header: {
-                Text("Language")
-            } footer: {
-                Text("Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.")
-            }
+            performanceSection
         }
         .scrollContentBackground(.hidden)
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），

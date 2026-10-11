@@ -1,13 +1,17 @@
 import Foundation
 
-/// 界面语言。
+/// 界面语言。**固定跟随系统**，用户不可切换（2026-10-11 起）。
 ///
-/// 存在 `UserDefaults` 里，切换后**不重启**即可生效。
-nonisolated enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
+/// 在那之前它存在 `UserDefaults` 里、维护页有一个选择器。删掉的原因很简单：
+/// 这个 App 只有中英两套文案，而系统语言本来就表达了用户想要哪一种 ——
+/// 一个只在两种语言之间选的开关，收益配不上它在维护页里占的那一区。
+///
+/// 负一屏扩展一直是这个行为（它读不到主 App 的 `UserDefaults`），现在两边一致了。
+///
+/// `CaseIterable` 保留：`Strings.bundles` 靠它把每个 `.lproj` 都挂进来。
+nonisolated enum AppLanguage: String, CaseIterable, Sendable {
     case english = "en"
     case chinese = "zh-Hans"
-
-    var id: String { rawValue }
 
     /// 当前界面语言。**运行期唯一的真相**：`AppFont` 用它决定字形，`Strings.text`
     /// 用它挑 `.lproj`，`RootView` 把它转成环境里的 `\.locale`。
@@ -21,28 +25,6 @@ nonisolated enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     /// 没有撕裂的可能。
     nonisolated(unsafe) static var current: AppLanguage = .systemPreferred
 
-    /// 用户上次选的语言。键名只写这一处，主 App 与设置页共用。
-    private static let storageKey = "appLanguage"
-
-    static var stored: AppLanguage? {
-        UserDefaults.standard.string(forKey: storageKey).flatMap(AppLanguage.init(rawValue:))
-    }
-
-    static func store(_ language: AppLanguage) {
-        UserDefaults.standard.set(language.rawValue, forKey: storageKey)
-    }
-
-    /// 语言选择器里显示的名字，一律用该语言自己的写法。
-    ///
-    /// 刻意不走本地化：把「简体中文」翻成 "Simplified Chinese" 之后，一个只会中文的
-    /// 用户反而找不到它 —— 语言选项是少数几种必须以自身语言呈现的字符串。
-    var endonym: String {
-        switch self {
-        case .english: return "English"
-        case .chinese: return "简体中文"
-        }
-    }
-
     var locale: Locale { Locale(identifier: rawValue) }
 
     /// 拉丁与中文的可用字形不同，字体设计要跟着语言走。见 `AppFont`。
@@ -50,10 +32,11 @@ nonisolated enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
         self == .english
     }
 
-    /// 系统偏好语言推断出来的语言。
+    /// 系统偏好语言推断出来的语言。**主 App 与扩展共用这一个入口。**
     ///
-    /// 给负一屏小组件用：扩展是独立进程，读不到主 App 的 `UserDefaults`（工程里没有
-    /// App Group entitlement），所以它只能跟随系统语言。
+    /// 只在 `Locale.preferredLanguages` 里认中英两种：都不匹配时回英文。
+    /// 两种都认不出来（比如系统是日语）也回英文 —— 本 App 只有这两套文案，
+    /// 与其猜一个更接近的，不如用一个确定能读懂的。
     static var systemPreferred: AppLanguage {
         for identifier in Locale.preferredLanguages {
             let lowered = identifier.lowercased()

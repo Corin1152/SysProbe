@@ -6,9 +6,7 @@
 "Hardware" = "硬件";
 "Power" = "电源";
 "Adapter" = "适配器";
-"Settings" = "设置";
 "Done" = "完成";
-"Language" = "语言";
 "Device" = "设备";
 "Model" = "机型";
 "System" = "系统";
@@ -166,13 +164,6 @@
 "Wireless charging has no cable and no input-current sensor, so there is nothing to measure." = "无线充电既没有线缆也没有输入电流传感器，没有可测的对象。";
 "Waiting for the phone to draw enough to measure a drop. Below about 150 mA there is nothing to divide." = "等待手机取用到足够电流才能测出压降。低于约 150 mA 时没有可除的数。";
 "The rail is collapsing under load. The phone is taking well under what the charger offered, and the voltage at the port is far below what was negotiated — the current is being held down to stop it falling further. Try another cable on this charger: if the drop shrinks, it was the cable." = "供电轨在负载下正在塌陷。手机取用的电流远低于充电器给出的能力，而端口电压远低于协商值 —— 电流被压住，以免电压继续下跌。换一根线缆试试：如果压降变小，问题就在原来那根线。";
-"Fitted over %@ of current swing, with %@ of it on the line." = "在 %@ 的电流变化区间上拟合得出，其中 %@ 落在有效范围内。";
-"From one sample, against the negotiated %@. That figure is a ceiling rather than a measurement, so read this as an order of magnitude. Once the current moves — the taper past 80%, thermal throttling, the phone's own load — it is replaced by a fit that needs no reference at all." = "来自单次采样，参照的是协商值 %@。那个协商值是上限而非实测，所以只能当作数量级来看。一旦电流发生变化（80% 之后的涓流、温控降频、手机自身负载），就会换成无需任何参照的拟合结果。";
-"Either way this is the whole path — the charger's own regulation, the cable and both plugs — not the cable alone, so it reads best as a comparison between cables on the same charger." = "无论哪种算法，这里量到的都是整条通路 —— 充电器自身的稳压、线缆、以及两端插头 —— 而不只是线缆。所以它最适合用来在同一只充电器上横向比较不同的线。";
-"Low. Nothing in this connection is holding the charge back." = "偏低。这条连接上没有任何环节在拖慢充电。";
-"Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges." = "对偏长或偏细的线缆来说是正常水平。会以发热的形式损失一点功率，但在当前电流下不太会影响充电速度。";
-"High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which." = "对充电路径来说偏高。线太细或太长、插头磨损、接触松动都会是这样。换一根线插在同一只充电器上，就能分辨到底是哪种。";
-"Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting." = "立即对全 App 生效。负一屏小组件跟随系统语言 —— 它跑在独立进程里，读不到这个设置。";
 "available" = "可用";
 "unavailable" = "不可用";
 "loaded" = "已加载";
@@ -198,7 +189,6 @@
    这个键没有任何使用者了。 */
 "Power draw" = "功率";
 "Charge control" = "充电控制";
-"Battery info" = "电池信息";
 "Basics" = "基础";
 "Service running" = "服务运行中";
 "Service stopped" = "服务未运行";
@@ -220,13 +210,7 @@
 "Temperature control" = "温度控制";
 "Stop charging above (°C)" = "高于 (°C) 停止充电";
 "Resume charging below (°C)" = "低于 (°C) 恢复充电";
-"Advanced" = "高级";
-"Prefer SmartBattery" = "使用 SmartBattery";
 "Predictive charge inhibit" = "智能停充";
-"Disable current inflow while stopped" = "停充时启用禁流";
-"Thermal simulation" = "热模拟";
-"PPM simulation" = "PPM 模拟";
-"Limit inflow" = "限流";
 "Reset all settings" = "重置全部设置";
 "Reset" = "重置";
 "Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone." = "所有充电阈值、温度限制与高级选项都会恢复默认值。此操作无法撤销。";
@@ -237,10 +221,6 @@
 "Heavy" = "重度";
 "Battery parameters" = "电池参数";
 "Health" = "健康度";
-"Charging now" = "正在充电";
-"Battery installed" = "电池已安装";
-"Yes" = "是";
-"No" = "否";
 "Cycle count" = "循环次数";
 "Design capacity" = "设计容量";
 "Full charge capacity" = "实际容量";
@@ -319,7 +299,6 @@
 "Turn Off" = "关闭温控";
 
 /* 网络唤醒（WOL）+ 设置子页全屏后的返回按钮（2026-10-02） */
-"Back" = "返回";
 "Wake on LAN" = "网络唤醒";
 "Add Device" = "添加设备";
 "Edit Device" = "编辑设备";

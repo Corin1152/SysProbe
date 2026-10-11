@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 充电控制 + 电池信息。**这两个是分段的内容，不是页面。**
+/// 「电源」页分段 3 —— 充电控制。**这是分段的内容，不是页面。**
 ///
 /// ## 为什么是原生界面，而不是守护进程托管的那份网页
 ///
@@ -14,7 +14,7 @@ import SwiftUI
 /// - **UIWebView**：iOS 26 SDK 已把它从公开 API 里去掉，而 CI 跑在 Xcode 26 上，
 ///   编译都过不去。它没有替代品：这个 App 的场景就是不能用 WKWebView。
 ///
-/// 所以这两个分段用 SwiftUI 重写。视觉与交互跟设计稿一致，而且直接复用了 App 自己的
+/// 所以这一段用 SwiftUI 重写。视觉与交互跟设计稿一致，而且直接复用了 App 自己的
 /// `Panel` / `BarRow` / 配色与字体 —— 比嵌一层网页更贴合，也少一整套
 /// 「WebView 加载失败 / 白屏 / 手势冲突」的失败模式。
 ///
@@ -25,22 +25,38 @@ import SwiftUI
 /// ── 2026-10-11 ──────────────────────────────────────────────────────────────
 ///
 /// 这里原本还有一个 `ChargeControlView`（一个带两段 `Picker` 的独立分页「智充」）。
-/// 现在「智充」这个名字没有了：这两个分段并入了 `PowerHubView`，外壳由它提供。
-/// 所以下面两个结构体从 `private` 变成模块内可见，并且**各自带上滚动容器** ——
-/// 它们以前是被 `PageScaffold` 的 `ScrollView` 装着的。
+/// 现在「智充」这个名字没有了：这一段并入了 `PowerHubView`，外壳由它提供。
+/// 所以结构体从 `private` 变成模块内可见，并且**自己带上滚动容器** ——
+/// 它以前是被 `PageScaffold` 的 `ScrollView` 装着的。
+///
+/// ── 2026-10-11（第二轮）────────────────────────────────────────────────────
+///
+/// 按界面反馈又收了两处：
+///
+///   1. 「电池信息」分段整个并进来了（`ChargeBatteryPanels` 删除）。它的两张卡片
+///      —— 电池、电池参数 —— 现在排在这一页最后；
+///   2. 「高级」卡片只留「智能停充」与「重置全部设置」，挪进「基础」卡片末尾，
+///      其余四项（Prefer SmartBattery / 停充时启用禁流 / 热模拟 / PPM 模拟 / 限流）
+///      移除。那些配置项在守护进程里仍然存在，只是不再有界面入口。
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  分段 3：充电控制
+//  分段 3：充电控制（含电池信息）
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// 「电源」页分段 3 —— 充电控制。
+/// 「电源」页分段 3 —— 充电控制 + 电池信息。
 ///
 /// 滚动容器在这一层（它以前是被 `PageScaffold` 的 `ScrollView` 装着的），
 /// 所以面板列表从「`PageScaffold` 的若干兄弟子视图」变成「一个 `LazyVStack` 的子视图」，
 /// 间距 14 由 `LazyVStack` 自己给 —— 与 `PageScaffold` 里的间距是同一个数。
+///
+/// 卡片顺序：基础（含智能停充 / 重置）→ 容量阈值 → 温度控制 → 电池 → 电池参数。
+/// 前两张是「怎么管充电」，后两张是「电池现在什么样」—— 后者原本是独立分段，
+/// 按要求挪到末尾。
 struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
     @State private var confirmingReset = false
+
+    private var battery: ChargeBatteryInfo { charge.battery }
 
     var body: some View {
         ScrollView {
@@ -50,7 +66,8 @@ struct ChargeControlPanels: View {
                 basicsPanel
                 thresholdsPanel
                 temperaturePanel
-                advancedPanel
+                batteryPanel
+                parametersPanel
             }
             .padding(.horizontal, 16)
             .padding(.top, 2)
@@ -95,6 +112,41 @@ struct ChargeControlPanels: View {
                     ForEach(ChargeAction.allCases) { action in
                         Button { charge.setAction(action) } label: { Text(action.title) }
                     }
+                }
+
+                // ── 2026-10-11：从「高级」卡片搬过来的两项 ──────────────────────
+                //
+                // 「高级」里原有六项（Prefer SmartBattery / 智能停充 / 停充时启用禁流 /
+                // 热模拟 / PPM 模拟 / 限流），按要求只留「智能停充」与「重置全部设置」，
+                // 其余移除，并把留下的两项挪到这张卡片末尾。
+                //
+                // 被移除的五项里，前四项是**实验性开关**（上游 ChargeLimiter 的调试入口），
+                // 「限流」是给特定充电器兜底用的 —— 它们都仍然在守护进程的配置里，
+                // 只是不再有界面入口；已经设过的值原样保留，不会被重置。
+                Divider().overlay(Color.mwCardStroke)
+
+                ToggleRow("Predictive charge inhibit",
+                          isOn: Binding(get: { charge.config.predictiveInhibit },
+                                        set: { charge.setPredictiveInhibit($0) }))
+
+                Divider().overlay(Color.mwCardStroke)
+
+                Button(role: .destructive) {
+                    confirmingReset = true
+                } label: {
+                    HStack {
+                        Text("Reset all settings")
+                        Spacer()
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .font(AppFont.text(14, weight: .medium))
+                }
+                .tint(.mwDanger)
+                .confirmationDialog("Reset all settings", isPresented: $confirmingReset, titleVisibility: .visible) {
+                    Button("Reset", role: .destructive) { charge.resetConfig() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone.")
                 }
             }
         }
@@ -151,59 +203,49 @@ struct ChargeControlPanels: View {
         }
     }
 
-    private var advancedPanel: some View {
-        Panel("Advanced", systemImage: "slider.horizontal.3") {
-            VStack(spacing: 12) {
-                ToggleRow("Prefer SmartBattery",
-                          isOn: Binding(get: { charge.config.preferSmartBattery },
-                                        set: { charge.setPreferSmartBattery($0) }))
-                ToggleRow("Predictive charge inhibit",
-                          isOn: Binding(get: { charge.config.predictiveInhibit },
-                                        set: { charge.setPredictiveInhibit($0) }))
-                ToggleRow("Disable current inflow while stopped",
-                          isOn: Binding(get: { charge.config.disableInflow },
-                                        set: { charge.setDisableInflow($0) }))
-
-                MenuRow("Thermal simulation",
-                        value: Text(charge.config.thermalMode.title),
-                        tint: .mwAccent) {
-                    ForEach(CuffMode.allCases) { mode in
-                        Button { charge.setThermalMode(mode) } label: { Text(mode.title) }
-                    }
-                }
-                MenuRow("PPM simulation",
-                        value: Text(charge.config.ppmMode.title),
-                        tint: .mwAccent) {
-                    ForEach(CuffMode.allCases) { mode in
-                        Button { charge.setPPMMode(mode) } label: { Text(mode.title) }
-                    }
-                }
-
-                ToggleRow("Limit inflow",
-                          isOn: Binding(get: { charge.config.limitInflow },
-                                        set: { charge.setLimitInflow($0) }))
-
-                Divider().overlay(Color.mwCardStroke)
-
-                Button(role: .destructive) {
-                    confirmingReset = true
-                } label: {
-                    HStack {
-                        Text("Reset all settings")
-                        Spacer()
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .font(AppFont.text(14, weight: .medium))
-                }
-                .tint(.mwDanger)
-                .confirmationDialog("Reset all settings", isPresented: $confirmingReset, titleVisibility: .visible) {
-                    Button("Reset", role: .destructive) { charge.resetConfig() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone.")
-                }
+    private var batteryPanel: some View {
+        Panel("Battery", systemImage: "battery.100",
+              trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
+            VStack(spacing: 14) {
+                BarRow(title: Text("Charge level"),
+                       detail: Self.percent(battery.currentCapacity),
+                       fraction: Double(battery.currentCapacity ?? 0) / 100,
+                       tint: .mwBattery)
+                BarRow(title: Text("Health"),
+                       detail: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—",
+                       fraction: (battery.healthPercent ?? 0) / 100,
+                       tint: .mwAccent)
+                BarRow(title: Text("Temperature"),
+                       detail: battery.temperature.map { String(format: "%.1f °C", $0) } ?? "—",
+                       // 0…50 °C 铺满整条。再热也不会到 50，而 0…40 会把日常读数挤在右半边。
+                       fraction: (battery.temperature ?? 0) / 50,
+                       tint: battery.temperature.map { Color.mwTemperature($0) } ?? .mwMuted)
             }
         }
+    }
+
+    private var parametersPanel: some View {
+        Panel("Battery parameters", systemImage: "list.bullet.rectangle") {
+            VStack(spacing: 10) {
+                ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
+                ValueRow(title: "Design capacity",
+                         value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
+                ValueRow(title: "Full charge capacity",
+                         value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
+                ValueRow(title: "Current",
+                         value: battery.amperage.map { "\($0) mA" } ?? "—")
+                // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
+                ValueRow(title: "Boot voltage",
+                         value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                ValueRow(title: "Voltage",
+                         value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
+            }
+        }
+    }
+
+    private static func percent(_ value: Int?) -> String {
+        value.map { "\($0)%" } ?? "—"
     }
 
     /// 原版的下拉项。1 秒是给「看着它动」用的，30 秒是给「装兜里省电」用的。
@@ -233,93 +275,6 @@ struct ChargeServiceNote: View {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  分段 4：电池信息
-// ══════════════════════════════════════════════════════════════════════════════
-
-/// 「电源」页分段 4 —— 电池信息。
-struct ChargeBatteryPanels: View {
-    @EnvironmentObject private var charge: ChargeControlService
-
-    private var battery: ChargeBatteryInfo { charge.battery }
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                ChargeServiceNote()
-
-                batteryPanel
-                chargingPanel
-                parametersPanel
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 2)
-            .padding(.bottom, 24)
-            .mwContainerWidth()
-        }
-    }
-
-    private var batteryPanel: some View {
-        Panel("Battery", systemImage: "battery.100",
-              trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
-            VStack(spacing: 14) {
-                BarRow(title: Text("Charge level"),
-                       detail: Self.percent(battery.currentCapacity),
-                       fraction: Double(battery.currentCapacity ?? 0) / 100,
-                       tint: .mwBattery)
-                BarRow(title: Text("Health"),
-                       detail: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—",
-                       fraction: (battery.healthPercent ?? 0) / 100,
-                       tint: .mwAccent)
-                BarRow(title: Text("Temperature"),
-                       detail: battery.temperature.map { String(format: "%.1f °C", $0) } ?? "—",
-                       // 0…50 °C 铺满整条。再热也不会到 50，而 0…40 会把日常读数挤在右半边。
-                       fraction: (battery.temperature ?? 0) / 50,
-                       tint: battery.temperature.map { Color.mwTemperature($0) } ?? .mwMuted)
-            }
-        }
-    }
-
-    private var chargingPanel: some View {
-        Panel("Charging", systemImage: "bolt.fill") {
-            VStack(spacing: 12) {
-                // 这是**即时动作**：直接对 IOPMPS 服务写 ExternalConnected，
-                // 不写配置、重启 App 也不会保留。所以它跟上面那些开关长得一样、
-                // 语义完全不同 —— 面板标题写「正在充电」而不是「充电控制」就是为了这个。
-                ToggleRow("Charging now",
-                          isOn: Binding(get: { battery.isCharging },
-                                        set: { charge.setCharging($0) }))
-                ValueRow(title: "Battery installed",
-                         value: Strings.text(battery.isInstalled ? "Yes" : "No"),
-                         tint: battery.isInstalled ? .mwBattery : .mwMuted)
-            }
-        }
-    }
-
-    private var parametersPanel: some View {
-        Panel("Battery parameters", systemImage: "list.bullet.rectangle") {
-            VStack(spacing: 10) {
-                ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
-                ValueRow(title: "Design capacity",
-                         value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Full charge capacity",
-                         value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Current",
-                         value: battery.amperage.map { "\($0) mA" } ?? "—")
-                // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
-                ValueRow(title: "Boot voltage",
-                         value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Voltage",
-                         value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
-            }
-        }
-    }
-
-    private static func percent(_ value: Int?) -> String {
-        value.map { "\($0)%" } ?? "—"
-    }
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  行控件

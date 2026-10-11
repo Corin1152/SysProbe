@@ -6,9 +6,7 @@
 "Hardware" = "Hardware";
 "Power" = "Power";
 "Adapter" = "Adapter";
-"Settings" = "Settings";
 "Done" = "Done";
-"Language" = "Language";
 "Device" = "Device";
 "Model" = "Model";
 "System" = "System";
@@ -166,13 +164,6 @@
 "Wireless charging has no cable and no input-current sensor, so there is nothing to measure." = "Wireless charging has no cable and no input-current sensor, so there is nothing to measure.";
 "Waiting for the phone to draw enough to measure a drop. Below about 150 mA there is nothing to divide." = "Waiting for the phone to draw enough to measure a drop. Below about 150 mA there is nothing to divide.";
 "The rail is collapsing under load. The phone is taking well under what the charger offered, and the voltage at the port is far below what was negotiated — the current is being held down to stop it falling further. Try another cable on this charger: if the drop shrinks, it was the cable." = "The rail is collapsing under load. The phone is taking well under what the charger offered, and the voltage at the port is far below what was negotiated — the current is being held down to stop it falling further. Try another cable on this charger: if the drop shrinks, it was the cable.";
-"Fitted over %@ of current swing, with %@ of it on the line." = "Fitted over %@ of current swing, with %@ of it on the line.";
-"From one sample, against the negotiated %@. That figure is a ceiling rather than a measurement, so read this as an order of magnitude. Once the current moves — the taper past 80%, thermal throttling, the phone's own load — it is replaced by a fit that needs no reference at all." = "From one sample, against the negotiated %@. That figure is a ceiling rather than a measurement, so read this as an order of magnitude. Once the current moves — the taper past 80%, thermal throttling, the phone's own load — it is replaced by a fit that needs no reference at all.";
-"Either way this is the whole path — the charger's own regulation, the cable and both plugs — not the cable alone, so it reads best as a comparison between cables on the same charger." = "Either way this is the whole path — the charger's own regulation, the cable and both plugs — not the cable alone, so it reads best as a comparison between cables on the same charger.";
-"Low. Nothing in this connection is holding the charge back." = "Low. Nothing in this connection is holding the charge back.";
-"Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges." = "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges.";
-"High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which." = "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which.";
-"Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting." = "Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.";
 "available" = "available";
 "unavailable" = "unavailable";
 "loaded" = "loaded";
@@ -198,7 +189,6 @@
    这个键没有任何使用者了。 */
 "Power draw" = "Power draw";
 "Charge control" = "Charge control";
-"Battery info" = "Battery info";
 "Basics" = "Basics";
 "Service running" = "Service running";
 "Service stopped" = "Service stopped";
@@ -220,13 +210,7 @@
 "Temperature control" = "Temperature control";
 "Stop charging above (°C)" = "Stop charging above (°C)";
 "Resume charging below (°C)" = "Resume charging below (°C)";
-"Advanced" = "Advanced";
-"Prefer SmartBattery" = "Prefer SmartBattery";
 "Predictive charge inhibit" = "Predictive charge inhibit";
-"Disable current inflow while stopped" = "Disable current inflow while stopped";
-"Thermal simulation" = "Thermal simulation";
-"PPM simulation" = "PPM simulation";
-"Limit inflow" = "Limit inflow";
 "Reset all settings" = "Reset all settings";
 "Reset" = "Reset";
 "Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone." = "Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone.";
@@ -237,10 +221,6 @@
 "Heavy" = "Heavy";
 "Battery parameters" = "Battery parameters";
 "Health" = "Health";
-"Charging now" = "Charging now";
-"Battery installed" = "Battery installed";
-"Yes" = "Yes";
-"No" = "No";
 "Cycle count" = "Cycle count";
 "Design capacity" = "Design capacity";
 "Full charge capacity" = "Full charge capacity";
@@ -319,7 +299,6 @@
 "Turn Off" = "Turn Off";
 
 /* Wake on LAN + the back button on full-screen settings pages (2026-10-02) */
-"Back" = "Back";
 "Wake on LAN" = "Wake on LAN";
 "Add Device" = "Add Device";
 "Edit Device" = "Edit Device";

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 「电源」分页 —— 原来的「电源 / 适配器 / 智充」三页收成这一页的四个分段。
+/// 「电源」分页 —— 原来的「电源 / 适配器 / 智充」三页收成这一页的分段。
 ///
 /// ── 为什么要合 ──────────────────────────────────────────────────────────────
 ///
@@ -11,12 +11,12 @@ import SwiftUI
 ///
 /// ── 分段内容的约定 ──────────────────────────────────────────────────────────
 ///
-/// 四个分段**各自带滚动容器**，不套在这一层里 —— 理由见 `PageHubScaffold`。
+/// 每个分段**各自带滚动容器**，不套在这一层里 —— 理由见 `PageHubScaffold`。
 /// 它们的 `PageScaffold` / 导航栈也都被去掉了：一页只能有一个导航栈，标题由这里按
 /// 当前分段给。
 ///
-/// 切换用 `switch` **条件渲染**，不是嵌套 `TabView`：后者会把四页一次性全建出来，
-/// 等于四个页面同时跑每秒采样。
+/// 切换用 `switch` **条件渲染**，不是嵌套 `TabView`：后者会把几页一次性全建出来，
+/// 等于几个页面同时跑每秒采样。
 struct PowerHubView: View {
 
     @EnvironmentObject private var monitor: PowerMonitor
@@ -43,7 +43,6 @@ struct PowerHubView: View {
                 case .draw: DashboardPanels()
                 case .adapter: AdapterPanels()
                 case .control: ChargeControlPanels()
-                case .battery: ChargeBatteryPanels()
                 }
             }
         )
@@ -59,10 +58,14 @@ struct PowerHubView: View {
     }
 }
 
-/// 「电源」页的四个分段。
+/// 「电源」页的三个分段。
 ///
-/// 顺序是明确要求的：功率 → 适配器 → 充电控制 → 电池信息。
-/// 从「电从哪来」到「怎么管它」再到「电池本身是什么状态」，是一条能顺着读下去的线。
+/// 顺序是明确要求的：功率 → 适配器 → 充电控制。
+/// 从「电从哪来」到「怎么管它」，是一条能顺着读下去的线。
+///
+/// 「电池信息」原本是第四个分段（2026-10-11 上午加的），当日下午按要求并进了
+/// 「充电控制」——它的两张卡片（电池 / 电池参数）现在排在那一页最后，
+/// 而原来那张「充电中」卡片被删掉了。
 ///
 /// `title` 同时当分段标签与导航栏标题用 —— 一处定义，两处显示，不会漂移。
 enum PowerSegment: Int, CaseIterable, Identifiable {
@@ -70,10 +73,8 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
     case draw
     /// 原 `AdapterView`（底部分页「适配器」）。
     case adapter
-    /// 原「智充」页的分段 1。
+    /// 原「智充」页 —— 充电控制 + 电池信息。
     case control
-    /// 原「智充」页的分段 2。
-    case battery
 
     var id: Int { rawValue }
 
@@ -84,7 +85,6 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
         case .draw: return "Power draw"
         case .adapter: return "Adapter"
         case .control: return "Charge control"
-        case .battery: return "Battery info"
         }
     }
 
@@ -93,7 +93,7 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
     ///
     ///   · 功率：降频时红色；无线充电紫色；插着电青色；电池供电橙色（`mwLoss`）；
     ///   · 适配器：无线紫色，有线青色；
-    ///   · 充电控制 / 电池信息：电池绿。
+    ///   · 充电控制：电池绿。
     ///
     /// **两个调用点，必须是同一个值**：`PowerHubView` 拿它当整页光晕，
     /// `DashboardPanels` 拿它当功率环的 tint。原来这两处在 `DashboardView` 里
@@ -110,7 +110,7 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
             return externalConnected ? .mwAccent : .mwLoss
         case .adapter:
             return wirelessInput ? .mwWireless : .mwAccent
-        case .control, .battery:
+        case .control:
             return .mwBattery
         }
     }

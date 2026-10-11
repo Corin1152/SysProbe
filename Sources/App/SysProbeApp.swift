@@ -19,7 +19,8 @@ struct SysProbeApp: App {
         //
         // 这里不再需要给 `Bundle.main` 换类：SwiftUI 的 `Text("…")` 不走
         // `localizedString(forKey:value:table:)`，换类对它一个字都不生效。
-        AppLanguage.current = AppLanguage.stored ?? .systemPreferred
+        // 语言固定跟随系统，没有用户可设的开关（2026-10-11）。
+        AppLanguage.current = .systemPreferred
     }
 
     var body: some Scene {

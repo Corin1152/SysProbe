@@ -240,11 +240,15 @@ struct AdapterPanels: View {
                                footnote: Text("of the current on offer"),
                                size: 22)
                     }
-                    Text(resistanceVerdict(resistance.milliohms))
-                        .font(.caption)
-                        .foregroundStyle(Color.mwMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                    provenance
+                    // 这里原本还有两段解释文字：`resistanceVerdict(...)`（按阻值分档给
+                    // 一句「正常 / 偏高」的判词）与 `provenance`（这个数字是拟合出来的
+                    // 还是单次采样算的）。2026-10-11 按要求去掉 —— 四行读数本身已经把
+                    // 「通路电阻 / 压降 / 损失 / 占用量」说清楚了，下面再堆三小段灰字
+                    // 只会把卡片拉长。
+                    //
+                    // 唯一损失的是「这个数是拟合的还是单次采样的」这个出处提示，
+                    // 它仍然在「通路电阻」那个读数的脚注里（`fitted over the whole
+                    // contract` / `from one sample`），只是不再展开解释。
                 }
             } else if snapshot.isWirelessInput || snapshot.adapterIsWireless {
                 EmptyNote(text: "Wireless charging has no cable and no input-current sensor, so there is nothing to measure.",
@@ -291,34 +295,6 @@ struct AdapterPanels: View {
         )
     }
 
-    /// Where the number came from, in its own words. Two different sentences because
-    /// the two methods have to be trusted differently, and a reader deciding whether
-    /// to go and buy a cable deserves to know which one they are looking at.
-    @ViewBuilder
-    private var provenance: some View {
-        let text: Text = {
-            if let estimate = monitor.pathResistance {
-                // Both numbers are formatted before they reach the sentence so each
-                // interpolates as a plain %@. An Int would interpolate as %lld and
-                // leave the literal percent sign next to it, which is not something a
-                // format string should be asked to parse.
-                let spread = String(format: "%.2f A", estimate.currentSpread)
-                let quality = "\(Int(estimate.fitQuality * 100))%"
-                return Text("Fitted over \(spread) of current swing, with \(quality) of it on the line.")
-            }
-            let contract = snapshot.adapterVoltageMillivolts.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—"
-            return Text("From one sample, against the negotiated \(contract). That figure is a ceiling rather than a measurement, so read this as an order of magnitude. Once the current moves — the taper past 80%, thermal throttling, the phone's own load — it is replaced by a fit that needs no reference at all.")
-        }()
-        text
-            .font(.caption2)
-            .foregroundStyle(Color.mwMuted.opacity(0.75))
-            .fixedSize(horizontal: false, vertical: true)
-        Text("Either way this is the whole path — the charger's own regulation, the cable and both plugs — not the cable alone, so it reads best as a comparison between cables on the same charger.")
-            .font(.caption2)
-            .foregroundStyle(Color.mwMuted.opacity(0.75))
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
     /// Deliberately coarse bands. The number includes the charger's output impedance
     /// and both sets of contacts, so a precise threshold would be false precision —
     /// what is being separated here is "unremarkable" from "worth swapping the cable".
@@ -327,17 +303,6 @@ struct AdapterPanels: View {
         case ..<200: .mwBattery
         case ..<400: .primary
         default: .mwLoss
-        }
-    }
-
-    private func resistanceVerdict(_ milliohms: Double) -> LocalizedStringKey {
-        switch milliohms {
-        case ..<200:
-            "Low. Nothing in this connection is holding the charge back."
-        case ..<400:
-            "Ordinary for a long or thin cable. It costs a little power as heat, and at these currents it is unlikely to change how fast the phone charges."
-        default:
-            "High for a charging path. A thinner or longer cable, a worn plug or a loose fit all look like this. Trying another cable on the same charger is the way to tell which."
         }
     }
 }

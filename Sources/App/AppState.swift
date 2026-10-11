@@ -17,21 +17,22 @@ import SwiftUI
 @MainActor
 final class AppState: ObservableObject {
 
-    @Published var language: AppLanguage {
-        didSet { applyLanguage() }
-    }
+    /// 界面语言。**固定跟随系统，用户不可改**（2026-10-11 起）。
+    ///
+    /// 它仍然是 `@Published`，因为 `RootView` 拿它做两件事：喂给环境里的
+    /// `\.locale`（`Text("…")` 按这个去 `.lproj` 里挑译文），以及当 `.id` 让整棵
+    /// 分页树换 identity（换语言时字形要跟着换，见 `RootView.tabs` 的说明）。
+    /// 这两条路径都还在，只是值不再来自用户的开关。
+    ///
+    /// 在 `init` 里定一次就够：iOS 在系统语言变更时会重启 App，不需要在运行期
+    /// 盯着 `Locale.preferredLanguages` 变。负一屏扩展同理，见 `TodayViewController`。
+    @Published private(set) var language: AppLanguage = .systemPreferred
 
     @Published var selectedTab = 0
 
     init() {
-        // 第一次启动跟随系统语言，之后跟随用户自己的选择。
-        language = AppLanguage.stored ?? .systemPreferred
-        // 注意：属性观察器在 `init` 里不触发，所以这里得显式落一次。
-        applyLanguage()
-    }
-
-    private func applyLanguage() {
+        // `AppFont` 与 `Strings.text` 读的是 `AppLanguage.current` 这个全局，
+        // 而它得在第一帧之前就位 —— 见 `SysProbeApp.init` 里同一句话。
         AppLanguage.current = language
-        AppLanguage.store(language)
     }
 }
