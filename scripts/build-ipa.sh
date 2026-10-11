@@ -202,6 +202,22 @@ for appex in "$BUILD_DIR/Payload/$SCHEME.app"/PlugIns/*.appex; do
 done
 echo "==> Signed SysProbe + ChargeLimiterDaemon with $ENTITLEMENTS, SysProbeRootTool with $TOOL_ENTITLEMENTS, extension(s) with $EXTENSION_ENTITLEMENTS"
 
+# 构建日期。写进主 App `Info.plist` 的自定义键，关于页读它显示「这一版是什么时候出的」。
+#
+# **为什么不用文件时间戳**：iOS 安装时会重写 app 包内所有文件的时间，装完之后读到的
+# 永远是「安装时间」而不是构建时间 —— 那比没有还糟，因为它看起来像个真日期。
+# 只有构建脚本当时写进去的才是真的。
+#
+# 放在签名之后、打包之前：`ldid` 只签 Mach-O，改 `Info.plist` 不影响它。
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+APP_INFO="$BUILD_DIR/Payload/$SCHEME.app/Info.plist"
+if /usr/libexec/PlistBuddy -c "Set :SysProbeBuildDate $BUILD_DATE" "$APP_INFO" 2>/dev/null; then
+  :
+else
+  /usr/libexec/PlistBuddy -c "Add :SysProbeBuildDate string $BUILD_DATE" "$APP_INFO"
+fi
+echo "==> Build date $BUILD_DATE written to Info.plist"
+
 # 包名带上版本号：`SysProbe-0.0.6.ipa`。取不到版本号时退回 `unsigned` ——
 # 宁可叫 `SysProbe-unsigned.ipa`，也不要出现 `SysProbe-.ipa` 这种残名。
 IPA_NAME="$SCHEME-${MARKETING_VERSION:-unsigned}.ipa"
@@ -217,6 +233,14 @@ app_dir="$(ls -d "$work"/Payload/*.app)"
 echo "  app        : $(basename "$app_dir")"
 echo "  version    : $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_dir/Info.plist") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_dir/Info.plist"))"
 echo "  minimum OS : $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app_dir/Info.plist" 2>/dev/null || echo '-')"
+# 构建日期。关于页拿它显示「发布日期」—— 缺了那一行会显示成「—」，
+# 不报错也不崩，所以在这里卡住。
+build_date="$(/usr/libexec/PlistBuddy -c 'Print :SysProbeBuildDate' "$app_dir/Info.plist" 2>/dev/null || true)"
+echo "  build date : ${build_date:--}"
+if [ -z "$build_date" ]; then
+  echo "::error::SysProbeBuildDate is missing from the app's Info.plist. The About page would show no release date at all." >&2
+  exit 1
+fi
 for appex in "$app_dir"/PlugIns/*.appex; do
   [ -d "$appex" ] || continue
   echo "  extension  : $(basename "$appex") -> $(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$appex/Info.plist")"

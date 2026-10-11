@@ -15,6 +15,25 @@ enum AppInfo {
         return "\(short) (\(build))"
     }
 
+    /// 这一版的发布日期，例如 `2026年10月11日`。取不到就是 `nil`。
+    ///
+    /// 读的是构建脚本写进 `Info.plist` 的 `SysProbeBuildDate`（UTC ISO8601）——
+    /// **不是文件时间戳**：iOS 安装时会重写 app 包内所有文件的时间，那读到的是
+    /// 「安装时间」，比没有还糟，因为它看起来像个真日期。见 `scripts/build-ipa.sh`。
+    ///
+    /// 用 Xcode 直接跑（不走 `build-ipa.sh`）时这个键不存在，返回 `nil` ——
+    /// 调用方显示 `—`。这是有意的：与其猜一个日期，不如明确说「不知道」。
+    ///
+    /// 格式化走当前 locale（`.abbreviated`），所以中英两套语言下分别是
+    /// 「2026年10月11日」与「Oct 11, 2026」——与 App 其余部分跟随系统语言的行为一致。
+    static var releaseDate: String? {
+        guard let raw = Bundle.main.infoDictionary?["SysProbeBuildDate"] as? String,
+              let date = isoFormatter.date(from: raw) else { return nil }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private static let isoFormatter = ISO8601DateFormatter()
+
     /// 负一屏扩展的摘要。
     ///
     /// 读的是打进包里的那份 `Info.plist`，所以它反映的是**这一版**的真实内容 ——

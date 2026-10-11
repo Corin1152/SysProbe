@@ -189,6 +189,8 @@
    这个键没有任何使用者了。 */
 "Power draw" = "Power draw";
 "Charge control" = "Charge control";
+"Follows the Enable switch above." = "Follows the Enable switch above.";
+"Release date" = "Release date";
 "Basics" = "Basics";
 "Service running" = "Service running";
 "Service stopped" = "Service stopped";
@@ -200,9 +202,6 @@
 "Charging starts as soon as power is connected and stops at the upper threshold." = "Charging starts as soon as power is connected and stops at the upper threshold.";
 "Charging only starts once the level falls below the lower threshold." = "Charging only starts once the level falls below the lower threshold.";
 "Update frequency" = "Update frequency";
-"Action" = "Action";
-"None" = "None";
-"Notification" = "Notification";
 "Cancel" = "Cancel";
 "Capacity thresholds" = "Capacity thresholds";
 "Start charging below" = "Start charging below";
@@ -211,15 +210,6 @@
 "Stop charging above (°C)" = "Stop charging above (°C)";
 "Resume charging below (°C)" = "Resume charging below (°C)";
 "Predictive charge inhibit" = "Predictive charge inhibit";
-"Reset all settings" = "Reset all settings";
-"Reset" = "Reset";
-"Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone." = "Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone.";
-"Off" = "Off";
-"Standard" = "Standard";
-"Light" = "Light";
-"Moderate" = "Moderate";
-"Heavy" = "Heavy";
-"Battery parameters" = "Battery parameters";
 "Health" = "Health";
 "Cycle count" = "Cycle count";
 "Design capacity" = "Design capacity";

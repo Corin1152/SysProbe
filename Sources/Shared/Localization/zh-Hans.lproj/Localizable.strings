@@ -189,6 +189,8 @@
    这个键没有任何使用者了。 */
 "Power draw" = "功率";
 "Charge control" = "充电控制";
+"Follows the Enable switch above." = "跟随上方「启用」开关。";
+"Release date" = "发布日期";
 "Basics" = "基础";
 "Service running" = "服务运行中";
 "Service stopped" = "服务未运行";
@@ -200,9 +202,6 @@
 "Charging starts as soon as power is connected and stops at the upper threshold." = "接上电源即开始充电，到达上限后停止。";
 "Charging only starts once the level falls below the lower threshold." = "只有电量降到下限以下才开始充电。";
 "Update frequency" = "更新频率";
-"Action" = "行为";
-"None" = "不动作";
-"Notification" = "通知";
 "Cancel" = "取消";
 "Capacity thresholds" = "电量阈值";
 "Start charging below" = "低于 (%) 开始充电";
@@ -211,15 +210,6 @@
 "Stop charging above (°C)" = "高于 (°C) 停止充电";
 "Resume charging below (°C)" = "低于 (°C) 恢复充电";
 "Predictive charge inhibit" = "智能停充";
-"Reset all settings" = "重置全部设置";
-"Reset" = "重置";
-"Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone." = "所有充电阈值、温度限制与高级选项都会恢复默认值。此操作无法撤销。";
-"Off" = "关闭";
-"Standard" = "标准";
-"Light" = "轻度";
-"Moderate" = "中度";
-"Heavy" = "重度";
-"Battery parameters" = "电池参数";
 "Health" = "健康度";
 "Cycle count" = "循环次数";
 "Design capacity" = "设计容量";

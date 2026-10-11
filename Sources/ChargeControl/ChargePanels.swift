@@ -54,7 +54,6 @@ import SwiftUI
 /// 按要求挪到末尾。
 struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
-    @State private var confirmingReset = false
 
     private var battery: ChargeBatteryInfo { charge.battery }
 
@@ -67,7 +66,6 @@ struct ChargeControlPanels: View {
                 thresholdsPanel
                 temperaturePanel
                 batteryPanel
-                parametersPanel
             }
             .padding(.horizontal, 16)
             .padding(.top, 2)
@@ -83,19 +81,19 @@ struct ChargeControlPanels: View {
                 ToggleRow("Enable", isOn: Binding(get: { charge.config.enable },
                                                   set: { charge.setEnable($0) }))
 
-                // 关掉总开关时，下面这些参数仍然可调 —— 守护进程照样收，只是不执行。
+                // 关掉总开关时，下面这几项仍然可调 —— 守护进程照样收，只是不执行。
                 // 这样用户可以先配好再打开，不必反过来。
+                //
+                // 「模式」的说明文案原本独占一行挂在下面，2026-10-11 按要求挪进这一行
+                // ——挤在标题与右侧取值之间，字号缩一档。见 `MenuRow.detail`。
                 MenuRow("Mode",
                         value: Text(charge.config.mode.title),
+                        detail: charge.config.mode.detail,
                         tint: .mwAccent) {
                     ForEach(ChargeMode.allCases) { mode in
                         Button { charge.setMode(mode) } label: { Text(mode.title) }
                     }
                 }
-                Text(charge.config.mode.detail)
-                    .font(.caption2)
-                    .foregroundStyle(Color.mwMuted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 MenuRow("Update frequency",
                         value: Text(verbatim: "\(charge.config.updateFrequency) s"),
@@ -105,49 +103,20 @@ struct ChargeControlPanels: View {
                     }
                 }
 
-                MenuRow("Action",
-                        value: charge.config.action == ChargeAction.notify.rawValue
-                            ? Text(ChargeAction.notify.title) : Text(ChargeAction.none.title),
-                        tint: .mwAccent) {
-                    ForEach(ChargeAction.allCases) { action in
-                        Button { charge.setAction(action) } label: { Text(action.title) }
-                    }
-                }
-
-                // ── 2026-10-11：从「高级」卡片搬过来的两项 ──────────────────────
+                // ── 2026-10-11：从「高级」卡片搬过来的一项 ──────────────────────
                 //
                 // 「高级」里原有六项（Prefer SmartBattery / 智能停充 / 停充时启用禁流 /
-                // 热模拟 / PPM 模拟 / 限流），按要求只留「智能停充」与「重置全部设置」，
-                // 其余移除，并把留下的两项挪到这张卡片末尾。
+                // 热模拟 / PPM 模拟 / 限流），只留「智能停充」挪到这张卡片末尾，
+                // 其余移除（「重置全部设置」也在同一天删掉了）。
                 //
                 // 被移除的五项里，前四项是**实验性开关**（上游 ChargeLimiter 的调试入口），
                 // 「限流」是给特定充电器兜底用的 —— 它们都仍然在守护进程的配置里，
-                // 只是不再有界面入口；已经设过的值原样保留，不会被重置。
+                // 只是不再有界面入口；已经设过的值原样保留。
                 Divider().overlay(Color.mwCardStroke)
 
                 ToggleRow("Predictive charge inhibit",
                           isOn: Binding(get: { charge.config.predictiveInhibit },
                                         set: { charge.setPredictiveInhibit($0) }))
-
-                Divider().overlay(Color.mwCardStroke)
-
-                Button(role: .destructive) {
-                    confirmingReset = true
-                } label: {
-                    HStack {
-                        Text("Reset all settings")
-                        Spacer()
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .font(AppFont.text(14, weight: .medium))
-                }
-                .tint(.mwDanger)
-                .confirmationDialog("Reset all settings", isPresented: $confirmingReset, titleVisibility: .visible) {
-                    Button("Reset", role: .destructive) { charge.resetConfig() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Every charge threshold, temperature limit and advanced option goes back to its default. This cannot be undone.")
-                }
             }
         }
     }
@@ -174,11 +143,12 @@ struct ChargeControlPanels: View {
     private var temperaturePanel: some View {
         Panel("Temperature control", systemImage: "thermometer.medium") {
             VStack(spacing: 16) {
-                ToggleRow("Temperature control",
-                          isOn: Binding(get: { charge.config.enableTemperature },
-                                        set: { charge.setTemperatureControl($0) }))
-
-                // 两个阈值只在总开关打开时可调，所以套一层单独的 `VStack` 再禁用它。
+                // 这里原本还有一个「温度控制」开关，2026-10-11 按要求删掉了 ——
+                // 它并入「基础」卡片里的「启用」总开关：总开关打开就等于温度控制生效。
+                // 写入在 `ChargeControlService.setEnable`，守护进程侧的老配置由
+                // `reconcileTemperatureControl` 对齐。
+                //
+                // 两个阈值仍然只在总开关打开时可调，所以套一层单独的 `VStack` 再禁用它。
                 //
                 // **`.disabled()` 会向整棵子树传播** —— 早先把它套在最外层那个 `VStack` 上，
                 // 结果连上面那个总开关自己也一起被禁掉了；而它默认是关的，于是永远打不开，
@@ -197,12 +167,23 @@ struct ChargeControlPanels: View {
                                     tint: .mwAccent,
                                     onChange: { charge.setTemperatureBelow($0) })
                 }
-                .disabled(!charge.config.enableTemperature)
-                .opacity(charge.config.enableTemperature ? 1 : 0.5)
+                .disabled(!charge.config.enable)
+                .opacity(charge.config.enable ? 1 : 0.5)
+
+                // 灰掉的原因要写出来 —— 开关在上一张卡片里，这一页看不到它。
+                Text("Follows the Enable switch above.")
+                    .font(.caption2)
+                    .foregroundStyle(Color.mwMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
+    /// 电池：实时读数（电量 / 健康度 / 温度）+ 静态参数（循环次数 / 容量 / 电压电流）。
+    ///
+    /// 2026-10-11 由两张卡片合并成一张 —— 它们说的是同一个东西的两面，
+    /// 中间一条分隔线比两张卡片各带一个标题更省地方。原来的标题「电池参数」
+    /// 随之取消，那几行读数本身就是自解释的。
     private var batteryPanel: some View {
         Panel("Battery", systemImage: "battery.100",
               trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
@@ -220,26 +201,24 @@ struct ChargeControlPanels: View {
                        // 0…50 °C 铺满整条。再热也不会到 50，而 0…40 会把日常读数挤在右半边。
                        fraction: (battery.temperature ?? 0) / 50,
                        tint: battery.temperature.map { Color.mwTemperature($0) } ?? .mwMuted)
-            }
-        }
-    }
 
-    private var parametersPanel: some View {
-        Panel("Battery parameters", systemImage: "list.bullet.rectangle") {
-            VStack(spacing: 10) {
-                ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
-                ValueRow(title: "Design capacity",
-                         value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Full charge capacity",
-                         value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Current",
-                         value: battery.amperage.map { "\($0) mA" } ?? "—")
-                // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
-                ValueRow(title: "Boot voltage",
-                         value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Voltage",
-                         value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
+                Divider().overlay(Color.mwCardStroke)
+
+                VStack(spacing: 10) {
+                    ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
+                    ValueRow(title: "Design capacity",
+                             value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
+                    ValueRow(title: "Full charge capacity",
+                             value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
+                    ValueRow(title: "Current",
+                             value: battery.amperage.map { "\($0) mA" } ?? "—")
+                    // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
+                    ValueRow(title: "Boot voltage",
+                             value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                    ValueRow(title: "Voltage",
+                             value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                    ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
+                }
             }
         }
     }
@@ -252,11 +231,11 @@ struct ChargeControlPanels: View {
     private static let frequencies = [1, 2, 3, 5, 10, 30]
 }
 
-/// 守护进程没起来时的提示条。两个分段共用。
+/// 守护进程没起来时的提示条。
 ///
-/// 它原来画在 `ChargeControlView` 里、位于分段控件与分段内容之间，所以两个分段都能看到。
-/// 拆开之后如果只放进「充电控制」，切到「电池信息」就看不到 —— 而那一页的读数同样
-/// 来自守护进程，同样是「看着有数、其实早就不更新了」。所以两边都放。
+/// 它原来画在 `ChargeControlView` 里、位于分段控件与分段内容之间，两个分段都能看到。
+/// 2026-10-11 之后「电池信息」并进了这一页，所以只剩一个调用点 —— 但**类型保留**：
+/// 它答的是「为什么下面全部不生效」，和 `ChargeControlPanels` 那堆面板是两件事。
 ///
 /// 两种情况要分开说：
 ///   · **没打进包**（`daemonBundled == false`）：这一版构建就没带它，用户自己修不了；
@@ -307,15 +286,23 @@ private struct ToggleRow: View {
 private struct MenuRow<Options: View>: View {
     let title: LocalizedStringKey
     let value: Text
+    /// 行内说明，可选。给「模式」用 —— 那句话原本独占一行挂在下面，
+    /// 2026-10-11 按要求挪进标题与右侧取值之间。
+    ///
+    /// 已经是译文（`ChargeMode.detail` 返回 `String`），所以渲染走 `Text(verbatim:)`，
+    /// 不会二次查表。
+    var detail: String?
     var tint: Color = .mwAccent
     @ViewBuilder var options: () -> Options
 
     init(_ title: LocalizedStringKey,
          value: Text,
+         detail: String? = nil,
          tint: Color = .mwAccent,
          @ViewBuilder options: @escaping () -> Options) {
         self.title = title
         self.value = value
+        self.detail = detail
         self.tint = tint
         self.options = options
     }
@@ -328,6 +315,20 @@ private struct MenuRow<Options: View>: View {
                 Text(title)
                     .font(AppFont.text(14, weight: .medium))
                     .foregroundStyle(Color.primary)
+                if let detail {
+                    // `layoutPriority(-1)`：空间不够时**先压这一句**，别去挤标题和取值 ——
+                    // 那两个才是这一行真正要传达的东西。再配合 `minimumScaleFactor`，
+                    // 长一点的说明会缩到能放下为止，而不是把右边的取值顶出去。
+                    Text(verbatim: detail)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(Color.mwMuted)
+                        .lineLimit(1)
+                        // 0.6 而不是 0.7：这句话在英文下有小 80 个字符，而这一行还要
+                        // 容下标题与右侧取值。压到 0.6 是「勉强能读」与「被截断」的
+                        // 折中 —— 再小就不如直接截断（截断至少不骗人）。
+                        .minimumScaleFactor(0.6)
+                        .layoutPriority(-1)
+                }
                 Spacer(minLength: 8)
                 value
                     .font(AppFont.text(14, weight: .semibold))

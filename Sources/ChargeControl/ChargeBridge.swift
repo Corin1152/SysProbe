@@ -136,39 +136,18 @@ nonisolated enum ChargeMode: String, CaseIterable, Identifiable {
 }
 
 /// 热模拟与 PPM 模拟共用的一档 —— 原版里它们指向的就是同一个数组。
-nonisolated enum CuffMode: String, CaseIterable, Identifiable {
+///
+/// **2026-10-11：这个枚举只剩「配置字段的类型」这一个用途了。**
+/// 它的 `title`（Off / Standard / Light / Moderate / Heavy）随「热模拟」「PPM 模拟」
+/// 两个下拉项一起删掉了 —— `ChargeConfig.thermalMode` / `ppmMode` 仍然从守护进程读回来，
+/// 只是不再显示、也不再能改。
+nonisolated enum CuffMode: String {
     case off, nominal, light, moderate, heavy
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        // 原版这一档叫 "Nominal"，但那个键在本工程里已经被热状态（`Nominal` = 正常）占了。
-        // 文案表的键就是英文原文，不能有两条同名的，所以这里换个词 —— 语义一样，
-        // 而且避免了两处不相干的功能共用一条译文（改一处会牵动另一处）。
-        case .off: return Strings.text("Off")
-        case .nominal: return Strings.text("Standard")
-        case .light: return Strings.text("Light")
-        case .moderate: return Strings.text("Moderate")
-        case .heavy: return Strings.text("Heavy")
-        }
-    }
 }
 
-/// 「行为」：到点之后除了停充，还要不要做别的。
-nonisolated enum ChargeAction: String, CaseIterable, Identifiable {
-    case none = ""
-    case notify = "noti"
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .none: return Strings.text("None")
-        case .notify: return Strings.text("Notification")
-        }
-    }
-}
+// 「行为」（`ChargeAction`：None / Notification）2026-10-11 整个删掉了 ——
+// 那个下拉项从「基础」卡片移除之后没有任何使用者。`ChargeConfig.action` 字段保留，
+// 同样是「读回来但不显示」。
 
 /// 守护进程报上来的电池读数（`get_bat_info` 的 `data`）。
 ///
@@ -274,14 +253,14 @@ nonisolated enum ChargeBridge {
         await status(["api": "set_conf", "key": key, "val": value])
     }
 
-    /// 「正在充电」是**即时动作**，不是配置项 —— 它走 `set_charge_status`。
-    static func setChargeStatus(_ on: Bool) async -> Bool {
-        await status(["api": "set_charge_status", "flag": on ? 1 : 0])
-    }
-
-    static func resetConfig() async -> Bool {
-        await status(["api": "reset_conf"])
-    }
+    // ── 2026-10-11：删掉了两个写接口 ──────────────────────────────────────
+    //
+    // `setChargeStatus`（`set_charge_status`，「正在充电」那个即时动作）与
+    // `resetConfig`（`reset_conf`）—— 它们在 App 里的唯一入口分别是「充电中」卡片
+    // 与「重置全部设置」按钮，两个界面项都已移除。
+    //
+    // 守护进程**仍然提供这两个 API**（`Resources/www/js/app.js` 里还在用，
+    // 浏览器打开 `http://127.0.0.1:1230` 照样能操作），这里只是 App 侧不再调用。
 
     // MARK: - 内部
 

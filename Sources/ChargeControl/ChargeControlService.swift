@@ -129,6 +129,20 @@ final class ChargeControlService: ObservableObject {
         config = fresh
         loaded = true
         daemonRunning = true
+        await reconcileTemperatureControl()
+    }
+
+    /// 把守护进程侧的 `enable_temp` 对齐到总开关。
+    ///
+    /// 老版本留下过「总开关开着、温度控制关着」这种组合。那个状态下界面上**已经没有
+    /// 任何入口能把它打开**（独立开关删掉了），温度控制会静默失效 —— 用户看到的
+    /// 只是「设了 45° 也没停充」。这里按总开关改回去，最多一轮就收敛。
+    ///
+    /// 只在两者不一致时才写，所以正常状态下这一句是零开销。
+    private func reconcileTemperatureControl() async {
+        guard config.enable != config.enableTemperature else { return }
+        config.enableTemperature = config.enable
+        _ = await ChargeBridge.set("enable_temp", config.enable)
     }
 
     private func pollBattery() async {
@@ -151,9 +165,20 @@ final class ChargeControlService: ObservableObject {
     // 一律**先改本地再发请求**：这些都是开关和滑块，本地立刻生效才有手感；
     // 万一写失败，5 秒后的那轮配置同步会把它改回来 —— 界面自己纠正，不用提示。
 
+    /// 总开关。
+    ///
+    /// **它同时控制温度控制**（2026-10-11 起）：界面上那个独立的「温度控制」开关
+    /// 删掉了，两者合成一个 —— 总开关打开就等于温度控制生效。
+    ///
+    /// 两个键都写，不能只写 `enable`：守护进程把 `enable_temp` 当成独立的一档，
+    /// 只写 `enable` 的话温度阈值那两条永远不会生效，而界面上看不出任何区别。
     func setEnable(_ on: Bool) {
         config.enable = on
-        Task { _ = await ChargeBridge.set("enable", on) }
+        config.enableTemperature = on
+        Task {
+            _ = await ChargeBridge.set("enable", on)
+            _ = await ChargeBridge.set("enable_temp", on)
+        }
     }
 
     func setMode(_ mode: ChargeMode) {
@@ -166,11 +191,6 @@ final class ChargeControlService: ObservableObject {
         Task { _ = await ChargeBridge.set("update_freq", seconds) }
     }
 
-    func setAction(_ action: ChargeAction) {
-        config.action = action.rawValue
-        Task { _ = await ChargeBridge.set("action", action.rawValue) }
-    }
-
     func setChargeBelow(_ percent: Int) {
         config.chargeBelow = percent
         Task { _ = await ChargeBridge.set("charge_below", percent) }
@@ -179,11 +199,6 @@ final class ChargeControlService: ObservableObject {
     func setChargeAbove(_ percent: Int) {
         config.chargeAbove = percent
         Task { _ = await ChargeBridge.set("charge_above", percent) }
-    }
-
-    func setTemperatureControl(_ on: Bool) {
-        config.enableTemperature = on
-        Task { _ = await ChargeBridge.set("enable_temp", on) }
     }
 
     func setTemperatureAbove(_ celsius: Int) {
@@ -196,46 +211,21 @@ final class ChargeControlService: ObservableObject {
         Task { _ = await ChargeBridge.set("charge_temp_below", celsius) }
     }
 
-    func setPreferSmartBattery(_ on: Bool) {
-        config.preferSmartBattery = on
-        Task { _ = await ChargeBridge.set("adv_prefer_smart", on) }
-    }
-
     func setPredictiveInhibit(_ on: Bool) {
         config.predictiveInhibit = on
         Task { _ = await ChargeBridge.set("adv_predictive_inhibit_charge", on) }
     }
 
-    func setDisableInflow(_ on: Bool) {
-        config.disableInflow = on
-        Task { _ = await ChargeBridge.set("adv_disable_inflow", on) }
-    }
-
-    func setThermalMode(_ mode: CuffMode) {
-        config.thermalMode = mode
-        Task { _ = await ChargeBridge.set("adv_def_thermal_mode", mode.rawValue) }
-    }
-
-    func setPPMMode(_ mode: CuffMode) {
-        config.ppmMode = mode
-        Task { _ = await ChargeBridge.set("ppm_simulate_mode", mode.rawValue) }
-    }
-
-    func setLimitInflow(_ on: Bool) {
-        config.limitInflow = on
-        Task { _ = await ChargeBridge.set("adv_limit_inflow", on) }
-    }
-
-    /// 「正在充电」是即时动作，不走配置 —— 它直接对 IOPMPS 服务写 `ExternalConnected`。
-    func setCharging(_ on: Bool) {
-        battery.isCharging = on
-        Task { _ = await ChargeBridge.setChargeStatus(on) }
-    }
-
-    func resetConfig() {
-        Task { @MainActor in
-            guard await ChargeBridge.resetConfig() else { return }
-            await self.pollConfig()
-        }
-    }
+    // ── 2026-10-11：删掉了六个写入方法 ────────────────────────────────────
+    //
+    // `setPreferSmartBattery` / `setDisableInflow` / `setThermalMode` / `setPPMMode` /
+    // `setLimitInflow` —— 对应的界面项在 0.0.32 那一轮移除了，没有调用者。
+    // `setAction` / `setTemperatureControl` 在本轮（0.0.33）随「行为」行与
+    // 「温度控制」开关一起删掉。
+    // `setCharging` 随「充电中」卡片一起没了（那一版删掉了卡片）。
+    // `resetConfig` 随「重置全部设置」按钮一起没了。
+    //
+    // **`ChargeConfig` 里那几个字段保留**：它们是守护进程配置的忠实镜像，
+    // 已经设过的值仍然会被读回来（只是不再显示、也不再能改）。要恢复入口的话，
+    // 照着上面 `setPredictiveInhibit` 的形状加一个就行。
 }

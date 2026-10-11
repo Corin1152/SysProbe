@@ -34,6 +34,9 @@ struct AboutView: View {
                     Section {
                         // 排查问题时第一步就是确认装的是哪一版。
                         LabeledContent("App version", value: AppInfo.version)
+                        // 发布日期由构建脚本写进 Info.plist。取不到时显示 `—` ——
+                        // 与其猜一个日期，不如明确说「不知道」。见 `AppInfo.releaseDate`。
+                        LabeledContent("Release date", value: AppInfo.releaseDate ?? "—")
                     } header: {
                         Text("Version")
                     }
