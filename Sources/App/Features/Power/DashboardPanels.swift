@@ -43,6 +43,18 @@ struct DashboardPanels: View {
         .onDisappear { isVisible = false }
     }
 
+    /// 功率环的 tint。
+    ///
+    /// **与 `PowerHubView` 的整页光晕是同一个值** —— 它调的就是那个函数。
+    /// 原来这两处在 `DashboardView` 里本来就是同一个 `glowColor`；拆成两个类型之后
+    /// 如果各写一份，环的颜色会与背景对不上，看起来像坏了，而且不报任何错。
+    private var ringTint: Color {
+        PowerSegment.glow(for: .draw,
+                          throttling: monitor.thermalState.isThrottling,
+                          wirelessInput: snapshot.isWirelessInput,
+                          externalConnected: plugged)
+    }
+
     // MARK: Hero
 
     private var heroPanel: some View {
@@ -52,7 +64,7 @@ struct DashboardPanels: View {
                           batteryWatts: plugged && snapshot.inputWatts != nil ? snapshot.batteryWatts : nil,
                           fullScale: fullScale,
                           caption: monitor.headline?.caption,
-                          tint: glowColor)
+                          tint: ringTint)
                     .padding(.top, 4)
 
                 FlowRow(spacing: 6) {

@@ -49,23 +49,13 @@ struct PowerHubView: View {
         )
     }
 
-    /// 背景光晕。逐条沿用各分段**原来在自己页面里**的规则，合并之后不做统一 ——
-    /// 那会把「热到降频」这类信号抹掉。
-    ///
-    ///   · 功率：降频时红色；无线充电紫色；插着电青色；电池供电橙色（原来是 `mwLoss`）；
-    ///   · 适配器：无线紫色，有线青色；
-    ///   · 充电控制 / 电池信息：电池绿。
+    /// 背景光晕。规则住在 `PowerSegment.glow` —— 功率环的 tint 用的是同一个函数，
+    /// 两处对不上时看起来像坏了。
     private var glow: Color {
-        switch page {
-        case .draw:
-            if monitor.thermalState.isThrottling { return .mwDanger }
-            if snapshot.isWirelessInput { return .mwWireless }
-            return snapshot.externalConnected ? .mwAccent : .mwLoss
-        case .adapter:
-            return snapshot.isWirelessInput ? .mwWireless : .mwAccent
-        case .control, .battery:
-            return .mwBattery
-        }
+        PowerSegment.glow(for: page,
+                          throttling: monitor.thermalState.isThrottling,
+                          wirelessInput: snapshot.isWirelessInput,
+                          externalConnected: snapshot.externalConnected)
     }
 }
 
@@ -95,6 +85,33 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
         case .adapter: return "Adapter"
         case .control: return "Charge control"
         case .battery: return "Battery info"
+        }
+    }
+
+    /// 背景光晕 / 功率环的颜色。逐条沿用各分段**原来在自己页面里**的规则，
+    /// 合并之后不做统一 —— 那会把「热到降频」这类信号抹掉。
+    ///
+    ///   · 功率：降频时红色；无线充电紫色；插着电青色；电池供电橙色（`mwLoss`）；
+    ///   · 适配器：无线紫色，有线青色；
+    ///   · 充电控制 / 电池信息：电池绿。
+    ///
+    /// **两个调用点，必须是同一个值**：`PowerHubView` 拿它当整页光晕，
+    /// `DashboardPanels` 拿它当功率环的 tint。原来这两处在 `DashboardView` 里
+    /// 就是同一个 `glowColor`；拆开之后如果不共用，环的颜色会与背景对不上，
+    /// 看起来像是坏了 —— 而且不会有任何报错。
+    static func glow(for segment: PowerSegment,
+                     throttling: Bool,
+                     wirelessInput: Bool,
+                     externalConnected: Bool) -> Color {
+        switch segment {
+        case .draw:
+            if throttling { return .mwDanger }
+            if wirelessInput { return .mwWireless }
+            return externalConnected ? .mwAccent : .mwLoss
+        case .adapter:
+            return wirelessInput ? .mwWireless : .mwAccent
+        case .control, .battery:
+            return .mwBattery
         }
     }
 }
