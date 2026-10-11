@@ -1,6 +1,13 @@
 import SwiftUI
 
-/// 「关于」页。版本号 + 诊断信息。
+/// 「关于」分页。版本号 + 诊断信息。原来是齿轮菜单里的第四页。
+///
+/// 2026-10-11 起它是底部分页栏的第 4 项 —— 齿轮删掉之后，这一页必须自己带
+/// `NavigationStack`（以前那一层是 `SettingsDestinationHost` 给的）。
+///
+/// 标题保持 `.inline`：这一页是 `Form`（设置式列表），大标题在它上面会显得空。
+/// 也顺带与「电源」「维护」两个带分段控件的分页保持一致 —— 四个分页里只有
+/// 「硬件」用大标题，那是明确要求保留的。
 ///
 /// **署名不在这里**（2026-10-04 按要求从界面上移除）。署名义务本身没有消失 ——
 /// MiniWatts 是 Apache-2.0、ChargeLimiter 是 GPL-3.0，它们要求保留版权与许可声明，
@@ -19,23 +26,25 @@ struct AboutView: View {
     @State private var toolReady: Bool?
 
     var body: some View {
-        ZStack {
-            Color.mwCanvas
-            Backdrop(glow: .mwAccent)
-            Form {
-                Section {
-                    // 排查问题时第一步就是确认装的是哪一版。
-                    LabeledContent("App version", value: AppInfo.version)
-                } header: {
-                    Text("Version")
-                }
+        NavigationStack {
+            ZStack {
+                Color.mwCanvas
+                Backdrop(glow: .mwAccent)
+                Form {
+                    Section {
+                        // 排查问题时第一步就是确认装的是哪一版。
+                        LabeledContent("App version", value: AppInfo.version)
+                    } header: {
+                        Text("Version")
+                    }
 
-                diagnosticsSection
+                    diagnosticsSection
+                }
+                .scrollContentBackground(.hidden)
             }
-            .scrollContentBackground(.hidden)
+            .navigationTitle("About")
+            .navigationBarTitleDisplayMode(.inline)
         }
-        .navigationTitle("About")
-        .navigationBarTitleDisplayMode(.inline)
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），放到
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
         .task {
@@ -67,7 +76,7 @@ struct AboutView: View {
             // 维护工具的状态。同上，它区分的正是「工具没进包」与
             // 「进了包但拿不到 root」—— 后者的表现也是「点了没反应」。
             LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
-            // 守护进程托管的网页界面。App 里**不用**它（见 `ChargeControlView`），
+            // 守护进程托管的网页界面。App 里**不用**它（见 `ChargeControlPanels`），
             // 但它是 App 之外最后一道保险：界面出问题时，在 Safari 里打开
             // 这个地址依然能手动停充。
             Link(destination: ChargeBridge.interfaceURL) {

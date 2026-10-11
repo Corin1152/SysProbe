@@ -26,7 +26,7 @@ import Foundation
 /// `.environment(\.locale,)`）。这里选后者。
 ///
 /// 带参数的条目按 `LocalizedStringKey` 的插值规则写：`String` 是 `%@`，`Int` 是 `%lld`。
-/// **键里不要出现裸的 `%`** —— 百分号要作为参数传进来（见 `AdapterView` 里那处
+/// **键里不要出现裸的 `%`** —— 百分号要作为参数传进来（见 `AdapterPanels` 里那处
 /// 适配器占比），否则得去赌 SwiftUI 有没有把字面量 `%` 转义成 `%%`。
 nonisolated enum Strings {
 

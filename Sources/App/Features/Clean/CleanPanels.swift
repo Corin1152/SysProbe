@@ -1,8 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// 「清理」页：磁盘缓存扫描与清理（移植自对 iOSCleanerPro 1.0 的分析，见
-/// `Tools/RootTool.c` 的来源说明）。
+/// 「维护」分页的分段 2 —— 清理。原来是齿轮菜单里的第三页。
+///
+/// 磁盘缓存扫描与清理（移植自对 iOSCleanerPro 1.0 的分析，见 `Tools/RootTool.c` 的来源说明）。
+///
+/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题都由 `MaintenanceHubView`
+/// 提供，这里只剩滚动容器与内容。**`ScrollView` 留在这一层** —— 它自带滚动容器，
+/// 套进 `PageScaffold` 的 `ScrollView` 会变成滚动套滚动（症状是「这一页滑不动」，
+/// 不报任何错），所以外壳用的是 `PageHubScaffold`。
 ///
 /// ── 刻意不做的三件事 ──────────────────────────────────────────────────────
 ///
@@ -16,10 +22,10 @@ import UIKit
 ///
 /// ── 并发与失败模式 ────────────────────────────────────────────────────────
 ///
-/// 阻塞调用全部走 `Task.detached`（与 `MaintenanceView` 同一约定）。清理没有
+/// 阻塞调用全部走 `Task.detached`（与 `MaintenancePanels` 同一约定）。清理没有
 /// 「取消」：子进程在后台把活干完，界面这边超时只会报「没返回结果」，
 /// 绝不提示用户「失败了」却让 root 工具继续删 —— 那两种状态必须分开。
-struct CleanView: View {
+struct CleanPanels: View {
 
     /// 工具能不能用。`nil` = 还没测出来；与维护页同一套自检（`DeviceActions.probe()`），
     /// 两个页面各自跑一次毫秒级的子进程，不为共用状态引入跨页耦合。
@@ -58,30 +64,25 @@ struct CleanView: View {
     @State private var expandedPreviews: Set<String> = []
 
     var body: some View {
-        ZStack {
-            Color.mwCanvas
-            Backdrop(glow: .mwAccent)
-            ScrollView {
-                VStack(spacing: 12) {
-                    totalHeader
-                    actionButtons
+        ScrollView {
+            VStack(spacing: 12) {
+                totalHeader
+                actionButtons
 
-                    if let scan {
-                        appsSection
-                        previewSection
-                        footerNotes()
-                    } else {
-                        toolRow
-                    }
+                if let scan {
+                    appsSection
+                    previewSection
+                    footerNotes()
+                } else {
+                    toolRow
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
-                .mwContainerWidth()
             }
+            .padding(.horizontal, 16)
+            // 顶上的 8 减到 2：分段控件已经给了 8 的下边距，再叠一层就偏松了。
+            .padding(.top, 2)
+            .padding(.bottom, 28)
+            .mwContainerWidth()
         }
-        .navigationTitle("Clean")
-        .navigationBarTitleDisplayMode(.inline)
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），放到
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
         .task {
@@ -516,7 +517,7 @@ struct CleanView: View {
     /// 预览里的一行：标题 + 该类总量，点一下展开条目。
     ///
     /// 用 `Button` 而不是 `DisclosureGroup` + 自定义 `Binding`：这一页已经有两处
-    /// 手写 `Binding`（`MaintenanceView` 的开关），而这里只是「展开/收起」，
+    /// 手写 `Binding`（`MaintenancePanels` 的开关），而这里只是「展开/收起」，
     /// 一个 `Set` 加一个按钮就说清楚了。
     private func previewRow(scope: StorageCleanScope,
                             items: [StorageScanResult.Preview]) -> some View {

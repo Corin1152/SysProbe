@@ -1,36 +1,46 @@
 import SwiftUI
 
-struct DashboardView: View {
+/// 「电源」页的分段 1 —— 功率。原先是底部第 2 个分页。
+///
+/// 2026-10-11 起它不再是一个独立分页，而是 `PowerHubView` 里的一个分段：
+/// 外壳（导航栈、画布、光晕、标题、分段控件）全部由 `PowerHubView` 提供，
+/// 这里只负责**滚动容器 + 面板**。
+///
+/// 这样拆有一个必须守住的地方：`isVisible` 还是靠 `onAppear` / `onDisappear` 维护。
+/// 它决定实时曲线要不要每秒刷新 —— 分段被切走时视图会被销毁，`onDisappear` 照常触发，
+/// 所以「离开这一屏还在采样」不会发生。改动这里时别把这两个回调挪到外层。
+struct DashboardPanels: View {
     @EnvironmentObject private var monitor: PowerMonitor
 
-    /// 这一页是不是当前选中的分页。
+    /// 这一段是不是正在显示。
     ///
     /// 以前读的是 `AppState.selectedTab`，但那意味着这一页得观察 `AppState`。
-    /// 换成本地状态，由 `TabView` 的 `onAppear` / `onDisappear` 维护，观察面就干净了。
+    /// 换成本地状态，由 `onAppear` / `onDisappear` 维护，观察面就干净了。
     @State private var isVisible = false
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
 
-    // 设置入口不在这一页：右上角那个齿轮由 `PageScaffold` 给，四个分页共用同一个。
+    // 光晕不在这一层：它属于页面外壳，由 `PowerHubView.glow` 按分段给。
     var body: some View {
-        PageScaffold("Power", glow: glowColor) {
-            heroPanel
-            if monitor.thermalState.isThrottling { throttleBanner }
-            batteryPanel
-            breakdownPanel
-            livePanel
-            sessionPanel
-            if !monitor.sensorsAvailable { sensorNote }
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                heroPanel
+                if monitor.thermalState.isThrottling { throttleBanner }
+                batteryPanel
+                breakdownPanel
+                livePanel
+                sessionPanel
+                if !monitor.sensorsAvailable { sensorNote }
+            }
+            .padding(.horizontal, 16)
+            // 顶上的 4 减到 2：分段控件已经给了 8 的下边距，再叠一层 4 就偏松了。
+            .padding(.top, 2)
+            .padding(.bottom, 24)
+            .mwContainerWidth()
         }
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
-    }
-
-    private var glowColor: Color {
-        if monitor.thermalState.isThrottling { return .mwDanger }
-        if snapshot.isWirelessInput { return .mwWireless }
-        return plugged ? .mwAccent : .mwLoss
     }
 
     // MARK: Hero

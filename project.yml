@@ -38,7 +38,8 @@ targets:
       - path: Sources/App
       - path: Sources/Shared
       # 充电控制：守护进程的启动与看门狗（ChargeSpawn.c / ChargeControlService.swift）、
-      # HTTP 桥（ChargeBridge.swift）、界面（ChargeControlView.swift）。
+      # HTTP 桥（ChargeBridge.swift）、界面（ChargePanels.swift —— 2026-10-11 之前叫
+      # ChargeControlView.swift，那时它是一个独立分页；现在它是「电源」页里的两个分段）。
       #
       # `Resources` 排除掉、下面单独作为 folder 引用加进来 —— 见那一段的说明。
       - path: Sources/ChargeControl
@@ -75,8 +76,8 @@ targets:
       base:
         PRODUCT_NAME: SysProbe
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe
-        MARKETING_VERSION: "0.0.30"
-        CURRENT_PROJECT_VERSION: "30"
+        MARKETING_VERSION: "0.0.31"
+        CURRENT_PROJECT_VERSION: "31"
         # 实测 CPU 频率的探针是 C —— Swift 没有内联汇编，而测频率靠的正是一段
         # 「周期数已知」的汇编循环。桥接头只给主 App 配：扩展的 sources 里没有
         # Shared/Hardware 这一层，用不到那个探针。
@@ -138,8 +139,8 @@ targets:
         # iOS 的扩展注册缓存（pluginkit 以 CFBundleIdentifier 为主键）。换一个主键
         # 就等于让系统把它当全新扩展注册，不依赖用户先卸载。
         PRODUCT_BUNDLE_IDENTIFIER: com.corin.sysprobe.widget
-        MARKETING_VERSION: "0.0.30"
-        CURRENT_PROJECT_VERSION: "30"
+        MARKETING_VERSION: "0.0.31"
+        CURRENT_PROJECT_VERSION: "31"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_CFBundleDisplayName: SysProbe
         INFOPLIST_FILE: Support/TodayExtension-Info.plist

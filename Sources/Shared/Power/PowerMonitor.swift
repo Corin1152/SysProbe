@@ -505,7 +505,7 @@ final class PowerMonitor: ObservableObject {
     /// the %-rate estimate — is the monitor's, not the snapshot's: it is derived
     /// from how the percentage moved across several snapshots. `PowerSnapshot` used
     /// to carry a `primaryWatts` that answered a simpler version of the same
-    /// question, which nothing called, while `DashboardView` open-coded this. One
+    /// question, which nothing called, while `DashboardPanels` open-coded this. One
     /// answer, in the layer that can actually give it.
     var headline: (watts: Double, caption: String)? {
         if snapshot.externalConnected {

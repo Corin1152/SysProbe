@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 充电控制页。
+/// 充电控制 + 电池信息。**这两个是分段的内容，不是页面。**
 ///
 /// ## 为什么是原生界面，而不是守护进程托管的那份网页
 ///
@@ -14,57 +14,52 @@ import SwiftUI
 /// - **UIWebView**：iOS 26 SDK 已把它从公开 API 里去掉，而 CI 跑在 Xcode 26 上，
 ///   编译都过不去。它没有替代品：这个 App 的场景就是不能用 WKWebView。
 ///
-/// 所以这一页用 SwiftUI 重写。视觉与交互跟设计稿一致，而且直接复用了 App 自己的
+/// 所以这两个分段用 SwiftUI 重写。视觉与交互跟设计稿一致，而且直接复用了 App 自己的
 /// `Panel` / `BarRow` / 配色与字体 —— 比嵌一层网页更贴合，也少一整套
 /// 「WebView 加载失败 / 白屏 / 手势冲突」的失败模式。
 ///
 /// `www/` 仍然随包发布：它是守护进程的 web root（删掉只会多一种失败模式），
 /// 同时也是一道保险 —— 界面出问题时，在 Safari 里打开 `http://127.0.0.1:1230`
-/// 依然能手动停充。设置页里有这个地址。
-struct ChargeControlView: View {
-
-    @EnvironmentObject private var charge: ChargeControlService
-    @State private var page = 0
-
-    var body: some View {
-        // 标题与下面那个 `Picker` 都用 "Smart charge" 这个键。**不能复用 "Charging"** ——
-        // 那个键还被功率页的状态词与电池信息页的「Charging」面板标题用着，改它会连累那两处。
-        PageScaffold("Smart charge", glow: .mwBattery) {
-            Picker("Smart charge", selection: $page) {
-                Text("Charge control").tag(0)
-                Text("Battery info").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            // 守护进程没起来时，下面所有开关都是「看着能点、点了没用」。
-            // 与其让用户对着一个不生效的界面调半天，不如在顶上把话说清楚。
-            if !charge.daemonBundled {
-                EmptyNote(text: "The charge control service is not in this build. Run scripts/build-ipa.sh to fetch and bundle it.",
-                          systemImage: "exclamationmark.triangle")
-            } else if !charge.daemonRunning {
-                EmptyNote(text: "The charge control service is not running. Nothing on this page will take effect until it starts.",
-                          systemImage: "exclamationmark.triangle")
-            }
-
-            if page == 0 {
-                ChargeControlPanels()
-            } else {
-                ChargeBatteryPanels()
-            }
-        }
-    }
-}
+/// 依然能手动停充。关于页里有这个地址。
+///
+/// ── 2026-10-11 ──────────────────────────────────────────────────────────────
+///
+/// 这里原本还有一个 `ChargeControlView`（一个带两段 `Picker` 的独立分页「智充」）。
+/// 现在「智充」这个名字没有了：这两个分段并入了 `PowerHubView`，外壳由它提供。
+/// 所以下面两个结构体从 `private` 变成模块内可见，并且**各自带上滚动容器** ——
+/// 它们以前是被 `PageScaffold` 的 `ScrollView` 装着的。
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Tab 1：充电控制
+//  分段 3：充电控制
 // ══════════════════════════════════════════════════════════════════════════════
 
-private struct ChargeControlPanels: View {
+/// 「电源」页分段 3 —— 充电控制。
+///
+/// 滚动容器在这一层（它以前是被 `PageScaffold` 的 `ScrollView` 装着的），
+/// 所以面板列表从「`PageScaffold` 的若干兄弟子视图」变成「一个 `LazyVStack` 的子视图」，
+/// 间距 14 由 `LazyVStack` 自己给 —— 与 `PageScaffold` 里的间距是同一个数。
+struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
     @State private var confirmingReset = false
 
     var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                ChargeServiceNote()
+
+                basicsPanel
+                thresholdsPanel
+                temperaturePanel
+                advancedPanel
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+            .padding(.bottom, 24)
+            .mwContainerWidth()
+        }
+    }
+
+    private var basicsPanel: some View {
         Panel("Basics", systemImage: "switch.2",
               trailing: charge.daemonRunning ? Text("Service running") : Text("Service stopped")) {
             VStack(spacing: 12) {
@@ -103,7 +98,9 @@ private struct ChargeControlPanels: View {
                 }
             }
         }
+    }
 
+    private var thresholdsPanel: some View {
         Panel("Capacity thresholds", systemImage: "battery.50") {
             VStack(spacing: 16) {
                 ThresholdSlider(title: "Start charging below",
@@ -120,7 +117,9 @@ private struct ChargeControlPanels: View {
                                 onChange: { charge.setChargeAbove($0) })
             }
         }
+    }
 
+    private var temperaturePanel: some View {
         Panel("Temperature control", systemImage: "thermometer.medium") {
             VStack(spacing: 16) {
                 ToggleRow("Temperature control",
@@ -150,7 +149,9 @@ private struct ChargeControlPanels: View {
                 .opacity(charge.config.enableTemperature ? 1 : 0.5)
             }
         }
+    }
 
+    private var advancedPanel: some View {
         Panel("Advanced", systemImage: "slider.horizontal.3") {
             VStack(spacing: 12) {
                 ToggleRow("Prefer SmartBattery",
@@ -209,16 +210,56 @@ private struct ChargeControlPanels: View {
     private static let frequencies = [1, 2, 3, 5, 10, 30]
 }
 
+/// 守护进程没起来时的提示条。两个分段共用。
+///
+/// 它原来画在 `ChargeControlView` 里、位于分段控件与分段内容之间，所以两个分段都能看到。
+/// 拆开之后如果只放进「充电控制」，切到「电池信息」就看不到 —— 而那一页的读数同样
+/// 来自守护进程，同样是「看着有数、其实早就不更新了」。所以两边都放。
+///
+/// 两种情况要分开说：
+///   · **没打进包**（`daemonBundled == false`）：这一版构建就没带它，用户自己修不了；
+///   · **打进包但没跑起来**：可能是权限、可能是被杀，值得让用户知道「下面全部不生效」。
+struct ChargeServiceNote: View {
+    @EnvironmentObject private var charge: ChargeControlService
+
+    var body: some View {
+        if !charge.daemonBundled {
+            EmptyNote(text: "The charge control service is not in this build. Run scripts/build-ipa.sh to fetch and bundle it.",
+                      systemImage: "exclamationmark.triangle")
+        } else if !charge.daemonRunning {
+            EmptyNote(text: "The charge control service is not running. Nothing on this page will take effect until it starts.",
+                      systemImage: "exclamationmark.triangle")
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
-//  Tab 2：电池信息
+//  分段 4：电池信息
 // ══════════════════════════════════════════════════════════════════════════════
 
-private struct ChargeBatteryPanels: View {
+/// 「电源」页分段 4 —— 电池信息。
+struct ChargeBatteryPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
 
     private var battery: ChargeBatteryInfo { charge.battery }
 
     var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                ChargeServiceNote()
+
+                batteryPanel
+                chargingPanel
+                parametersPanel
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+            .padding(.bottom, 24)
+            .mwContainerWidth()
+        }
+    }
+
+    private var batteryPanel: some View {
         Panel("Battery", systemImage: "battery.100",
               trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
             VStack(spacing: 14) {
@@ -237,7 +278,9 @@ private struct ChargeBatteryPanels: View {
                        tint: battery.temperature.map { Color.mwTemperature($0) } ?? .mwMuted)
             }
         }
+    }
 
+    private var chargingPanel: some View {
         Panel("Charging", systemImage: "bolt.fill") {
             VStack(spacing: 12) {
                 // 这是**即时动作**：直接对 IOPMPS 服务写 ExternalConnected，
@@ -251,7 +294,9 @@ private struct ChargeBatteryPanels: View {
                          tint: battery.isInstalled ? .mwBattery : .mwMuted)
             }
         }
+    }
 
+    private var parametersPanel: some View {
         Panel("Battery parameters", systemImage: "list.bullet.rectangle") {
             VStack(spacing: 10) {
                 ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")

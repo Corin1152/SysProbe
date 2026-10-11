@@ -1,11 +1,17 @@
 import SwiftUI
 
-/// 「维护」页。原来摊在设置页最上面那几区，现在整块搬过来。
+/// 「维护」分页的分段 1 —— 维护。原来是齿轮菜单里的第一页。
 ///
-/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、语言切换。
-/// 诊断区迁去了「关于」页（2026-10-02，给「清理」页腾出并列的菜单位之后，
-/// 维护页里只剩真正「动手改系统」的东西，诊断放回关于更符合它的信息属性）。
-struct MaintenanceView: View {
+/// 内容：两个破坏性动作（重启设备 / 注销）、关闭温控降频、网络唤醒、语言切换。
+/// 诊断区在「关于」页（2026-10-02 迁走）：这一页只该剩真正「动手改系统」的东西，
+/// 诊断放回关于更符合它的信息属性。
+///
+/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题全部由
+/// `MaintenanceHubView` 提供，这里只剩 `Form`。**`Form` 自己就是滚动容器** ——
+/// 所以这一层绝不能套进任何 `ScrollView`（`PageScaffold` 正是那种）。嵌套滚动的
+/// 症状是「这一页滑不动」，而且不报任何错；外壳那边用的是 `PageHubScaffold`，
+/// 存在的唯一理由就是避开这件事。
+struct MaintenancePanels: View {
     @EnvironmentObject private var app: AppState
 
     /// 正在等确认的动作。`nil` 表示没有待确认的操作。
@@ -52,36 +58,30 @@ struct MaintenanceView: View {
     @State private var thermalFailed = false
 
     var body: some View {
-        ZStack {
-            Color.mwCanvas
-            Backdrop(glow: .mwAccent)
-            Form {
-                maintenanceSection
+        Form {
+            maintenanceSection
 
-                performanceSection
+            performanceSection
 
-                WakeSection()
+            WakeSection()
 
-                Section {
-                    Picker("Language", selection: $app.language) {
-                        // 语言名一律用该语言自己的写法，且不参与翻译 —— 把「简体中文」
-                        // 翻成 "Simplified Chinese" 之后，只会中文的人反而找不到它。
-                        ForEach(AppLanguage.allCases) { language in
-                            Text(verbatim: language.endonym).tag(language)
-                        }
+            Section {
+                Picker("Language", selection: $app.language) {
+                    // 语言名一律用该语言自己的写法，且不参与翻译 —— 把「简体中文」
+                    // 翻成 "Simplified Chinese" 之后，只会中文的人反而找不到它。
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(verbatim: language.endonym).tag(language)
                     }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                } header: {
-                    Text("Language")
-                } footer: {
-                    Text("Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.")
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } header: {
+                Text("Language")
+            } footer: {
+                Text("Applies to the whole app straight away. The Today widget follows the system language instead — it runs in its own process and cannot read this setting.")
             }
-            .scrollContentBackground(.hidden)
         }
-        .navigationTitle("Maintenance")
-        .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），
         // 所以放到主 actor 之外跑。
         .task {

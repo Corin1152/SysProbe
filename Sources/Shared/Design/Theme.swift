@@ -163,20 +163,6 @@ extension View {
     /// panel) could still overflow horizontally — every user of this modifier is a
     /// column of wrapping text, which sizes to the proposed width on its own, so in
     /// practice the pages lay out the same.
-    /// 设置面板的容器底色。
-    ///
-    /// `presentationBackground` 是 iOS 16.4 才有的。不设的话，面板容器用的是系统背景
-    /// 材质，弹入的第一帧露出来的是它，与画布差一截。16.2 / 16.3 上退回原样 —— 面板内部
-    /// 压的那层 `Color.mwCanvas` 已经兜住了内容区，差的是最外层那一帧。
-    @ViewBuilder
-    func mwSheetBackground() -> some View {
-        if #available(iOS 16.4, *) {
-            self.presentationBackground(Color.mwCanvas)
-        } else {
-            self
-        }
-    }
-
     @ViewBuilder
     func mwContainerWidth() -> some View {
         if #available(iOS 17.0, *) {
@@ -189,3 +175,9 @@ extension View {
         }
     }
 }
+
+// `mwSheetBackground()`（`presentationBackground(Color.mwCanvas)`，给设置面板的容器
+// 底色用）2026-10-11 删掉了：设置面板那层 `fullScreenCover` 随齿轮一起消失，
+// 没有任何调用者。它当时解决的是「面板弹入的第一帧露出系统背景材质」——
+// 现在 `Form` 那两页（维护 / 关于）把画布铺成 `Form` 的**兄弟节点**，同一个问题
+// 用另一种方式解决了，不需要这个修饰符。

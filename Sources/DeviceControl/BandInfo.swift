@@ -141,7 +141,7 @@ nonisolated struct BandSet: Equatable {
     ///
     ///   - 桥接层写回时是从原 `fActiveBands` 的 mutableCopy 起手、只覆盖传进去的键
     ///     （见 `CommCenterBridge.m`），所以**没传的键会原样保留**；
-    ///   - 而界面现在只画 4G（见 `BandEditorView.visibleRats`）。如果这里仍然输出
+    ///   - 而界面现在只画 4G（见 `BandPanels.visibleRats`）。如果这里仍然输出
     ///     全部 supported 制式，「界面上没画出来」的那些就会被按当前 selection 重写，
     ///     一旦哪次 selection 没初始化全，它们就被静默清空 —— 那是「禁用 3G/2G」，
     ///     不是「不展示 3G/2G」。

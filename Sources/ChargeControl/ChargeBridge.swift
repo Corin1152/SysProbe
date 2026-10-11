@@ -9,7 +9,7 @@ import Foundation
 //                        resp: {"status": 0, "data": {...}}
 //
 //  它同时也会把一份网页界面托管在 `/`（`SysProbe.app/www`，随包发布）。App 里
-//  **不用**那个界面 —— 见 `ChargeControlView` 里的说明 —— 但留着它有两个用处：
+//  **不用**那个界面 —— 见 `ChargeControlPanels` 里的说明 —— 但留着它有两个用处：
 //  出问题时可以在 Safari 里直接开 `http://127.0.0.1:1230` 手动停充，
 //  以及它本来就是这个守护进程的 web root，删掉反而多一种失败模式。
 //
@@ -110,7 +110,7 @@ nonisolated enum ChargeMode: String, CaseIterable, Identifiable {
     /// 这里一度返回 `LocalizedStringKey`，那是个**编译期就过不去**的写法，而且报错
     /// 指向的地方看不出根因：本文件只 `import Foundation`，`LocalizedStringKey` 是
     /// SwiftUI 的类型，于是 `title` 成了错误类型 → `Identifiable` 一致性判不出来 →
-    /// 下游 `ChargeControlView` 里的 `ForEach(ChargeMode.allCases)` 只好退而选中
+    /// 下游 `ChargeControlPanels` 里的 `ForEach(ChargeMode.allCases)` 只好退而选中
     /// SwiftUI 那个 `Binding<C>` 重载，`mode` 被当成 `Binding<ChargeMode>`，
     /// `Text(mode.title)` 就成了 `Text<Binding<Subject>>` —— 一屏全是「无法推断泛型」
     /// 之类的错，真正的原因却在另一个文件里。

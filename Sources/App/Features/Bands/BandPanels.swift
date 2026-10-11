@@ -1,6 +1,17 @@
 import SwiftUI
 
-/// 「频段」。读 / 写基带允许使用的频段，按 SIM 卡槽分开。
+/// 「维护」分页的分段 3 —— 频段。原来是齿轮菜单里的第二页。
+///
+/// 读 / 写基带允许使用的频段，按 SIM 卡槽分开。
+///
+/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题都由 `MaintenanceHubView`
+/// 提供，这里只剩滚动容器与内容。**`ScrollView` 留在这一层**，外壳用
+/// `PageHubScaffold` 而不是 `PageScaffold`（后者的内容会被塞进它自己的 `ScrollView`，
+/// 变成滚动套滚动）。
+///
+/// 右上角的保存 / 刷新按钮仍然走 `.toolbar` —— `toolbar` 会向上找到最近的
+/// `NavigationStack`（也就是 `MaintenanceHubView` 那一个）。分段被切走时这一层整体
+/// 消失，两个按钮随之消失，不会留在别的分段上。
 ///
 /// ## 这一页是整个 App 里唯一会「写系统状态」的地方
 ///
@@ -18,7 +29,11 @@ import SwiftUI
 ///
 /// 第 5 条尤其重要：CommCenter 权限没生效时，读会失败、写会**静默失败**
 /// （调用不抛异常、不打日志）。不给一个「点了没反应」的保存按钮。
-struct BandEditorView: View {
+///
+/// 搬成分段之后，第 1 条的意义**变得更重**：它以前是「从齿轮里点进来」的独立一层，
+/// 现在与「清理」只隔一次点击。分段标签上那个盾牌图标（见 `MaintenanceSegment.icon`）
+/// 是配合它一起加的第二道提示。
+struct BandPanels: View {
     @EnvironmentObject private var hardware: HardwareMonitor
 
     @StateObject private var service = BandService()
@@ -51,47 +66,39 @@ struct BandEditorView: View {
     @State private var banner: String?
     @State private var bannerIsError = false
 
-    @Environment(\.dismiss) private var dismiss
-
     /// 频段网格：4 列。和原版一样 —— 一屏能扫完一个制式，不用滚。
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
     var body: some View {
-        ZStack {
-            Color.mwCanvas
-            Backdrop(glow: .mwAccent)
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    if let banner {
-                        bannerPanel(banner)
-                    }
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                if let banner {
+                    bannerPanel(banner)
+                }
 
-                    if service.availability == .unavailable {
-                        unavailablePanel
-                    } else {
-                        infoPanel
-                        // 两个逃生通道紧跟信息卡，排在**第二张**（2026-10-04 从页面
-                        // 底部移上来）：它们是频段写错之后的主要补救手段，留在最下面
-                        // 要滚过整页频段网格才够得着，而那时候人往往正着急。
-                        actionPanel
-                        if service.slots.count > 1 { slotPanel }
-                        bandPanels
-                    }
+                if service.availability == .unavailable {
+                    unavailablePanel
+                } else {
+                    infoPanel
+                    // 两个逃生通道紧跟信息卡，排在**第二张**（2026-10-04 从页面
+                    // 底部移上来）：它们是频段写错之后的主要补救手段，留在最下面
+                    // 要滚过整页频段网格才够得着，而那时候人往往正着急。
+                    actionPanel
+                    if service.slots.count > 1 { slotPanel }
+                    bandPanels
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 24)
-                .mwContainerWidth()
             }
-            .disabled(service.isLoading)
-            .overlay {
-                if service.isLoading {
-                    ProgressView().controlSize(.large)
-                }
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+            .padding(.bottom, 24)
+            .mwContainerWidth()
+        }
+        .disabled(service.isLoading)
+        .overlay {
+            if service.isLoading {
+                ProgressView().controlSize(.large)
             }
         }
-        .navigationTitle("Bands")
-        .navigationBarTitleDisplayMode(.inline)
         .task {
             // 首次进入先给整屏警告。它挡在加载之前 —— 让人先看懂风险，再看数据。
             if !entryTipsDone { showEntryTips = true }
@@ -157,8 +164,12 @@ struct BandEditorView: View {
             Button("Hide this page", role: .destructive) {
                 // 第 4 层：关掉入口。**没有地方能再打开** —— 这是故意的，
                 // 一个能随手关掉又能随手打开的开关挡不住误触。
+                //
+                // 2026-10-11：这里以前还调一次 `dismiss()`（那时整页是
+                // `fullScreenCover` 推出来的）。现在它是「维护」页里的一个分段，
+                // 没有可 dismiss 的东西 —— 关掉开关之后由 `MaintenanceHubView`
+                // 的 `onChange` 把选中态挪回「维护」，分段栏里那一项随之消失。
                 showBandEditor = false
-                dismiss()
             }
         } message: {
             Text("Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users.")

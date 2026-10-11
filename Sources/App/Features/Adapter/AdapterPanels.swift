@@ -1,26 +1,35 @@
 import SwiftUI
 
-struct AdapterView: View {
+/// 「电源」页的分段 2 —— 适配器。原先是底部第 3 个分页。
+///
+/// 2026-10-11 起外壳（导航栈、画布、光晕、标题、分段控件）全部由 `PowerHubView` 提供，
+/// 这里只负责**滚动容器 + 面板**。理由见 `PageHubScaffold`。
+struct AdapterPanels: View {
     @EnvironmentObject private var monitor: PowerMonitor
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
 
     var body: some View {
-        PageScaffold("Adapter",
-                     glow: snapshot.isWirelessInput ? .mwWireless : .mwAccent) {
-            if snapshot.externalConnected {
-                headlinePanel
-                identityPanel
-                profilesPanel
-                railsPanel
-                connectionPanel
-            } else {
-                Panel("Not connected", systemImage: "powerplug") {
-                    EmptyNote(text: "Plug in a charger to read its handshake. USB-PD adapters advertise a menu of voltage/current profiles; the phone picks one and this page shows which, alongside what is actually flowing.",
-                              systemImage: "cable.connector")
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                if snapshot.externalConnected {
+                    headlinePanel
+                    identityPanel
+                    profilesPanel
+                    railsPanel
+                    connectionPanel
+                } else {
+                    Panel("Not connected", systemImage: "powerplug") {
+                        EmptyNote(text: "Plug in a charger to read its handshake. USB-PD adapters advertise a menu of voltage/current profiles; the phone picks one and this page shows which, alongside what is actually flowing.",
+                                  systemImage: "cable.connector")
+                    }
+                    railsPanel
                 }
-                railsPanel
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+            .padding(.bottom, 24)
+            .mwContainerWidth()
         }
     }
 
