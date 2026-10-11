@@ -170,8 +170,10 @@ nonisolated enum StorageCleaner {
         let reportPath = makeReportPath()
 
         var status: Int32 = 0
+        // 扫描不需要任何附加参数 —— 三个位全传 nil。`nil` 只允许出现在**尾部**，
+        // 这里全是 nil 所以合法（见 ChargeSpawn.h）。
         let spawnResult = sysprobe_spawn_root_tool_sync_args(
-            toolPath, "clean-scan", reportPath, nil, nil, scanTimeoutMs, &status)
+            toolPath, "clean-scan", reportPath, nil, nil, nil, scanTimeoutMs, &status)
         guard spawnResult == 0, status == toolExitOK else {
             removeReport(reportPath)
             return nil
