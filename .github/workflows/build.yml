@@ -354,16 +354,31 @@ jobs:
           #    所以只能在这里钉一份清单。改错了的症状是「某个开关点了没反应」，
           #    且不报任何错。
           #
-          #    清单只含**两边都在用**的 5 个。`set_inflow_status` 与 `get_statistics`
-          #    守护进程仍然提供，但移植后的界面已经没有对应功能，两边都不调用它们 ——
-          #    列进来只会让这条断言无缘无故地红。
-          for api in get_conf set_conf reset_conf get_bat_info set_charge_status; do
+          #    清单只含**两边都在用**的那几个。守护进程提供但只有一边调用的，
+          #    列进来只会让这条断言无缘无故地红 —— 那种情况见下面那段说明。
+          for api in get_conf set_conf get_bat_info; do
             grep -q "\"$api\"" Sources/ChargeControl/ChargeBridge.swift || {
               echo "::error::ChargeBridge.swift no longer calls the '$api' api."; exit 1; }
             grep -q "'$api'" Sources/ChargeControl/Resources/www/js/app.js || {
               echo "::error::www/js/app.js no longer calls the '$api' api."; exit 1; }
           done
           echo "bridge api names line up"
+
+          # 下面这几个守护进程仍然提供、前端也仍然在调，但 **App 侧已经没有入口** ——
+          # 对应的界面项都删掉了：
+          #
+          #   · `reset_conf`        —— 「重置全部设置」按钮（2026-10-11 删）
+          #   · `set_charge_status` —— 「充电中」卡片里的「正在充电」开关（2026-10-11 删）
+          #   · `set_inflow_status` / `get_statistics` —— 移植时就砍掉了
+          #
+          # 只断言前端那一侧：`www/js/app.js` 是守护进程 web root 的一部分，
+          # 在 Safari 里打开 `http://127.0.0.1:1230` 仍然能用到它们，
+          # 名字被改错的话那条路会静默失效。
+          for api in reset_conf set_charge_status; do
+            grep -q "'$api'" Sources/ChargeControl/Resources/www/js/app.js || {
+              echo "::error::www/js/app.js no longer calls the '$api' api, which is now the only remaining caller (the app dropped its UI for it)."; exit 1; }
+          done
+          echo "front-end-only api names line up"
 
       - name: Upload ipa
         uses: actions/upload-artifact@v4
