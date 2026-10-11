@@ -7,7 +7,7 @@ import Foundation
 /// 条目是刻意不要的），取不到显示名时 `name` 直接退回 bundle id。
 nonisolated struct StorageScanReport: Codable {
     // 嵌套类型要各自标 `nonisolated`：`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
-    // 会给未标注的声明加主 actor 隔离，而这两个类型的 `init(from:)` 是在
+    // 会给未标注的声明加主 actor 隔离，而这些类型的 `init(from:)` 是在
     // `Task.detached` 里被 `JSONDecoder` 调的 —— 隔离成主 actor 就调不动了。
     // 顶层那个 `nonisolated` 不替嵌套类型兜底（同 `RadioAccessTechnology.Family`）。
     nonisolated struct Category: Codable {
@@ -24,7 +24,19 @@ nonisolated struct StorageScanReport: Codable {
         let bytes: Int64
     }
 
+    /// 一条预览样本：某个目录顶层的一个条目及其实测大小。
+    nonisolated struct Sample: Codable {
+        /// 顶层条目的文件名（不是完整路径 —— 界面上只显示名字）。
+        let name: String
+        let bytes: Int64
+    }
+
     let categories: [String: Category]
+    /// 四类目录各自的预览样本，键与 `categories` 相同（`system` / `logs` / `temp` / `update`），
+    /// 每类按大小降序、最多 6 条 —— 工具侧已经排好序并截断，这里不再处理。
+    ///
+    /// 可选：旧版工具没有这个键，缺了只该少一块预览，不该让整次扫描判成失败。
+    let samples: [String: [Sample]]?
     let apps: [AppEntry]
     /// 工具回传的逐项计数（已经是人读的字符串，App 原样显示、不解析）。
     ///
@@ -54,7 +66,12 @@ nonisolated enum StorageCleanScope: String {
     case logs
     /// `/var/tmp` 的内容。
     case temp
-    /// 所有应用容器的 `Library/Caches`。
+    /// 系统更新包。工具查两个候选路径，哪个存在清哪个：
+    /// `/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate`（现行）与
+    /// `/var/mobile/Library/SoftwareUpdate`（旧系统）。都没有就是 0。
+    case update
+    /// 所有应用容器的可清目录（`Library/Caches` / `tmp` / `Library/Logs` /
+    /// `Library/Saved Application State`）。
     case apps
     /// 单个应用（bundle id 作为附加参数传给工具）。
     case app
@@ -76,14 +93,41 @@ nonisolated struct StorageScanResult {
         var id: String { bundle }
     }
 
+    /// 一类目录的一条预览条目。`id` 用条目名：同一个目录里不可能有重名条目。
+    nonisolated struct Preview: Identifiable {
+        let name: String
+        let bytes: Int64
+
+        var id: String { name }
+    }
+
     let systemBytes: Int64
     let logsBytes: Int64
     let tempBytes: Int64
+    /// 系统更新包。没下载过更新的设备恒为 0 —— 那是正常状态，不是「扫描没扫到」。
+    let updateBytes: Int64
     /// 按缓存大小降序，工具已经排好。
     let apps: [AppCache]
-    /// 界面上「合计」的口径：三类目录 + 全部应用缓存。
-    var totalBytes: Int64 {
-        systemBytes + logsBytes + tempBytes + apps.reduce(0) { $0 + $1.bytes }
+    /// 四类目录的预览条目，键是 `StorageCleanScope` 的 rawValue。
+    /// 工具没给（旧版本）时是空字典，取出来就是空数组。
+    let previews: [String: [Preview]]
+
+    /// 某一类目录的预览条目。空数组 = 这类没有可预览的内容（或工具没给）。
+    ///
+    /// 方法名**刻意不叫 `previews(for:)`** —— 与上面那个同名的存储属性挤在一起，
+    /// 虽然按 Swift 的全名规则（`previews` vs `previews(for:)`）不冲突，
+    /// 但读起来容易以为是同一个东西。
+    func previewEntries(for scope: StorageCleanScope) -> [Preview] {
+        previews[scope.rawValue] ?? []
+    }
+
+    /// 界面上「可清理」的口径：四类目录 + 未被保护的应用缓存。
+    ///
+    /// **扣掉 `protected` 里的应用**，而不是用原始合计 —— 按钮上写多少就该删多少，
+    /// 否则用户按完发现少了一块，会以为清理没跑全。
+    func cleanableBytes(protecting protected: Set<String>) -> Int64 {
+        systemBytes + logsBytes + tempBytes + updateBytes
+            + apps.reduce(Int64(0)) { $0 + (protected.contains($1.bundle) ? 0 : $1.bytes) }
     }
 
     /// 工具回传的诊断行，原样显示。空数组 = 工具没给（旧版本工具）。
@@ -144,6 +188,7 @@ nonisolated enum StorageCleaner {
             systemBytes: report.categories["system"]?.bytes ?? 0,
             logsBytes: report.categories["logs"]?.bytes ?? 0,
             tempBytes: report.categories["temp"]?.bytes ?? 0,
+            updateBytes: report.categories["update"]?.bytes ?? 0,
             apps: report.apps
                 .filter { $0.bytes > 0 }
                 .map { entry in
@@ -155,6 +200,9 @@ nonisolated enum StorageCleaner {
                                                       bundlePath: bundlePath,
                                                       bytes: entry.bytes)
                 },
+            previews: (report.samples ?? [:]).mapValues { samples in
+                samples.map { StorageScanResult.Preview(name: $0.name, bytes: $0.bytes) }
+            },
             diagnostics: report.diagnostics ?? []
         )
     }
@@ -162,14 +210,37 @@ nonisolated enum StorageCleaner {
     /// 按范围清理。返回 `nil` 表示清理没能执行（工具不在包里 / 没拿到 root /
     /// 报告写不出来）；返回值代表**工具跑完了**，个别文件删不掉的明细在
     /// `errors` 里 —— 那是常态，不是失败。
+    ///
+    /// `exclude` 是「受保护」的应用 bundle id。工具只在清理**全部**应用容器时
+    /// 用它，所以按 `app` 点名清一个应用时它不生效（那边也没传）。
     @discardableResult
-    static func clean(_ scope: StorageCleanScope, bundleId: String? = nil) -> StorageCleanResult? {
+    static func clean(_ scope: StorageCleanScope,
+                      bundleId: String? = nil,
+                      exclude: [String] = []) -> StorageCleanResult? {
         guard let toolPath = DeviceActions.toolPath else { return nil }
         let reportPath = makeReportPath()
 
+        // 排除名单用逗号连接。bundle id 的字符集是 `[A-Za-z0-9.-]`，逗号不可能
+        // 出现在里面，所以这个分隔符无歧义 —— 与工具侧 `clean_bundle_is_excluded`
+        // 是同一套约定。
+        let excludeCsv = exclude.isEmpty ? nil : exclude.joined(separator: ",")
+
+        // `execve` 的 argv 在第一个 NULL 处截断，**不能有中间空位**（见 ChargeSpawn.h）：
+        // 要传 `excludeCsv` 就必须先把 `bundleId` 那一格占住，用空串当占位。
+        // 工具侧把空串与 NULL 同等看待（`do_clean_run` 开头归一）。
+        let bundleArg: String?
+        if let bundleId {
+            bundleArg = bundleId
+        } else if excludeCsv != nil {
+            bundleArg = ""
+        } else {
+            bundleArg = nil
+        }
+
         var status: Int32 = 0
         let spawnResult = sysprobe_spawn_root_tool_sync_args(
-            toolPath, "clean-run", scope.rawValue, reportPath, bundleId, cleanTimeoutMs, &status)
+            toolPath, "clean-run", scope.rawValue, reportPath, bundleArg, excludeCsv,
+            cleanTimeoutMs, &status)
         guard spawnResult == 0, status == toolExitOK else {
             removeReport(reportPath)
             return nil

@@ -12,7 +12,7 @@
 //    · `sysprobe_spawn_root_tool` / `_sync` —— 设置页的维护工具（重启设备 / 注销），
 //      **传一个子命令**；
 //    · `sysprobe_spawn_root_tool_sync_args` —— 存储清理（`clean-scan` / `clean-run`），
-//      子命令之外还能带最多三个参数，且等待预算由调用方给。
+//      子命令之外还能带最多四个参数，且等待预算由调用方给。
 //
 //  它们的 persona 序列逐行相同，改这段时几边一起看。
 //
@@ -205,6 +205,7 @@ int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
                                        const char *arg1,
                                        const char *arg2,
                                        const char *arg3,
+                                       const char *arg4,
                                        int timeoutMs,
                                        int *exitStatus) {
     if (toolPath == NULL || toolPath[0] != '/') {
@@ -219,10 +220,14 @@ int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
     // 而是「从这里整个截断」，后面的参数会被静默丢掉。第一版只拦了
     // 「arg1 为空但 arg2/arg3 非空」，漏掉了「arg1 非空、arg2 为空、arg3 非空」
     // 这一种，那种调用会把 arg3 丢掉而调用方毫不知情。两种都当场拒绝。
-    if (arg1 == NULL && (arg2 != NULL || arg3 != NULL)) {
+    // 加了 arg4 之后同理：某一位为空时，它后面每一位都必须为空。
+    if (arg1 == NULL && (arg2 != NULL || arg3 != NULL || arg4 != NULL)) {
         return EINVAL;
     }
-    if (arg2 == NULL && arg3 != NULL) {
+    if (arg2 == NULL && (arg3 != NULL || arg4 != NULL)) {
+        return EINVAL;
+    }
+    if (arg3 == NULL && arg4 != NULL) {
         return EINVAL;
     }
 
@@ -235,6 +240,7 @@ int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
         (char *const)arg1,
         (char *const)arg2,
         (char *const)arg3,
+        (char *const)arg4,
         NULL,
     };
 

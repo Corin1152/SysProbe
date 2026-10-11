@@ -61,7 +61,7 @@ nonisolated struct MemoryStats: Hashable {
     /// 那正是「优化完已用/可用都没变化」的由来。所以这里看的是**此刻真能用的页**，
     /// 不是「理论上可回收的总量」。
     ///
-    /// `MemoryReclaimer.memoryPools()` 用的是同一套口径，两处必须一致，
+    /// `MemoryReclaimer.availableBytes()` 用的是同一套口径，两处必须一致，
     /// 否则优化报出来的数字跟面板对不上。
     ///
     /// **和 CPU-X 对不上，别拿它去对。** 拆开 ARMCPUZ 的内存页看过了，它报的

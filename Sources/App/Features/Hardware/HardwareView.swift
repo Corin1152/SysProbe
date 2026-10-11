@@ -159,8 +159,16 @@ struct HardwareView: View {
                     Text(verbatim: "\(Formatting.percent(progress * 100))  ·  \(Formatting.bytes(allocated))")
                         .mwMono(size: 11)
                         .foregroundStyle(Color.mwAccent)
-                case .finished:
-                    Text("Done").mwMono(size: 11).foregroundStyle(Color.mwBattery)
+                case .finished(_, _, let allocated):
+                    // 这一轮**实际**分配出去的量。和下面 Before / After 的差值分开摆：
+                    // 前者是「顶了多大的压力」，后者是「真的逼出来多少」——
+                    // 两个都摆出来，才不会把「尽力了但系统没吐」读成「什么都没干」。
+                    HStack(spacing: 4) {
+                        Text("Allocated")
+                        Text(verbatim: Formatting.bytes(allocated))
+                    }
+                    .mwMono(size: 11)
+                    .foregroundStyle(Color.mwBattery)
                 default:
                     EmptyView()
                 }
@@ -170,7 +178,7 @@ struct HardwareView: View {
             case .running(let progress, _):
                 ProgressView(value: progress)
                     .tint(.mwAccent)
-            case .finished(let before, let after):
+            case .finished(let before, let after, _):
                 let delta = Int64(after) - Int64(before)
                 HStack(spacing: 14) {
                     Metric(caption: "Before", value: Formatting.bytes(before), size: Self.valueSize)

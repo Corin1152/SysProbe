@@ -361,6 +361,23 @@ for subcommand in restart-commcenter thermal-status thermal-disable thermal-enab
 done
 echo "  root tool  : restart-commcenter, thermal-{status,disable,enable}, clean-{scan,run} present"
 
+# 「系统更新包」那一类（2026-10-11 加）真的编进去了吗。
+#
+# 断言的是**路径字面量**而不是 `update` 这个词：后者在二进制里到处都是
+# （符号名、别的路径），挡不住旧版本。这一类的收益最大（几百 MB 到数 GB），
+# 而它失效的表现只是「扫描显示 0 B」—— 与「这台设备没下载过更新」一模一样，
+# 界面上分不出来。
+#
+# 这里用 `python3` 做子串查找而不是 `grep -a`：后者把二进制当文本、按 `\n` 分行，
+# 字符串池里的字面量未必恰好落在两个换行之间，会**漏报**（工作流里同一件事的
+# 注释记着上一轮就因此误报过）。断言漏报等于没有断言，而它误报会让构建红。
+if ! python3 -c 'import sys; sys.exit(0 if sys.argv[2].encode() in open(sys.argv[1], "rb").read() else 1)' \
+        "$tool" "com_apple_MobileAsset_SoftwareUpdate"; then
+  echo "::error::SysProbeRootTool does not carry the software-update path. The update category would always measure 0 B, which is indistinguishable from 'this device has never downloaded an update'." >&2
+  exit 1
+fi
+echo "  root tool  : software-update path present"
+
 rm -rf "$work"
 
 echo

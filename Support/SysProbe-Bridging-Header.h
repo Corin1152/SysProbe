@@ -10,6 +10,8 @@
 //  2. 启动充电守护进程、探测它的端口 —— `posix_spawn` 在 Swift 里的签名是五层嵌套
 //     指针，而真正决定成败的 `posix_spawnattr_set_persona_np` 是 Apple 的 SPI，
 //     公开 SDK 里没有声明（见 ChargeSpawn.c）。
+//  3. 内存优化的两个系统接口（见文件末尾）—— 它们不在 Darwin 模块里，只引 Swift
+//     找不到符号。
 //
 //  **扩展 target 用同一份头文件。** 它的 sources 里既没有 Shared/Hardware 也没有
 //  ChargeControl，这两个头文件对它来说只有声明、没有实现 —— 而声明没人调用就不会
@@ -22,3 +24,15 @@
 #import "../Sources/ChargeControl/ChargeSpawn.h"
 // 同上：扩展的 sources 里没有 DeviceControl，「频段设置」只有主 App 用得到。
 #import "../Sources/DeviceControl/CommCenterBridge.h"
+
+// 内存优化要用的两个系统接口。它们**不在** Darwin 模块里，光 `import Darwin` 找不到：
+//
+// - `os_proc_available_memory()`（声明在 `os/proc.h`）：返回本进程在触发 jetsam 之前
+//   还能分配多少字节。内存优化拿它当「安全上限」，取代原先那个用错指标的 free 闸门。
+// - `malloc_zone_pressure_relief()`（声明在 `malloc/malloc.h`）：让 libmalloc 把各 zone
+//   里空闲的页交还内核，是苹果自己响应内存压力时走的同一条路。
+//
+// 扩展 target 共用这一份头文件，两个接口对 appex 同样存在 —— 只是 appex 从不调用
+// `MemoryOptimizer.run()`，声明在那里不会有任何副作用。
+#include <os/proc.h>
+#include <malloc/malloc.h>

@@ -53,21 +53,23 @@ int sysprobe_spawn_root_tool(const char *toolPath, const char *command);
 /// 等不到也会返回一个错误（`ETIMEDOUT`），不会无限期挂着。
 int sysprobe_spawn_root_tool_sync(const char *toolPath, const char *command, int *exitStatus);
 
-/// 同 `sysprobe_spawn_root_tool_sync`，但**可以给子命令带最多三个附加参数**，并允许
+/// 同 `sysprobe_spawn_root_tool_sync`，但**可以给子命令带最多四个附加参数**，并允许
 /// 指定等待预算。
 ///
 /// 为「存储清理」新增的变体。两个既有入口满足不了它：
 ///
-///   · **参数**：`clean-scan` 要报告文件的落盘路径、`clean-run` 还要清理范围与
-///     （可选的）目标 bundle id —— 老入口只能传一个子命令；
+///   · **参数**：`clean-scan` 要报告文件的落盘路径、`clean-run` 还要清理范围、
+///     （可选的）目标 bundle id 与（可选的）排除名单 —— 老入口只能传一个子命令；
 ///   · **时间**：老入口固定等约 1 秒（对 `check` 这种毫秒级自检刚好），而一次
 ///     扫描要遍历几百个应用容器、一次「全部清理」要递归删几十万个文件，
 ///     秒级预算会把正在干活的子进程误判成超时。
 ///
-/// `arg1`/`arg2`/`arg3` 可以为 `NULL`，为 `NULL` 的参数不进 `argv`；
-/// `arg2` / `arg3` 非空时 `arg1` 也必须非空。`timeoutMs` 是等待子进程退出的总预算
-/// （毫秒），超时返回 `ETIMEDOUT` 且**不杀**子进程 —— 它可能正在干活，
-/// 而清理本来就没有「取消」的语义。
+/// `arg1`…`arg4` 可以为 `NULL`，为 `NULL` 的参数不进 `argv`；空位只允许出现在**尾部**
+/// （某个非空的参数前面，所有参数都必须非空）。需要「跳过中间某一位」时传空串，
+/// 不要传 `NULL` —— `execve` 的 argv 以第一个 `NULL` 结尾，中间的空位会把后面全部截断。
+///
+/// `timeoutMs` 是等待子进程退出的总预算（毫秒），超时返回 `ETIMEDOUT` 且**不杀**子进程
+/// —— 它可能正在干活，而清理本来就没有「取消」的语义。
 ///
 /// 其余（persona 序列、`CLOEXEC_DEFAULT`、轮询收尸的写法）与两个老入口逐行同构；
 /// 那段代码已在真机上验证过，这里刻意**不共用**一个可变参数的公共实现，
@@ -77,6 +79,7 @@ int sysprobe_spawn_root_tool_sync_args(const char *toolPath,
                                        const char *arg1,
                                        const char *arg2,
                                        const char *arg3,
+                                       const char *arg4,
                                        int timeoutMs,
                                        int *exitStatus);
 

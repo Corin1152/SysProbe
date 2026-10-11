@@ -624,6 +624,17 @@ static int do_thermal_set(int disabled) {
 /// 应用安装容器根。显示名与图标路径从这里来（读各 .app 的 Info.plist）。
 #define CLEAN_BUNDLE_CONTAINERS "/var/containers/Bundle/Application"
 
+/// 系统更新包（OTA）的落盘位置。
+///
+/// iOS 12 起由 MobileAsset 框架下载到这里；**已下载但未安装**的更新包动辄几百 MB
+/// 到数 GB，是「其他」占用里最大的一块，也是同类工具（iCleaner / Geranium）收益最高的
+/// 一项。第二个宏是更早期 iOS 的位置，两代实现哪个存在清哪个。
+///
+/// **存在才处理**：没下载过更新的设备上这两个路径根本不存在 —— 扫描要报 0，
+/// 清理要静默跳过，两者都不能把它当错误。
+#define CLEAN_UPDATE_DIR "/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate"
+#define CLEAN_UPDATE_DIR_LEGACY "/var/mobile/Library/SoftwareUpdate"
+
 /// 容器根的元数据文件与键名。键名必须是字面量才能用 `CFSTR`。
 #define CLEAN_MCM_PLIST ".com.apple.mobile_container_manager.metadata.plist"
 #define CLEAN_MCM_KEY "MCMMetadataIdentifier"
@@ -660,6 +671,39 @@ static const char *const clean_system_exclusions[] = {
     "com.apple.cloudd",
     "com.apple.dataaccess.dataaccessd",
 };
+
+/// 应用容器内**可以安全清空**的目录（相对容器根）。
+///
+/// 只放「删掉之后应用会自己重建、且不会丢用户内容」的目录 —— 这是硬边界。
+///
+/// `Library/Caches` 之外的三项是 2026-10-11 补的：此前只清 Caches，于是扫描数字偏小、
+/// 清完剩得多。对标 iCleaner 对「应用程序」那一类清的是「缓存 + Cookie + tmp + 快照」，
+/// 这里补的三个都是应用自己会重建的东西 —— `tmp` 是它自己的临时目录、
+/// `Library/Logs` 是它自己的日志、`Library/Saved Application State` 是窗口恢复状态。
+///
+/// 刻意**不含** `Library/Cookies` 与 `Library/Preferences`：前者一清就把所有内嵌网页
+/// 登出，后者是应用的设置本体 —— 两者都不是「缓存」，属于用户数据，不在清理范围内。
+static const char *const clean_container_subdirs[] = {
+    "Library/Caches",
+    "tmp",
+    "Library/Logs",
+    "Library/Saved Application State",
+};
+
+/// 预览样本的条数上限。够看清「这一类别里最大的是什么」，又不至于把卡片撑满。
+#define CLEAN_MAX_SAMPLES 6
+
+/// 预览样本：一个顶层条目的名字与它的大小。
+typedef struct {
+    char name[192];
+    uint64_t bytes;
+} clean_sample;
+
+/// 一个目录的预览样本，按大小降序。`count` 是有效条数（≤ CLEAN_MAX_SAMPLES）。
+typedef struct {
+    clean_sample items[CLEAN_MAX_SAMPLES];
+    int count;
+} clean_sample_list;
 
 /// 一次清理的累计结果。栈上分配（错误条目是定长数组）。
 typedef struct {
@@ -751,6 +795,79 @@ static uint64_t clean_measure_system(void) {
     return total;
 }
 
+/// 收集 `dir` 顶层最大的若干条目到 `out`（**追加**，不重置 —— 日志有两个目录，
+/// 要合并成一组样本）。给界面「将要删除什么」的预览用。
+///
+/// `applyExclusions` 与 `clean_measure_system` 同义：预览的口径必须与真删一致，
+/// 否则会出现「预览里有、实际没删」的错位。
+///
+/// 用插入排序而不是「先全收再 qsort」：榜单最多 6 条，而系统缓存顶层可能有几百个
+/// 条目，没必要为它分配一个大数组。
+static void clean_collect_samples(const char *dir, int applyExclusions, clean_sample_list *out) {
+    if (out == NULL) {
+        return;
+    }
+    DIR *handle = opendir(dir);
+    if (handle == NULL) {
+        return;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(handle)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (applyExclusions && clean_name_is_excluded(entry->d_name)) {
+            continue;
+        }
+        char child[CLEAN_PATH_MAX];
+        int n = snprintf(child, sizeof(child), "%s/%s", dir, entry->d_name);
+        if (n < 0 || n >= (int)sizeof(child)) {
+            continue;
+        }
+        uint64_t bytes = clean_measure(child, 0);
+
+        // 在榜单里找插入位置：`pos` 是第一条比它小的位置（榜单是降序的）。
+        int limit = out->count < CLEAN_MAX_SAMPLES ? out->count : CLEAN_MAX_SAMPLES;
+        int pos = limit;
+        while (pos > 0 && out->items[pos - 1].bytes < bytes) {
+            pos--;
+        }
+        if (pos >= CLEAN_MAX_SAMPLES) {
+            continue; // 比榜上最小的还小，进不来。
+        }
+        int last = out->count < CLEAN_MAX_SAMPLES ? out->count : CLEAN_MAX_SAMPLES - 1;
+        for (int i = last; i > pos; i--) {
+            out->items[i] = out->items[i - 1];
+        }
+        snprintf(out->items[pos].name, sizeof(out->items[0].name), "%s", entry->d_name);
+        out->items[pos].bytes = bytes;
+        if (out->count < CLEAN_MAX_SAMPLES) {
+            out->count++;
+        }
+    }
+    closedir(handle);
+}
+
+/// 一个应用容器内所有可清目录的合计字节数。
+/// 口径必须与 `clean_empty_container` 逐条对应，否则扫描数字与清理结果对不上账。
+static uint64_t clean_measure_container(const char *container) {
+    uint64_t total = 0;
+    for (size_t i = 0; i < sizeof(clean_container_subdirs) / sizeof(clean_container_subdirs[0]); i++) {
+        char path[CLEAN_PATH_MAX];
+        int n = snprintf(path, sizeof(path), "%s/%s", container, clean_container_subdirs[i]);
+        if (n < 0 || n >= (int)sizeof(path)) {
+            continue;
+        }
+        total += clean_measure(path, 0);
+    }
+    return total;
+}
+
+/// 系统更新包的可清理量。两个候选路径哪个存在算哪个 —— 都不存在就是 0。
+static uint64_t clean_measure_update(void) {
+    return clean_measure(CLEAN_UPDATE_DIR, 0) + clean_measure(CLEAN_UPDATE_DIR_LEGACY, 0);
+}
+
 /// 递归删除 `path` 整棵子树，把字节数记进 `ctx->freed`。
 /// 只被 `clean_empty_dir` 调在入口目录**之下** —— 顶层入口目录本身永远保留。
 static void clean_remove_tree(const char *path, clean_context *ctx, int depth) {
@@ -832,6 +949,54 @@ static void clean_empty_dir(const char *dir, clean_context *ctx, int applyExclus
         clean_remove_tree(child, ctx, 0);
     }
     closedir(handle);
+}
+
+/// 清空一个应用容器内所有可清目录的内容（保留目录本身）。
+/// 与 `clean_measure_container` 逐条对应 —— 扫描说有多少，这里就清多少。
+static void clean_empty_container(const char *container, clean_context *ctx) {
+    for (size_t i = 0; i < sizeof(clean_container_subdirs) / sizeof(clean_container_subdirs[0]); i++) {
+        char path[CLEAN_PATH_MAX];
+        int n = snprintf(path, sizeof(path), "%s/%s", container, clean_container_subdirs[i]);
+        if (n < 0 || n >= (int)sizeof(path)) {
+            continue;
+        }
+        struct stat st;
+        if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue; // 没有这个子目录：没得清，跳过。
+        }
+        clean_empty_dir(path, ctx, 0);
+    }
+}
+
+/// 清空系统更新包目录的内容。与其它类别一样：只删内容、保留目录本身；
+/// 目录不存在就静默跳过 —— 没下载过更新的设备就是这种情况，不是错误。
+static void clean_empty_update(clean_context *ctx) {
+    clean_empty_dir(CLEAN_UPDATE_DIR, ctx, 0);
+    clean_empty_dir(CLEAN_UPDATE_DIR_LEGACY, ctx, 0);
+}
+
+/// `excludeCsv` 是逗号分隔的 bundle id 列表；命中返回 1。
+///
+/// 分隔符用逗号：bundle id 的字符集是 `[A-Za-z0-9.-]`，逗号不可能出现在里面，
+/// 所以这个分隔符无歧义。名单为空（NULL 或空串）时恒返回 0。
+static int clean_bundle_is_excluded(const char *bundle, const char *excludeCsv) {
+    if (bundle == NULL || excludeCsv == NULL || excludeCsv[0] == '\0') {
+        return 0;
+    }
+    size_t length = strlen(bundle);
+    const char *cursor = excludeCsv;
+    while (*cursor != '\0') {
+        const char *comma = strchr(cursor, ',');
+        size_t segment = (comma != NULL) ? (size_t)(comma - cursor) : strlen(cursor);
+        if (segment == length && strncmp(cursor, bundle, length) == 0) {
+            return 1;
+        }
+        if (comma == NULL) {
+            break;
+        }
+        cursor = comma + 1;
+    }
+    return 0;
 }
 
 /// 从 plist 文件里取一个字符串键的值。文件读不出 / 不是字典 / 键不是字符串
@@ -1130,12 +1295,9 @@ static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, in
         if (diag != NULL) {
             diag->mcmOk++;
         }
-        char caches[CLEAN_PATH_MAX];
-        int m = snprintf(caches, sizeof(caches), "%s/Library/Caches", container);
-        if (m < 0 || m >= (int)sizeof(caches)) {
-            continue;
-        }
-        uint64_t bytes = clean_measure(caches, 0);
+        // 容器内**所有**可清目录的合计 —— 与 `clean_empty_container` 同一口径，
+        // 所以这里不再只算 `Library/Caches`。
+        uint64_t bytes = clean_measure_container(container);
         if (bytes == 0) {
             if (diag != NULL) {
                 diag->cachesEmpty++;
@@ -1188,9 +1350,55 @@ static int clean_collect_apps(clean_name_entry *names, clean_app_entry *apps, in
 // 手写而不上库：报告结构是固定的，要处理的只有「字符串转义」。显示名是任意
 // UTF-8（中文应用名），UTF-8 字节在 JSON 字符串里原样合法，只需转义引号、
 // 反斜杠与控制字符。
+//
+// 唯一的例外是**不保证是 UTF-8 的字节串**：目录项名字（预览样本）与错误里的
+// 路径都来自文件系统，由创建它们的应用决定编码。`clean_json_string` 会把它们
+// 换成占位串，理由见那里。
 
+/// `s` 是不是合法的 UTF-8。**必须整个串都合法**，不能只看单个字节。
+///
+/// 用 CoreFoundation 判而不是手写状态机：CF 的判定标准就是 JSON 读者（App 侧的
+/// `JSONDecoder`）要的那个 —— 手写容易在过长编码（`C0 80`）、代理区（`ED A0 80`）、
+/// 超范围（`F5` 起）这几类边界上出偏差，而那正是它要拦的东西。
+static int clean_is_valid_utf8(const char *s) {
+    CFStringRef ref = CFStringCreateWithBytes(kCFAllocatorDefault,
+                                              (const UInt8 *)s, (CFIndex)strlen(s),
+                                              kCFStringEncodingUTF8, false);
+    if (ref == NULL) {
+        return 0;
+    }
+    CFRelease(ref);
+    return 1;
+}
+
+/// 往 JSON 里写一个字符串（加引号 + 转义）。
+///
+/// **非 UTF-8 的输入会被换成占位串**。这不是洁癖：报告里现在有直接从 `readdir`
+/// 拿来的目录项名字（预览样本），而目录项名字由创建它的应用决定，不保证是 UTF-8
+/// （下载文件名、老编码的应用都可能写出 `E4` 开头的半截序列）。一个非法字节会让
+/// `JSONDecoder` 拒绝**整份**报告 —— 在界面上表现为「扫描失败」或「清理没跑成」，
+/// 而实际原因只是某一个文件名，用户与开发者都无从得知。
+///
+/// 换成占位串而不是跳过该条目：跳了会让「这一类的最大条目」凭空少一条，
+/// 而占位串至少说明「有这么个东西，只是名字读不出来」。
+///
+/// 纯 ASCII（绝大多数：bundle id、固定路径、类别名）走快路径，不做 CF 分配。
 static void clean_json_string(FILE *f, const char *s) {
     fputc('"', f);
+
+    int hasHighByte = 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p != '\0'; p++) {
+        if (*p >= 0x80) {
+            hasHighByte = 1;
+            break;
+        }
+    }
+    if (hasHighByte && !clean_is_valid_utf8(s)) {
+        fputs("<non-UTF-8>", f);
+        fputc('"', f);
+        return;
+    }
+
     for (const unsigned char *p = (const unsigned char *)s; *p != '\0'; p++) {
         unsigned char c = *p;
         switch (c) {
@@ -1227,8 +1435,41 @@ static void clean_json_diag(FILE *f, int *first, const char *line) {
     clean_json_string(f, line);
 }
 
+/// 一个类别（或一个目录）的预览样本写成 JSON 数组。
+static void clean_json_samples(FILE *f, const char *name, const clean_sample_list *list) {
+    fputc('"', f);
+    fputs(name, f);
+    fputs("\":[", f);
+    if (list != NULL) {
+        for (int i = 0; i < list->count; i++) {
+            if (i > 0) {
+                fputc(',', f);
+            }
+            fputs("{\"name\":", f);
+            clean_json_string(f, list->items[i].name);
+            fprintf(f, ",\"bytes\":%llu}", (unsigned long long)list->items[i].bytes);
+        }
+    }
+    fputc(']', f);
+}
+
+/// 一次扫描的四类目录结果 + 各自的预览样本。
+///
+/// 打成结构体而不是继续加形参：这一版多了一类（`update`）和四组样本，
+/// 逐个平铺成参数已经到 11 个，调用点读不出谁是谁。
+typedef struct {
+    uint64_t system;
+    uint64_t logs;
+    uint64_t temp;
+    uint64_t update;
+    clean_sample_list systemSamples;
+    clean_sample_list logsSamples;
+    clean_sample_list tempSamples;
+    clean_sample_list updateSamples;
+} clean_scan_totals;
+
 static int clean_write_scan_report(const char *path,
-                                   uint64_t system, uint64_t logs, uint64_t temp,
+                                   const clean_scan_totals *totals,
                                    const clean_app_entry *apps, int appCount,
                                    const clean_app_diagnostics *diag) {
     FILE *f = fopen(path, "w");
@@ -1237,11 +1478,21 @@ static int clean_write_scan_report(const char *path,
     }
 
     fputs("{\"categories\":{", f);
-    clean_json_category(f, "system", system);
+    clean_json_category(f, "system", totals->system);
     fputc(',', f);
-    clean_json_category(f, "logs", logs);
+    clean_json_category(f, "logs", totals->logs);
     fputc(',', f);
-    clean_json_category(f, "temp", temp);
+    clean_json_category(f, "temp", totals->temp);
+    fputc(',', f);
+    clean_json_category(f, "update", totals->update);
+    fputs("},\"samples\":{", f);
+    clean_json_samples(f, "system", &totals->systemSamples);
+    fputc(',', f);
+    clean_json_samples(f, "logs", &totals->logsSamples);
+    fputc(',', f);
+    clean_json_samples(f, "temp", &totals->tempSamples);
+    fputc(',', f);
+    clean_json_samples(f, "update", &totals->updateSamples);
     fputs("},\"apps\":[", f);
     for (int i = 0; i < appCount; i++) {
         if (i > 0) {
@@ -1340,6 +1591,23 @@ static int do_clean_scan(const char *reportPath) {
     uint64_t system = clean_measure_system();
     uint64_t logs = clean_measure(CLEAN_LOGS_DIR_1, 0) + clean_measure(CLEAN_LOGS_DIR_2, 0);
     uint64_t temp = clean_measure(CLEAN_TEMP_DIR, 0);
+    uint64_t update = clean_measure_update();
+
+    // 四类目录的字节数 + 各自的预览样本。`memset` 顺带把样本的 count 清成 0。
+    clean_scan_totals totals;
+    memset(&totals, 0, sizeof(totals));
+    totals.system = system;
+    totals.logs = logs;
+    totals.temp = temp;
+    totals.update = update;
+    // 预览的口径必须与统计、与真删三处一致：系统缓存要过滤排除名单，
+    // 日志有两个目录、要合并成一组样本，其余原样。
+    clean_collect_samples(CLEAN_SYSTEM_CACHE_DIR, 1, &totals.systemSamples);
+    clean_collect_samples(CLEAN_LOGS_DIR_1, 0, &totals.logsSamples);
+    clean_collect_samples(CLEAN_LOGS_DIR_2, 0, &totals.logsSamples);
+    clean_collect_samples(CLEAN_TEMP_DIR, 0, &totals.tempSamples);
+    clean_collect_samples(CLEAN_UPDATE_DIR, 0, &totals.updateSamples);
+    clean_collect_samples(CLEAN_UPDATE_DIR_LEGACY, 0, &totals.updateSamples);
 
     // 诊断计数。栈上分配（约 350 字节），随报告一起回传。
     clean_app_diagnostics diag;
@@ -1358,7 +1626,7 @@ static int do_clean_scan(const char *reportPath) {
     int appCount = clean_collect_apps(names, apps, CLEAN_MAX_APPS, &diag);
     qsort(apps, (size_t)appCount, sizeof(apps[0]), clean_app_compare);
 
-    int status = clean_write_scan_report(reportPath, system, logs, temp, apps, appCount, &diag) == 0
+    int status = clean_write_scan_report(reportPath, &totals, apps, appCount, &diag) == 0
                      ? SYSPROBE_EXIT_OK
                      : SYSPROBE_EXIT_FAILED;
 
@@ -1367,12 +1635,18 @@ static int do_clean_scan(const char *reportPath) {
     return status;
 }
 
-/// 清理应用容器。`bundleId` 为 NULL 时清**所有**容器的 `Library/Caches`；
+/// 清理应用容器。`bundleId` 为 NULL 时清**所有**容器的可清目录；
 /// 否则只清 bundle id 匹配的容器（一个应用可能有不止一个数据容器）。
+///
+/// `excludeCsv` 是逗号分隔的 bundle id 排除名单，**只在全量清理时生效** ——
+/// 用户点名要清某一个应用时，排除名单不该反过来把它挡掉。
+///
+/// 排除名单非空时必须读 MCM 元数据（不读就不知道容器属于哪个应用）；
+/// 名单为空时保持原样、不读 —— 全量清理因此少几百次 plist 解析。
 ///
 /// 容器按 MCM 元数据现场重新定位，而不是用扫描报告里记下的路径 ——
 /// 两次运行之间容器可能被系统挪走又建过，现查的才是真的。
-static void clean_run_apps(const char *bundleId, clean_context *ctx) {
+static void clean_run_apps(const char *bundleId, const char *excludeCsv, clean_context *ctx) {
     DIR *dir = opendir(CLEAN_DATA_CONTAINERS);
     if (dir == NULL) {
         if (errno != ENOENT) {
@@ -1380,6 +1654,9 @@ static void clean_run_apps(const char *bundleId, clean_context *ctx) {
         }
         return;
     }
+
+    // 要不要读 MCM：点名清单个应用要（用来匹配），带排除名单也要（用来排除）。
+    const int needBundle = (bundleId != NULL) || (excludeCsv != NULL && excludeCsv[0] != '\0');
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -1395,41 +1672,43 @@ static void clean_run_apps(const char *bundleId, clean_context *ctx) {
         if (lstat(container, &st) != 0 || !S_ISDIR(st.st_mode)) {
             continue;
         }
-        if (bundleId != NULL) {
+        if (needBundle) {
             char bundle[192];
-            // 全量清理时连 MCM 都不用读 —— 少几百次 plist 解析；按应用清才需要匹配。
             if (!clean_read_mcm_identifier(container, bundle, sizeof(bundle))) {
                 continue;
             }
-            if (strcmp(bundle, bundleId) != 0) {
+            if (bundleId != NULL) {
+                if (strcmp(bundle, bundleId) != 0) {
+                    continue;
+                }
+            } else if (clean_bundle_is_excluded(bundle, excludeCsv)) {
                 continue;
             }
         }
-        char caches[CLEAN_PATH_MAX];
-        int m = snprintf(caches, sizeof(caches), "%s/Library/Caches", container);
-        if (m < 0 || m >= (int)sizeof(caches)) {
-            continue;
-        }
-        struct stat cst;
-        if (lstat(caches, &cst) != 0 || !S_ISDIR(cst.st_mode)) {
-            continue; // 没有缓存目录的应用容器：没得清，跳过。
-        }
-        clean_empty_dir(caches, ctx, 0);
+        clean_empty_container(container, ctx);
     }
     closedir(dir);
 }
 
-/// `clean-run <scope> <report.json> [bundleId]`。
+/// `clean-run <scope> <report.json> [bundleId] [excludeCsv]`。
 ///
-/// scope：`system` / `logs` / `temp` / `apps` / `app` / `all`。
+/// scope：`system` / `logs` / `temp` / `update` / `apps` / `app` / `all`。
 /// `app` 必须带 bundleId，只清那一个应用；`apps` 清全部应用。
+/// `excludeCsv` 是逗号分隔的 bundle id 排除名单，只影响「全部应用」那一部分。
 ///
 /// 清理是**尽力而为**：个别文件正被占用删不掉记进报告的 errors，不影响退出码 ——
 /// 「删掉了绝大部分」对用户是一次成功的清理，报成失败反而会诱导反复重试。
 /// 只有「连报告都写不出来」才算失败。
-static int do_clean_run(const char *scope, const char *reportPath, const char *bundleId) {
+static int do_clean_run(const char *scope, const char *reportPath,
+                        const char *bundleId, const char *excludeCsv) {
     if (geteuid() != 0) {
         return SYSPROBE_EXIT_NOT_ROOT;
+    }
+
+    // 空串与 NULL 同义。调用方为了把 `excludeCsv` 放进下一个参数位，会把 bundleId
+    // 写成空串占位 —— `execve` 的 argv 不能有中间空位（见 ChargeSpawn.h）。
+    if (bundleId != NULL && bundleId[0] == '\0') {
+        bundleId = NULL;
     }
 
     const int isAll = strcmp(scope, "all") == 0;
@@ -1437,11 +1716,12 @@ static int do_clean_run(const char *scope, const char *reportPath, const char *b
     const int doSystem = isAll || strcmp(scope, "system") == 0;
     const int doLogs = isAll || strcmp(scope, "logs") == 0;
     const int doTemp = isAll || strcmp(scope, "temp") == 0;
+    const int doUpdate = isAll || strcmp(scope, "update") == 0;
     const int doApps = isAll || strcmp(scope, "apps") == 0;
-    if (!doSystem && !doLogs && !doTemp && !doApps && !isSingleApp) {
+    if (!doSystem && !doLogs && !doTemp && !doUpdate && !doApps && !isSingleApp) {
         return SYSPROBE_EXIT_USAGE;
     }
-    if (isSingleApp && (bundleId == NULL || bundleId[0] == '\0')) {
+    if (isSingleApp && bundleId == NULL) {
         return SYSPROBE_EXIT_USAGE;
     }
 
@@ -1459,11 +1739,15 @@ static int do_clean_run(const char *scope, const char *reportPath, const char *b
     if (doTemp) {
         clean_empty_dir(CLEAN_TEMP_DIR, &ctx, 0);
     }
+    if (doUpdate) {
+        clean_empty_update(&ctx);
+    }
     if (doApps || isSingleApp) {
-        clean_run_apps(isSingleApp ? bundleId : NULL, &ctx);
+        // 排除名单只在全量清理时传下去；点名清单个应用时它不生效。
+        clean_run_apps(bundleId, isSingleApp ? NULL : excludeCsv, &ctx);
     }
 
-    if (clean_write_run_report(reportPath, scope, isSingleApp ? bundleId : NULL, &ctx) != 0) {
+    if (clean_write_run_report(reportPath, scope, bundleId, &ctx) != 0) {
         return SYSPROBE_EXIT_FAILED;
     }
     return SYSPROBE_EXIT_OK;
@@ -1479,20 +1763,23 @@ int main(int argc, char *argv[]) {
         return do_clean_scan(argv[2]);
     }
     if (argc >= 2 && strcmp(argv[1], "clean-run") == 0) {
-        if (argc != 4 && argc != 5) {
+        if (argc < 4 || argc > 6) {
             fprintf(stderr,
-                    "usage: %s clean-run <system|logs|temp|apps|app|all> <report.json> [bundleId]\n",
+                    "usage: %s clean-run <system|logs|temp|update|apps|app|all> <report.json>"
+                    " [bundleId] [excludeCsv]\n",
                     argv[0]);
             return SYSPROBE_EXIT_USAGE;
         }
-        return do_clean_run(argv[2], argv[3], argc == 5 ? argv[4] : NULL);
+        return do_clean_run(argv[2], argv[3],
+                            argc >= 5 ? argv[4] : NULL,
+                            argc >= 6 ? argv[5] : NULL);
     }
 
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s check|reboot|respring|restart-commcenter"
                 "|thermal-status|thermal-disable|thermal-enable"
-                "|clean-scan <report>|clean-run <scope> <report> [bundleId]\n",
+                "|clean-scan <report>|clean-run <scope> <report> [bundleId] [excludeCsv]\n",
                 argv[0]);
         return SYSPROBE_EXIT_USAGE;
     }

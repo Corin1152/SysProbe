@@ -46,6 +46,17 @@ struct CleanView: View {
     /// 随视图存续即可，不值得为它造一个 ObservableObject。
     @State private var iconCache = NSCache<NSString, UIImage>()
 
+    /// 「受保护」的应用 bundle id —— 「清理应用缓存」与「一键清理全部」都会跳过它们。
+    ///
+    /// 落 `UserDefaults`：这是用户的长期选择，不该每次进页面都忘掉。
+    /// 没用 `@AppStorage` 是因为它没有集合形态（只支持 String/Int/Bool/URL/Data…），
+    /// 硬塞一个分隔符拼接的字符串反而更绕。
+    @State private var protectedBundles: Set<String> = []
+
+    /// 预览卡片里哪几类展开了。存 rawValue，默认全收起 ——
+    /// 四类全展开最多 24 行，会把页面拉得很长。
+    @State private var expandedPreviews: Set<String> = []
+
     var body: some View {
         ZStack {
             Color.mwCanvas
@@ -57,6 +68,7 @@ struct CleanView: View {
 
                     if let scan {
                         appsSection
+                        previewSection
                         footerNotes()
                     } else {
                         toolRow
@@ -74,6 +86,7 @@ struct CleanView: View {
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
         .task {
             toolReady = await Task.detached { DeviceActions.probe() }.value
+            loadProtectedBundles()
         }
         .confirmationDialog(
             Text(verbatim: confirmTitle),
@@ -113,7 +126,8 @@ struct CleanView: View {
         VStack(spacing: 10) {
             Group {
                 if let scan {
-                    Text(Strings.text("Cleanable: %@", Formatting.bytes(UInt64(scan.totalBytes))))
+                    Text(Strings.text("Cleanable: %@",
+                                      Formatting.bytes(UInt64(cleanableBytes(scan)))))
                 } else if isScanning {
                     Text("Measuring…")
                 } else {
@@ -229,14 +243,15 @@ struct CleanView: View {
         .disabled(!enabled)
     }
 
-    /// 分项里出现的三类目录。照片缓存与下载目录是评估时砍掉的，别加回来。
-    private let detailScopes: [StorageCleanScope] = [.system, .logs, .temp]
+    /// 分项里出现的四类目录。照片缓存与下载目录是评估时砍掉的，别加回来。
+    private let detailScopes: [StorageCleanScope] = [.system, .logs, .temp, .update]
 
     private func icon(for scope: StorageCleanScope) -> String {
         switch scope {
         case .system: return "shippingbox"
         case .logs: return "doc.text"
         case .temp: return "clock.arrow.circlepath"
+        case .update: return "arrow.down.circle"
         default: return "folder"
         }
     }
@@ -258,6 +273,7 @@ struct CleanView: View {
         case .system: bytes = scan.systemBytes
         case .logs: bytes = scan.logsBytes
         case .temp: bytes = scan.tempBytes
+        case .update: bytes = scan.updateBytes
         default: bytes = 0
         }
         return bytesLabel(bytes)
@@ -268,20 +284,41 @@ struct CleanView: View {
         case .system: return Strings.text("Clean system cache")
         case .logs: return Strings.text("Clean logs")
         case .temp: return Strings.text("Clean temp files")
+        case .update: return Strings.text("Clean update files")
         default: return scope.rawValue
         }
+    }
+
+    /// 预览卡片里那一行的短标题。与按钮标题（动词开头）不同 ——
+    /// 预览是名词性的「这一类里有什么」。
+    private func previewTitle(for scope: StorageCleanScope) -> String {
+        switch scope {
+        case .system: return Strings.text("System cache")
+        case .logs: return Strings.text("Logs")
+        case .temp: return Strings.text("Temp files")
+        case .update: return Strings.text("Update files")
+        default: return scope.rawValue
+        }
+    }
+
+    /// 本次实际能清掉的字节数：四类目录 + 未被保护的应用缓存。
+    /// 顶部「可清理」与两个大按钮共用这一个口径。
+    private func cleanableBytes(_ scan: StorageScanResult) -> Int64 {
+        scan.cleanableBytes(protecting: protectedBundles)
     }
 
     /// 全部应用缓存的合计，给「清理应用缓存」那个按钮。
     private var appBytesText: String? {
         guard let scan else { return nil }
-        let total = scan.apps.reduce(Int64(0)) { $0 + $1.bytes }
+        let total = scan.apps
+            .filter { !protectedBundles.contains($0.bundle) }
+            .reduce(Int64(0)) { $0 + $1.bytes }
         return bytesLabel(total)
     }
 
     private var totalBytesText: String? {
         guard let scan else { return nil }
-        return bytesLabel(scan.totalBytes)
+        return bytesLabel(cleanableBytes(scan))
     }
 
     /// 工具状态一行 + 页脚说明。扫完之前显示工具状态，扫完之后并进页脚。
@@ -335,8 +372,9 @@ struct CleanView: View {
 
     // MARK: 应用缓存
 
-    /// 按 App 的缓存列表。每行一个清理按钮；整行不是点击区域，
-    /// 名字那一列不带任何动作 —— 误触面越小越好。
+    /// 按 App 的缓存列表。每行两个图标按钮：盾牌（保护，不参与批量清理）与
+    /// 垃圾桶（只清这一个）。整行不是点击区域，名字那一列不带任何动作 ——
+    /// 误触面越小越好。
     ///
     /// 卡片而不是 Form 分组：这一页已经改成「大按钮 + 卡片」的版式，再混一个
     /// 系统分组列表进来，两种行高与边距会互相打架。卡片底色、描边、圆角用的
@@ -369,6 +407,24 @@ struct CleanView: View {
                         Text(Formatting.bytes(UInt64(app.bytes)))
                             .font(AppFont.mono(13))
                             .foregroundStyle(Color.mwMuted)
+                        // 保护开关。**不是 `Toggle`**：这一行已经有另一个图标按钮，
+                        // 系统开关的体量会把应用名挤掉。
+                        //
+                        // 被保护的行压到 0.6 透明度 —— 视觉上「这次不参与」，
+                        // 但垃圾桶按钮仍然可用：保护只挡批量清理，不挡点名清理。
+                        Button {
+                            toggleProtection(app.bundle)
+                        } label: {
+                            Image(systemName: isProtected(app.bundle) ? "shield.fill" : "shield")
+                                .font(.system(size: 15))
+                                .foregroundStyle(isProtected(app.bundle)
+                                                 ? Color.mwAccent : Color.mwMuted)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isCleaning)
+                        .accessibilityLabel(Strings.text(isProtected(app.bundle)
+                                                         ? "Allow cleaning" : "Protect from cleaning"))
                         Button {
                             request(.app(bundle: app.bundle, name: app.name))
                         } label: {
@@ -380,9 +436,14 @@ struct CleanView: View {
                         .buttonStyle(.plain)
                         .disabled(isCleaning)
                     }
+                    .opacity(isProtected(app.bundle) ? 0.6 : 1)
                 }
 
                 Text("Only apps whose cache could actually be measured are listed. Names and icons come from the app bundles; when they cannot be read, the bundle identifier is shown.")
+                    .font(AppFont.text(11))
+                    .foregroundStyle(Color.mwMuted)
+
+                Text("Tap the shield to protect an app. Protected apps are skipped by Clean app caches and Clean All; the trash button still cleans one on its own.")
                     .font(AppFont.text(11))
                     .foregroundStyle(Color.mwMuted)
 
@@ -414,6 +475,132 @@ struct CleanView: View {
         )
     }
 
+    // MARK: 预览
+
+    /// 「将要删除什么」的预览。
+    ///
+    /// 只列工具**实测到**的条目（每类最大 6 条），没有任何估算或示例数据 ——
+    /// 与这一页「不显示任何估算值」的原则一致。
+    ///
+    /// 折叠而不是全铺开：四类全展开最多 24 行，而多数时候用户只想扫一眼
+    /// 「哪一类最占地方」。收起状态下每行右边就是该类的实测总量，
+    /// 已经足够做那个判断。
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What will be removed")
+                .font(AppFont.text(13, weight: .semibold))
+                .foregroundStyle(Color.mwMuted)
+
+            if let scan {
+                ForEach(previewScopes(in: scan), id: \.rawValue) { scope in
+                    previewRow(scope: scope, items: scan.previewEntries(for: scope))
+                }
+
+                Text("The largest items measured in each category — this is what cleaning deletes. Items that are in use are skipped and left in place.")
+                    .font(AppFont.text(11))
+                    .foregroundStyle(Color.mwMuted)
+            }
+        }
+        .padding(Theme.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Color.mwCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
+        )
+    }
+
+    /// 预览里的一行：标题 + 该类总量，点一下展开条目。
+    ///
+    /// 用 `Button` 而不是 `DisclosureGroup` + 自定义 `Binding`：这一页已经有两处
+    /// 手写 `Binding`（`MaintenanceView` 的开关），而这里只是「展开/收起」，
+    /// 一个 `Set` 加一个按钮就说清楚了。
+    private func previewRow(scope: StorageCleanScope,
+                            items: [StorageScanResult.Preview]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                togglePreview(scope)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expandedPreviews.contains(scope.rawValue)
+                          ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.mwMuted)
+                        .frame(width: 12)
+                    Text(verbatim: previewTitle(for: scope))
+                        .font(AppFont.text(13))
+                    Spacer(minLength: 8)
+                    Text(verbatim: bytesText(for: scope) ?? "")
+                        .font(AppFont.mono(12))
+                        .foregroundStyle(Color.mwMuted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expandedPreviews.contains(scope.rawValue) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(items) { item in
+                        HStack(spacing: 8) {
+                            Text(verbatim: item.name)
+                                .font(AppFont.text(12))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 8)
+                            Text(Formatting.bytes(UInt64(item.bytes)))
+                                .font(AppFont.mono(12))
+                                .foregroundStyle(Color.mwMuted)
+                        }
+                    }
+                }
+                .padding(.leading, 20)
+            }
+        }
+    }
+
+    // MARK: 保护名单与预览展开
+
+    /// 保护名单的持久化键。与 `PowerMonitor.wattHoursKey` 同一写法 ——
+    /// 键收在类型内部，别处不再写第二遍字面量。
+    private static let protectedBundlesKey = "clean.protectedBundles"
+
+    /// 哪些类别有可预览的条目。空的那类不占一行 —— 一行「0 B」没有信息量。
+    private func previewScopes(in scan: StorageScanResult) -> [StorageCleanScope] {
+        detailScopes.filter { !scan.previewEntries(for: $0).isEmpty }
+    }
+
+    private func togglePreview(_ scope: StorageCleanScope) {
+        if expandedPreviews.contains(scope.rawValue) {
+            expandedPreviews.remove(scope.rawValue)
+        } else {
+            expandedPreviews.insert(scope.rawValue)
+        }
+    }
+
+    private func isProtected(_ bundle: String) -> Bool {
+        protectedBundles.contains(bundle)
+    }
+
+    /// 切换保护状态并立即落盘。**不等待确认**：保护是保守动作，多保护一个
+    /// 应用不会删掉任何东西；要它弹窗只会让人懒得去保护。
+    private func toggleProtection(_ bundle: String) {
+        if protectedBundles.contains(bundle) {
+            protectedBundles.remove(bundle)
+        } else {
+            protectedBundles.insert(bundle)
+        }
+        // 排序后存：`UserDefaults` 里是一份稳定顺序的数组，人工查看时好读。
+        UserDefaults.standard.set(protectedBundles.sorted(), forKey: Self.protectedBundlesKey)
+    }
+
+    private func loadProtectedBundles() {
+        let stored = UserDefaults.standard.stringArray(forKey: Self.protectedBundlesKey) ?? []
+        protectedBundles = Set(stored)
+    }
+
     // MARK: 确认与执行
 
     private func request(_ target: CleanTarget) {
@@ -427,6 +614,7 @@ struct CleanView: View {
         case .category(.system): return Strings.text("Delete the system cache?")
         case .category(.logs): return Strings.text("Delete the logs?")
         case .category(.temp): return Strings.text("Delete the temporary files?")
+        case .category(.update): return Strings.text("Delete the update files?")
         case .category(.apps): return Strings.text("Delete every app's cache?")
         case .app(_, let name): return Strings.text("Delete the cache of %@?", name)
         case .none, .category(.app), .category(.all):
@@ -441,13 +629,15 @@ struct CleanView: View {
     private var confirmMessage: String {
         switch pendingClean {
         case .all:
-            return Strings.text("The contents of the system cache, the logs, the temporary files and every app's cache directory are deleted. Everything here is regenerated by the system and the apps as needed.")
+            return Strings.text("The contents of the system cache, the logs, the temporary files, the update files and every app's cache directory are deleted. Everything here is regenerated by the system and the apps as needed.")
         case .category(.system):
             return Strings.text("The contents of the system cache directory are deleted. A small set of critical system items — location learning, Siri, iCloud sync state — is kept.")
         case .category(.logs):
             return Strings.text("The contents of the system log directories are deleted.")
         case .category(.temp):
             return Strings.text("The contents of /var/tmp are deleted.")
+        case .category(.update):
+            return Strings.text("Downloaded system update files are deleted. The system downloads an update again the next time one is offered.")
         case .category(.apps):
             return Strings.text("Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards.")
         case .app(_, _):
@@ -464,14 +654,27 @@ struct CleanView: View {
         guard !isCleaning else { return }
         isCleaning = true
 
+        // 保护名单先拍成快照再进后台：`Task.detached` 里读不到主 actor 上的
+        // `@State`，而这个数组本身就是 `Sendable` 的。
+        let protected = protectedBundles.sorted()
+
         let result: StorageCleanResult?
         switch target {
         case .all:
-            result = await Task.detached { StorageCleaner.clean(.all) }.value
+            result = await Task.detached {
+                StorageCleaner.clean(.all, exclude: protected)
+            }.value
         case .category(let scope):
-            result = await Task.detached { StorageCleaner.clean(scope) }.value
+            // 分项里的 system / logs / temp / update 都碰不到应用容器，名单传下去
+            // 也没人用；只有 `.apps` 真的需要它。统一传，少一个分支。
+            result = await Task.detached {
+                StorageCleaner.clean(scope, exclude: protected)
+            }.value
         case .app(let bundle, _):
-            result = await Task.detached { StorageCleaner.clean(.app, bundleId: bundle) }.value
+            // 点名清一个应用时不传名单 —— 用户明确要清它，保护不该反过来挡掉。
+            result = await Task.detached {
+                StorageCleaner.clean(.app, bundleId: bundle)
+            }.value
         }
 
         isCleaning = false
