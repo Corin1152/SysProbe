@@ -30,11 +30,25 @@ DERIVED="$BUILD_DIR/DerivedData"
 EXPORT_DIR="$BUILD_DIR/export"
 APP="$DERIVED/Build/Products/Release-iphoneos/$SCHEME.app"
 
-# 版本号：优先取触发构建的 tag，其次取最近的 tag，最后回退到工程里的默认值。
+# 版本号：优先取触发构建的 tag（工作流在 tag 构建时把它塞进 env），
+# 否则**读 project.yml**。
+#
+# 这里曾经的第二来源是「最近的 tag」（`git tag --points-at` 之后再
+# `git describe --tags --abbrev=0`）—— 那是个会安静出错的陷阱：
+# project.yml 已经 bump 到 0.0.30、但 v0.0.30 还没打出来时，分支构建会
+# 从 v0.0.29 取到版本号，于是产出名叫 `SysProbe-0.0.29.ipa`、
+# Info.plist 里也写 0.0.29 的包 —— 里面跑的却是 0.0.30 的代码。
+# 名字与内容对不上，而**没有任何一处会报错**（这一轮就是被它坑掉的）。
+#
+# 现在 project.yml 是唯一的真值来源，tag 只是发布时的显式覆盖。
 if [ -z "${MARKETING_VERSION:-}" ]; then
-  tag=$(git tag --points-at HEAD --list 'v*' 2>/dev/null | sort -V | tail -1 || true)
-  [ -n "$tag" ] || tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-  [ -z "$tag" ] || MARKETING_VERSION="${tag#v}"
+  versions=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' project.yml | sort -u)
+  count=$(printf '%s\n' "$versions" | grep -c . || true)
+  if [ "$count" -ne 1 ]; then
+    echo "::error::project.yml declares $count different MARKETING_VERSION values (${versions:-none}). They must agree — the ipa name, the About page and the Release title all read from it." >&2
+    exit 1
+  fi
+  MARKETING_VERSION="$versions"
 fi
 if [ -z "${CURRENT_PROJECT_VERSION:-}" ]; then
   CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD 2>/dev/null || true)
