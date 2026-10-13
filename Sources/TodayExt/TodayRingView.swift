@@ -113,13 +113,18 @@ final class TodayRingView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // 圆环整体在水平方向居中、在竖直方向略微上移 —— 下方要留出切口标签的位置。
+        // 圆环水平居中；竖直方向让「环顶 → 标签底」这段内容整体落在视图正中。
+        //
+        // 高度是外面给的（`TodayWidgetView` 里那条正方形约束），比圆环自身需要的高，
+        // 若还按 `available` 去定位，多出来的空间会全堆在标签下方，肉眼就是整个环偏上。
+        // 推导：环顶 = c − (R + 线宽/2)，标签底 = c + (R + 线宽/2) + 6（12pt 标签框的
+        // 下半截），两者中点 = c + 3 —— 令它等于 midY，即得 c = midY − 3。
         let lineWidths = Self.outerLineWidth + Self.innerLineWidth
         let available = min(bounds.width, bounds.height - 20)
         let outerRadius = max(12, (available - lineWidths - Self.ringGap) / 2)
         let innerRadius = max(6, outerRadius - Self.outerLineWidth / 2 - Self.ringGap - Self.innerLineWidth / 2)
 
-        let center = CGPoint(x: bounds.midX, y: bounds.minY + available / 2 + 2)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY - 3)
 
         let start = Self.standardAngle(fromTwelveClockwise: Self.startDegrees)
         let end = Self.standardAngle(fromTwelveClockwise: Self.startDegrees + Self.sweepDegrees)

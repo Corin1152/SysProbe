@@ -29,8 +29,11 @@ import UIKit
 ///      ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ///
 /// **2026-10-13 改版**：第 1 格从「CPU 读数」换成 CPU/RAM 双圆环（`TodayRingView`），
-/// 第 2 格从「内存读数」换成电芯温度；第 3、4 格保留，但去掉了「输入功率」脚注、
-/// 数值放大到 26pt。存储条不变。
+/// 第 2 格从「内存读数」换成电芯温度；第 3、4 格保留，去掉「输入功率」脚注。存储条不变。
+///
+/// **2026-10-13 实机修正（0.0.41）**：第一次实机暴露两个问题 ——
+/// ① 圆环**完全不可见**（高度塌缩，根因见 `build()` 里那段说明）；
+/// ② 数值放大到 26pt 在真机上过重（四格并排时数值比环还抢眼），已恢复 12/12/11。
 ///
 /// 频率**不再显示**：iOS 不允许 appex 访问 IOReport（实测 `IOReportCopyAllChannels`
 /// 在扩展里返回空通道集），而主 App 被挂起时也供不了数 —— 与其显示一个常年「—」，
@@ -67,7 +70,29 @@ final class TodayWidgetView: UIView {
         row.spacing = 4
         // `.fillEqually`：四组等宽，读数不会因为某组数字长就把别的挤歪。
         row.distribution = .fillEqually
-        row.alignment = .top
+        // `.center` 而不是 `.top`：行高由圆环那一格定（见下面的正方形约束），
+        // 三格文字若顶对齐会显得整排往上飘，居中才和圆环配得平。
+        row.alignment = .center
+
+        // **圆环必须自己给出高度** —— 这是 0.0.40 实机「一个环都看不到」的根因。
+        //
+        // `TodayRingView` 是纯自绘视图：4 个 `CAShapeLayer` + 4 个 `UILabel` 全靠
+        // frame 摆放，既没有 `intrinsicContentSize`、内部也没有一条约束。而横向
+        // stack 在 `alignment != .fill` 时**不会**给 arrangedSubview 加高度约束 ——
+        // 高度没有来源 → 解析为 0，于是：
+        //   · `layoutSubviews` 里 `available = min(w, 0 - 20) = -20`，半径落到下限、
+        //     圆心跑到视图上方，四个标签全叠在同一处；
+        //   · 更彻底的是 `CAShapeLayer` 的 bounds 高 0 时整个 path 都不渲染 ——
+        //     实机上就是「一个环都没有，只剩几个重叠的小字」。
+        //
+        // 同文件里 `TodayCellView` / `TodayStorageView` 都靠内部约束链把自己的高度
+        // 撑起来，所以这个坑只有新加的圆环会踩。
+        //
+        // 取正方形：宽度由 `.fillEqually` 分（约 76pt），高度跟着宽度走，圆环才
+        // 不会被压扁。行高随之变成约 76pt —— 但 118pt 本来就是组件高度的**下限**、
+        // 原来内容只有约 92pt，所以组件总高实际只从 118 变成约 119pt。
+        ringView.translatesAutoresizingMaskIntoConstraints = false
+        ringView.heightAnchor.constraint(equalTo: ringView.widthAnchor).isActive = true
 
         root.axis = .vertical
         root.spacing = 18
@@ -144,15 +169,13 @@ final class TodayWidgetView: UIView {
 
 // MARK: - 一组读数
 
-/// 一组读数的三层：小标签 / 大读数 / 副标签。
-///
-/// 两层：小标签 / 大读数（+ 单位）。
+/// 一组读数的两层：小标签 / 大读数（+ 单位）。
 ///
 /// **2026-10-13 去掉了原来的第三层「副标签」。** 它当时只为「输入功率」四个字存在 ——
-/// 而那句话说的事看标题就知道。少一层之后读数能占满整格高度，也就有空间把数值
-/// 从 12pt 放大到 26pt。
+/// 而那句话说的事看标题就知道。
 ///
-/// 两层各自固定字号，且读数用等宽数字 —— 每秒刷新时宽度不会跳动。
+/// 两层各自固定字号（12 / 12 / 11，即改版前的尺寸），且读数用等宽数字 ——
+/// 每秒刷新时宽度不会跳动。
 final class TodayCellView: UIView {
 
     private let captionLabel = UILabel()
@@ -162,12 +185,12 @@ final class TodayCellView: UIView {
     // 字号集中在这里。`init` 里设一次，`apply` 里拼 attributedText 时还要再用一次 ——
     // 两处各写一遍迟早会写岔。
     //
-    // **2026-10-13：数值从 12 放大到 26。** 原来它和标题一样大（都是 12），读数的
-    // 分量完全没出来 —— 负一屏最该被一眼看到的正是那个数。电芯温度那格用的是同一组
-    // 字号，四格因此天然一致。
-    private static let captionFont = TodayFont.text(13, weight: .semibold)
-    private static let valueFont = TodayFont.mono(26, weight: .semibold)
-    private static let unitFont = TodayFont.text(14, weight: .medium)
+    // **2026-10-13 改回 12 / 12 / 11。** 当天先按「让读数有分量」把数值放大到 26pt，
+    // 真机上四格并排时那个尺寸把这一屏压得站不住（数值比双圆环还抢眼），用户要求
+    // 恢复之前的字号。电芯温度那格用的是同一组字号，四格因此天然一致。
+    private static let captionFont = TodayFont.text(12, weight: .semibold)
+    private static let valueFont = TodayFont.mono(12, weight: .semibold)
+    private static let unitFont = TodayFont.text(11, weight: .medium)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
