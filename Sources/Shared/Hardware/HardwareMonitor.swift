@@ -16,12 +16,14 @@ nonisolated struct CPUStats: Hashable {
     var logicalCores: Int = 0
     /// 界面显示的主频（MHz）。
     ///
-    /// **来自 Statusbar（Helium）的 HUD 实测并写进共享文件的值**，见 `CPUSharedMetrics`
-    /// 与 Helium 那边 `CPUFrequencyProbe.mm` 的注释：iOS 不给沙箱 App 读主频的接口，
-    /// 所以只能在一段**周期数已知**的汇编循环上量时间反推。SysProbe 从 0.0.25 起不再
-    /// 自测 —— 两个进程各跑一次探针会互抢性能核，把彼此的读数一起压低。
+    /// **SysProbe 自己从 IOReport 读**（`CPUFrequencyIOReport.c` → `CPUFrequency`）：
+    /// CLPC 的 per-state residency 加权平均，也就是 `powermetrics` 的口径。
     ///
-    /// 读不到共享文件时为 0，界面显示「—」。**刻意不回落成标称主频**：那是个常数，
+    /// 0.0.34 起不再读 Statusbar 发布的共享文件（`CPUSharedMetrics` 已删除）——
+    /// 两个 App 各自读 IOReport，而 IOReport 只读计数器、不占性能核，所以同时读
+    /// 没有副作用。也不再用忙循环探针（它量的是「能跑多快」的峰值，且会抢前台）。
+    ///
+    /// 读不到时为 0，界面显示「—」。**刻意不回落成标称主频**：那是个常数，
     /// 摆在「当前频率」的位置上会让人以为读数有效。
     var frequencyMHz: Int = 0
     /// 该机型芯片的标称主频（MHz）。
@@ -191,8 +193,8 @@ final class HardwareMonitor: ObservableObject {
     /// 跑采样的串行队列。
     ///
     /// 搬离主线程的理由：`host_processor_info` / `host_statistics64` 是 Mach 调用，
-    /// `CPUSharedMetrics.read` 是文件读加 JSON 解析，`readStorage` 更是一次文件系统
-    /// 往返 —— 每秒把它们按顺序砸进主线程，就是在给每秒一次的触摸响应制造延迟。
+    /// `readStorage` 是一次文件系统往返，`CPUFrequency` 那边还有 100 ms 的 IOReport
+    /// 采样窗口 —— 每秒把它们按顺序砸进主线程，就是在给每秒一次的触摸响应制造延迟。
     /// `qos: .utility` 是明确的：后台维护性工作，不跟 UI 抢资源。
     ///
     /// 这块逻辑**不碰 UIKit、不碰 `UIDevice`**（那是 `readSystem` 的事，它留在主线程，
@@ -274,38 +276,23 @@ final class HardwareMonitor: ObservableObject {
         var next = HardwareSnapshot()
         next.date = .now
 
-        // 先照常采一次自己的 CPU —— 即使这次会用共享值，也必须推进 `readCPU` 的
-        // tick 基线，否则一旦发布方停下、切回自采，第一次差分会因为基线太旧而算出
-        // 一个离谱的占用。
-        let ownCPU = readCPU(previous: &state.previousTicks)
+        // CPU 占用：自己采（`host_processor_info` 的 tick 差分）。
+        //
+        // 0.0.34 起不再读 Statusbar 发布的共享文件 —— 那条路（`CPUSharedMetrics`）
+        // 已随「两个 App 各自读 IOReport」一起删除。占用本来就一直是这个函数自己算的，
+        // 只有频率以前借了共享文件。
+        var cpu = readCPU(previous: &state.previousTicks)
 
-        if let shared = CPUSharedMetrics.read(now: next.date) {
-            // 走共享：数值来自 Statusbar（Helium）的 HUD，两个 App 显示同一个数。
-            //
-            // **这时不跑自己的忙循环探针。** 探针会把自己那个核顶到最高频，还会和
-            // HUD 的探针互抢性能核 —— 多个探针同时跑，谁的读数都被污染。既然频率
-            // 直接用共享文件里的值，就没有必要再自测一次。
-            var cpu = ownCPU
-            cpu.usage = shared.usage
-            cpu.perCore = shared.perCore.isEmpty ? ownCPU.perCore : shared.perCore
-            cpu.frequencyMHz = shared.frequencyMHz
-            cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
-            next.cpu = cpu
-        } else {
-            // 回落：没有新鲜的共享文件（HUD 没在写）。
-            //
-            // 0.0.34 起这里**可以自己量了**：SysProbe 自己也有 IOReport 那条路
-            // （`sysprobe_real_cpu_frequency_mhz`），它只读 CLPC 的驻留计数器，
-            // **不像忙循环探针那样会互抢性能核** —— 两个进程同时读没有副作用，
-            // 所以「HUD 不在时自己采一次」不再有原来的代价。
-            //
-            // 仍然不回落成标称主频：那是个常数，摆在「当前频率」的位置上会让人
-            // 以为读数有效。拿不到就留 0，界面显示「—」。
-            var cpu = ownCPU
-            cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
-            cpu.frequencyMHz = CPUFrequency.measureMHz(nominalMHz: cpuIdentity.nominalFrequencyMHz) ?? 0
-            next.cpu = cpu
-        }
+        // CPU 频率：自己读 IOReport（`sysprobe_real_cpu_frequency_mhz`，与 Helium
+        // 共用同一份实现）。它只读 CLPC 的驻留计数器、不占性能核，所以两个 App
+        // 同时读没有副作用 —— 这也正是「各自读」现在可行的前提。
+        //
+        // 读不到（非 root / 订阅被拒 / 采样窗口全 IDLE / 档位表缺失）就留 0，
+        // 界面显示「—」。**刻意不回落成标称主频**：那是个常数，摆在「当前频率」
+        // 的位置上会让人以为读数有效。
+        cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
+        cpu.frequencyMHz = CPUFrequency.measureMHz(nominalMHz: cpuIdentity.nominalFrequencyMHz) ?? 0
+        next.cpu = cpu
 
         next.memory = readMemory()
         // 容量一次查询是一次文件系统往返，而数字几分钟都不会变。十秒问一次足够，

@@ -5,14 +5,16 @@ import Foundation
 /// 这一层只做三件事：把 C 层的结果**校验**一遍、给一个宽松的窗口、把「不可信」
 /// 翻译成 `nil`（调用方回落到机型表里的标称值）。
 ///
-/// ## 两条来源，按成本排序
+/// ## 只有一条来源
 ///
-/// 1. **`sysprobe_real_cpu_frequency_mhz()`** —— IOReport 的真实 DVFS 加权频率
-///    （CLPC 的 per-state residency）。只是读内核里的计数器，**不抢性能核**，
-///    所以是首选，两个进程同时读也没有副作用。
-/// 2. **`sysprobe_measure_cpu_frequency_mhz()`** —— 忙循环探针，量的是「核被顶到
-///    最高时能跑多快」（峰值，与负载关系不大）。它是 2 × 62 ms 的 user-interactive
-///    忙循环，会抢前台，所以只在第 1 条失败时才用。
+/// **`sysprobe_real_cpu_frequency_mhz()`** —— IOReport 的真实 DVFS 加权频率
+/// （CLPC 的 per-state residency）。只是读内核里的计数器，**不抢性能核**，
+/// 所以两个进程同时读也没有副作用。
+///
+/// 0.0.34 起**删掉了忙循环探针的回落**（`sysprobe_measure_cpu_frequency_mhz`）：
+/// 它量的是「核被顶到最高时能跑多快」（峰值，与负载关系不大），而且是 2 × 62 ms 的
+/// user-interactive 忙循环、会抢前台。读不到就返回 nil，界面显示「—」
+/// —— 宁可空着，也不给一个口径不对的数。
 ///
 /// 第 1 条曾经长期不可用：iOS 上 `platform-application` 会让「每一个 IOKit user
 /// client 都要显式例外」，而 IOReport 走的 `IOReportUserClient` 一直不在
@@ -35,12 +37,10 @@ nonisolated enum CPUFrequency {
     /// - Parameter nominalMHz: 该机型芯片的标称主频。0 表示认不出机型，此时不做校验
     ///   （没有参照物），直接采信结果。
     static func measureMHz(nominalMHz: Int) -> Int? {
-        // 首选 IOReport：读计数器，成本可忽略，也不会把核顶起来。
-        var measured = Int(sysprobe_real_cpu_frequency_mhz())
-        if measured <= 0 {
-            // 回落：忙循环探针（峰值频率）。贵，且会抢前台，所以放第二条。
-            measured = Int(sysprobe_measure_cpu_frequency_mhz())
-        }
+        // **只走 IOReport**（0.0.34 起）。读不到就返回 nil —— 调用方据此把频率留 0、
+        // 界面显示「—」，不再回落到忙循环探针：那条是 2 × 62 ms 的 user-interactive
+        // 忙循环、会抢前台，而它量的是「能跑多快」的峰值，本来就不是这个数要回答的问题。
+        let measured = Int(sysprobe_real_cpu_frequency_mhz())
         guard measured > 0 else { return nil }
         guard nominalMHz > 0 else { return measured }
 

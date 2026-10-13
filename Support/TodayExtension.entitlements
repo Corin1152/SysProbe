@@ -33,5 +33,21 @@
 	<array>
 		<string>/</string>
 	</array>
+
+	<!--
+	  IOReport 的真实 CPU 频率（`CPUFrequencyIOReport.c`，与主 App 共用同一份实现）。
+
+	  主 App 之所以必须显式列它，是因为 `platform-application` 会让「每一个 IOKit
+	  user client 都要显式例外」（TrollStore README 原文）。扩展没有那条
+	  entitlement，但这里的 IOReport 是**回落路径**（HUD 不在、共享文件读不到时才会
+	  走到），列上它比依赖「no-sandbox 是否已经足够」这种不确定的假设更稳。
+
+	  少了它，回落会直接失败 → 频率留 0、界面显示「—」，而不会去烧忙循环探针
+	  （0.0.34 起探针已从这条链上删掉）。
+	-->
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOReportUserClient</string>
+	</array>
 </dict>
 </plist>
