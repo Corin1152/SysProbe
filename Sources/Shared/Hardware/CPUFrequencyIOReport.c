@@ -88,6 +88,7 @@ static BOOL gSymbolsTried = NO;
 static BOOL gSymbolsOK = NO;
 
 static fn_CopyChannelsInGroup pCopyChannelsInGroup = NULL;
+static fn_CopyAllChannels pCopyAllChannels = NULL;
 static fn_CreateSubscription pCreateSubscription = NULL;
 static fn_CreateSamples pCreateSamples = NULL;
 static fn_CreateSamplesDelta pCreateSamplesDelta = NULL;
@@ -125,6 +126,7 @@ static BOOL ensure_symbols(void)
     gSymbolsTried = YES;
 
     pCopyChannelsInGroup = (fn_CopyChannelsInGroup)resolve_symbol("IOReportCopyChannelsInGroup");
+    pCopyAllChannels = (fn_CopyAllChannels)resolve_symbol("IOReportCopyAllChannels");
     pCreateSubscription  = (fn_CreateSubscription)resolve_symbol("IOReportCreateSubscription");
     pCreateSamples       = (fn_CreateSamples)resolve_symbol("IOReportCreateSamples");
     pCreateSamplesDelta  = (fn_CreateSamplesDelta)resolve_symbol("IOReportCreateSamplesDelta");
@@ -324,6 +326,8 @@ static CFMutableDictionaryRef gSubscribedChannels = NULL;
 static const char *gCopyResult = "not-tried";
 static const char *gSubscribeResult = "not-tried";
 static int gChannelsSeen = 0;
+/// `IOReportCopyAllChannels` 看到的通道数。-2 = 没试过，-1 = 返回 NULL。
+static int gAllChannelsSeen = -2;
 
 static BOOL try_subscribe(CFStringRef group, CFStringRef subgroup,
                           IORepSubRef *subOut, CFMutableDictionaryRef *channelsOut)
@@ -394,6 +398,43 @@ static BOOL ensure_subscription(void)
         gSubscribedChannels = channels;
         gSubscriptionOK = YES;
         return YES;
+    }
+
+    // 兜底：整个通道集。
+    //
+    // 负一屏实测 `copy=group-empty channels=0`（按 group 枚举拿不到通道），
+    // 而主 App 用同一个 group 名拿到了 4 个。两种可能：
+    //
+    //   · 只是「按 group 枚举」这条路在 appex 里受限 → 全量枚举再自己筛通道名能救；
+    //   · appex 根本看不到任何通道 → 换 group 名、加 entitlement 都没用，
+    //     只能让扩展从主 App 拿数据。
+    //
+    // 这里两条路都试：先记录 `all=` 的通道数（诊断），若拿得到就直接订阅整集 ——
+    // 订阅整集之后 `channel_array_of(delta)` 里仍然会有 PCPU/ECPU 这些通道，
+    // 采样逻辑完全不用改。
+    if (pCopyAllChannels) {
+        CFMutableDictionaryRef all = pCopyAllChannels(0, 0);
+        if (all) {
+            int n = (int)channel_count_of(all);
+            gAllChannelsSeen = n;
+            if (n > 0) {
+                CFMutableDictionaryRef subbed = NULL;
+                IORepSubRef subAll = pCreateSubscription(NULL, all, &subbed, 0, NULL);
+                if (subAll) {
+                    gSubscribeResult = "sub-ok(all)";
+                    gSubscription = subAll;
+                    gSubscribedChannels = subbed ? subbed : all;
+                    if (subbed && subbed != all) CFRelease(all);
+                    gSubscriptionOK = YES;
+                    return YES;
+                }
+                gSubscribeResult = "sub-null(all)";
+                if (subbed) CFRelease(subbed);
+            }
+            CFRelease(all);
+        } else {
+            gAllChannelsSeen = -1;
+        }
     }
     return NO;
 }
@@ -546,8 +587,9 @@ const char *sysprobe_ioreport_last_status(void)
     char ent[256];
     append_own_entitlements(ent, sizeof(ent));
     snprintf(gStatusBuffer, sizeof(gStatusBuffer),
-             "%s copy=%s subscribe=%s channels=%d %s",
-             gLastStatus, gCopyResult, gSubscribeResult, gChannelsSeen, ent);
+             "%s copy=%s subscribe=%s channels=%d all=%d %s",
+             gLastStatus, gCopyResult, gSubscribeResult, gChannelsSeen,
+             gAllChannelsSeen, ent);
     return gStatusBuffer;
 }
 
