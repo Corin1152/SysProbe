@@ -21,17 +21,20 @@ import UIKit
 /// ## 信息层级
 ///
 /// · **外环 = CPU**（蓝），**内环 = RAM**（绿）；
-/// · 中心两行是**内存读数**（占用率 + 剩余可用），以**内环圆心**为基准居中；
-/// · `RAM` 与 `CPU xx%` 两个标签**贴在各自环的切口处**（也就是正下方那两个断口）。
+/// · **环内三行是读数**，以**内环圆心**为中心自上而下排列 ——
+///   `CPU 占用率` / `内存占用率` / `内存容量`；
+/// · `RAM` 与 `CPU` 两个标签**贴在各自环的切口处**（也就是正下方那两个断口），
+///   只标「这一圈是什么」—— **数值全在环内**（0.0.52 起）。
 ///
 /// 为什么把标签放在切口：切口那里本来就没有笔画，文字落在上面不会被弧压住，
 /// 而且它天然指明了「这个标签说的是哪一圈」—— 放在环外就得靠颜色去猜。
 ///
 /// ## 颜色
 ///
-/// · **中心读数按量变色**（`TodayStyle.loadTint`：<70% 绿 / <90% 橙 / ≥90% 红），
-///   它显示的是内存占用率，与 0.0.39 版 `Memory` 那一格同一套；
-/// · **两个切口标签纯黑**（`TodayStyle.text`）—— 它们是文案，不是读数。
+/// · **环内两个占用率各自对应自己那一圈的颜色**：CPU 值 = 外环色 `cpuRing`（固定不变）；
+///   内存值走 `loadTint`，**低档就是内环色 `ramRing`**，中档起转橙 / 红；
+/// · **容量那行与两个切口标签纯黑**（`TodayStyle.text`）—— 容量没有「量」的含义
+///   （进度条已经表达了），标签则是文案，不是读数。
 final class TodayRingView: UIView {
 
     // MARK: - 几何常量
@@ -70,7 +73,11 @@ final class TodayRingView: UIView {
 
     // MARK: - 文字
 
+    /// 环内第一行：**CPU 占用率**（0.0.52 从外环切口挪进来的）。
+    private let centerCPULabel = UILabel()
+    /// 环内第二行：内存占用率。
     private let centerValueLabel = UILabel()
+    /// 环内第三行：内存容量。
     private let centerDetailLabel = UILabel()
     private let ramLabel = UILabel()
     private let cpuLabel = UILabel()
@@ -104,23 +111,36 @@ final class TodayRingView: UIView {
 
         // ── 字号：**随环的尺寸等比缩放**，见 `applyFontScale` ──
         //
-        // 基准是「可用直径 120pt」（也就是 `TodayWidgetView.ringPreferredHeight`）时的
-        // **12 / 12 / 7pt**（环内两行与右侧文案同号，切口标签更小一号）。
+        // 基准是「可用直径 ≥ 90pt」时的 **11pt（环内三行）/ 8pt（两个切口标签）**。
         // 写成固定值是不行的：环实际能拿到多大由组件高度决定，而组件高又被系统的
-        // 展开态上限压着 —— 环小的时候固定字号会把内环和缺口塞满、两个标签挤成一片。
+        // 展开态上限压着 —— 环小的时候固定字号会把内环和缺口塞满。
         applyFontScale(1)
 
-        // 内环中心那个数是**内存占用率** —— 就是 0.0.39 版 `Memory` 那一格的读数，
-        // 所以配色沿用那边：`loadTint` 三段（<70% 绿 / <90% 橙 / ≥90% 红）。
-        // 初值取 0 档，`apply` 每来一次数据都会重设（这里是「数值」不是「文案」，
-        // 用户明确要求纯黑只给文案）。
+        // ── 环内三行（0.0.52 起）──
+        //
+        //      9%        ← CPU 占用率（本次从外环切口挪进来）
+        //      98%       ← 内存占用率
+        //      54.8MB    ← 内存容量
+        //
+        // 配色（0.0.55 起）：**两个占用率各自对应自己那一圈的颜色**（用户要求）——
+        //   · CPU 值固定用**外环色** `cpuRing`；
+        //   · 内存值用 `loadTint`，而它的**低档就是内环色** `ramRing`（见那边的注释）。
+        // 低占用是绝大多数时候的状态，所以「读数和它所属的环同色」是常态；
+        // 内存值到中档才转橙 / 红 —— 那时「量高」比「属于哪一圈」更该被看到。
+        // 初值取低档，`apply` 每来一次数据都会重设。这三行都是「数值」不是「文案」，
+        // 用户明确要求纯黑只给文案。
+        centerCPULabel.textColor = TodayStyle.cpuRing
+        centerCPULabel.textAlignment = .center
+        centerCPULabel.adjustsFontSizeToFitWidth = true
+        centerCPULabel.minimumScaleFactor = 0.7
+
         centerValueLabel.textColor = TodayStyle.loadTint(0)
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
 
-        // 第二行是纯数字 + 西文的短行（`1.2GB` / `314.2MB`），按主程序副行（`mwMono`）的
-        // 规矩用**真等宽**。**颜色是纯黑**（用户 0.0.48 要求）—— 它与上面那个占用率
+        // 第三行是纯数字 + 西文的短行（`1.2GB` / `54.8MB`），按主程序副行（`mwMono`）的
+        // 规矩用**真等宽**。**颜色是纯黑**（用户 0.0.48 要求）—— 它与上面两个占用率
         // 一起构成「环内读数」，不再走次要灰。
         centerDetailLabel.textColor = TodayStyle.text
         centerDetailLabel.textAlignment = .center
@@ -130,8 +150,11 @@ final class TodayRingView: UIView {
         // 切口标签的宽度上限由缺口决定：缺口是 60° 扇形，标签落在两个断点连线的中点上
         // （距圆心 `0.866R`），那一行高度上缺口给出的**水平宽度** =
         // `2 × 0.866R × tan30° = R`，再扣掉弧端点的圆头线帽（外线宽 5.5pt）。
-        //   当前（R = 43.75）：可用约 38pt ——「CPU 7%」在 8pt 下约 26pt ✓ 留 12pt 余量；
-        //   环小到 R = 36：可用约 30pt，同一个标签就只剩 4pt 余量 → 所以字体要跟着缩。
+        //   当前（R = 43.75）：可用约 38pt ——「CPU」「RAM」在 8pt 下各约 17pt ✓ 余量很足；
+        //   环小到 R = 36：可用约 30pt，仍放得下 → 这两个标签几乎不会被挤。
+        //
+        // **0.0.52 起切口里不再有数值**：占用率都移进了环内，切口只负责标「这一圈是什么」，
+        // 所以标签短了一半（「CPU 7%」→「CPU」），宽度不再是约束。
         //
         // ⚠ 别用「把标签往外挪」来解决拥挤：半径越小，同样宽度占的角度越大，反而更挤；
         // 往外挪则直接落到环外去。
@@ -141,53 +164,58 @@ final class TodayRingView: UIView {
         cpuLabel.textColor = TodayStyle.text
         cpuLabel.textAlignment = .center
 
-        for label in [centerValueLabel, centerDetailLabel, ramLabel, cpuLabel] {
+        for label in [centerCPULabel, centerValueLabel, centerDetailLabel, ramLabel, cpuLabel] {
             addSubview(label)
         }
     }
 
     // MARK: - 字号自适应
 
-    /// 字号基准：**可用直径 90pt** —— 到了这个尺寸就用满 12pt，不再往下缩。
+    /// 字号基准：**可用直径 90pt** —— 到了这个尺寸就用满 11pt，不再往下缩。
     ///
-    /// 为什么是 90：内环直径 = `可用直径 − 35`（环外沿 = 可用 − 9.5、内环 = 外沿 − 25.5），
-    /// 而 12pt 的「314.2MB」约 47pt 宽，留点边距就要求内环 ≥ 55pt →
-    /// **可用直径 ≥ 90pt**。实机上这个值在 100 上下，所以**正常情况下缩放恒为 1**，
-    /// 环内字号就是 12pt，与右侧文案严格同号（用户 0.0.48 的要求）。
+    /// 为什么是 90（0.0.52 环内改成三行后重算）：内环**内沿**直径 = `可用直径 − 39.5`
+    /// （内环 = 可用 − 35，再扣一条内线宽 4.5），而两个方向都要放得下：
+    ///   · 高度：三行行高 `3 × 13.1` + 两个行间隙 `2 × 1.5` ≈ **42pt**；
+    ///   · 宽度：最宽那行 `54.8MB`（真等宽）约 **40pt**。
+    /// 取大者 42pt → 可用直径 ≥ 约 82pt，这里取 **90** 留一点余量。
     ///
-    /// 只有环被系统压得很小时（可用直径 < 90）才开始缩 —— 那种尺寸下 12pt 会撑满
-    /// 内环、两个切口标签也会挤到一起，缩是必要的（0.0.47 实机就是这样）。
+    /// 实机上可用直径在 100 上下，所以**正常情况下缩放恒为 1**，环内就是 11pt。
+    /// 只有环被系统压得很小时才缩 —— 那种尺寸下三行会顶到内环的笔画上，缩是必要的。
     ///
     /// ⚠ **别把它改回 `ringPreferredHeight`（120）**：那是「期望环格高」，而真机给的
-    /// 可用直径小于它，缩放会常年停在 0.85 上下 —— 环内字永远比右侧小一号，
-    /// 「跟右侧文案一样大」这个要求就落不了地。
+    /// 可用直径小于它，缩放会常年停在 0.85 上下 —— **环内字会比设定的字号小一号**，
+    /// 而且光看代码发现不了（写的是 11pt、渲染出来是 9.4pt）。
     private static let referenceDiameter: CGFloat = 90
     /// 缩放下限。再小字就糊了，宁可让 `adjustsFontSizeToFitWidth` 去裁。
     private static let minimumFontScale: CGFloat = 0.7
 
-    /// 环内两行的字号 —— **与右侧的标签 / 读数同号（12pt）**（用户 0.0.48 要求）。
+    /// 环内**三行共用**的字号 —— **11pt**（用户 0.0.52 要求）。
     ///
-    /// 原来这两行比右侧大得多（16 / 10pt），环里那两行字重得压过整块组件；
-    /// 统一到 12pt 之后，环内环外是同一套字号，视线不会被环吸住。
-    /// 字族与字重仍分工：占用率是**读数**（等宽数字 + semibold），
+    /// 三行 = CPU 占用率 / 内存占用率 / 内存容量。原来只有两行、12pt；加了 CPU 那一行
+    /// 之后收到 11pt —— 内环里要竖着排三行，每行都得让出一点，否则整块会顶到内环的
+    /// 笔画上。
+    ///
+    /// 字族与字重仍分工：两个占用率是**读数**（等宽数字 + semibold），
     /// 容量那行是**纯数字短行**，按主程序副行的规矩走真等宽（`mono`）。
-    private static let referenceValueSize: CGFloat = 12
-    private static let referenceDetailSize: CGFloat = 12
+    private static let referenceCenterSize: CGFloat = 11
 
-    /// 两个切口标签（`RAM` / 占用率）的字号 —— **7 → 8pt**（用户 0.0.48 要求加大）。
+    /// 两个切口标签（`RAM` / `CPU`）的字号 —— **8pt**（0.0.48 从 7 加大而来）。
     ///
     /// 它们能放多大由**缺口的可用宽度**决定：缺口是 60° 扇形，标签落在窄口里，
     /// 那一行高度上能给的宽度约等于所在环的半径（再扣掉弧端圆头线帽）。
-    /// 8pt 下「RAM」约 19pt、纯数字占用率（如「7%」）约 15pt，在半径 25pt 以上都放得下。
+    /// 8pt 下「RAM」「CPU」各约 17pt，在半径 25pt 以上都放得下。
+    /// **0.0.52 起切口里不再有数值**，这两个标签比早先短得多，宽度已不成约束。
     private static let referenceLabelSize: CGFloat = 8
 
     /// 上一次应用过的缩放，避免每帧重建字体（`layoutSubviews` 是高频回调）。
     private var appliedFontScale: CGFloat = 0
 
     private func applyFontScale(_ scale: CGFloat) {
-        centerValueLabel.font = TodayFont.readout(Self.referenceValueSize * scale,
-                                                  weight: .semibold)
-        centerDetailLabel.font = TodayFont.mono(Self.referenceDetailSize * scale)
+        let center = Self.referenceCenterSize * scale
+        // 两个占用率同号同字重（都是读数）；容量那行走真等宽（主程序副行的规矩）。
+        centerCPULabel.font = TodayFont.readout(center, weight: .semibold)
+        centerValueLabel.font = TodayFont.readout(center, weight: .semibold)
+        centerDetailLabel.font = TodayFont.mono(center)
         ramLabel.font = TodayFont.text(Self.referenceLabelSize * scale, weight: .medium)
         cpuLabel.font = TodayFont.text(Self.referenceLabelSize * scale, weight: .medium)
     }
@@ -235,37 +263,37 @@ final class TodayRingView: UIView {
 
     private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat,
                               scale: CGFloat) {
-        // 行高**直接用字体自己的行高**（12pt 系统字约 14.3pt）。
+        // ── 环内三行（0.0.52）──
         //
-        // 以前写的是估算常量（21 / 13pt，对应 16 / 10pt 字号），比字体真实行高大出一截
-        // —— 文字在框里居中后上下各留一段空白，两行相接时净间隙只剩 1.4pt，
-        // 实机上看着像贴在一起。现在框高 = 行高，两行之间的净间隙就等于下面的 `lineGap`。
-        let valueHeight = centerValueLabel.font.lineHeight
-        let detailHeight = centerDetailLabel.font.lineHeight
-        // 两行之间留一点缝（随环缩放）。
-        let lineGap = 2 * scale
-
-        // **两行关于内环圆心对称**摆放。
+        // 行高**直接用字体自己的行高**（11pt 系统字约 13.1pt），不用估算常量 ——
+        // 估算常量（当初的 21 / 13pt）比真实行高大出一截，文字在框里居中后上下各留
+        // 一段看不见的空白，行与行看着就像贴在一起。框高 = 行高，净间隙就等于 `lineGap`。
         //
-        // 先定两行**中心之间**的距离（两个半行高 + 行间隙），再让两个中心等距地分居
-        // 圆心上下。用这个判据而不是「把整块包围盒居中」：两行字号一旦不同
-        // （0.0.47 之前是 16 / 10pt），包围盒居中会让**大字的中心离圆心更近、
-        // 小字的中心更远**（7.5pt vs 11.5pt）—— 看着就是「上挤下空、整组往下坠」。
-        // 现在两行同号（都是 12pt），两种判据结果一致，但这里仍按中心对称写 ——
-        // 以后谁再改字号，居中也不会歪。
-        let spacing = (valueHeight + detailHeight) / 2 + lineGap
+        // 三行同字号，所以行高相同、相邻两行的**中心距**是一个定值 `spacing`。
+        // 摆放方式：**中间那行压在圆心上，上下两行各偏 ±spacing** —— 三行整体以圆心为
+        // 中心，这就是用户 0.0.52 要的「在内环居中显示」。
+        //
+        // 不写成「把三行的包围盒居中」：两种算法在等行高时结果相同，但中心对称的写法
+        // 对「行数变化」是自洽的 —— 0.0.52 正是把两行扩成三行，只动了下面那张行表，
+        // 居中关系一点没歪。
+        let lineHeight = centerValueLabel.font.lineHeight
+        let lineGap = 1.5 * scale
+        let spacing = lineHeight + lineGap
         // ⚠ 宽度取**内环的内沿**（`innerRadius − 半条线宽`），不是中心线直径 ——
         // 按中心线给宽度，文字两端会压在内环的笔画上。用户 0.0.48 反馈的
         // 「内存剩余量跟内环重叠」有一半是这个原因（另一半是内环太小，见 `ringGap`）。
         let innerWidth = (innerRadius - Self.innerLineWidth / 2) * 2
-        centerValueLabel.frame = CGRect(x: center.x - innerWidth / 2,
-                                        y: center.y - spacing / 2 - valueHeight / 2,
-                                        width: innerWidth,
-                                        height: valueHeight)
-        centerDetailLabel.frame = CGRect(x: center.x - innerWidth / 2,
-                                         y: center.y + spacing / 2 - detailHeight / 2,
-                                         width: innerWidth,
-                                         height: detailHeight)
+        let rows: [(UILabel, CGFloat)] = [
+            (centerCPULabel, -spacing),
+            (centerValueLabel, 0),
+            (centerDetailLabel, spacing),
+        ]
+        for (label, offset) in rows {
+            label.frame = CGRect(x: center.x - innerWidth / 2,
+                                 y: center.y + offset - lineHeight / 2,
+                                 width: innerWidth,
+                                 height: lineHeight)
+        }
 
         // 切口标签：**落在各自环缺口的底边上**（也就是两个起止点 7 点 / 5 点所在的那一行）。
         //
@@ -278,8 +306,8 @@ final class TodayRingView: UIView {
         //
         // 现在两个都回到 `0.866R`。间隙只有 5pt、两个标签的中心距因此只有 8.7pt，
         // 小于字体行高 9.5pt —— 但**字形本身只有约 5.7pt 高**（行高里的上下空白不可见），
-        // 所以视觉上不会叠。而缺口在这一行给出的宽度约等于外环半径（41.8pt），
-        // 「RAM」19pt、「7%」12pt 都放得下，不会压到弧。
+        // 所以视觉上不会叠。而缺口在这一行给出的宽度约等于所在环的半径，
+        // 「CPU」「RAM」在 8pt 下各约 17pt，都放得下，不会压到弧。
         let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 68
         let labelHeight = ramLabel.font.lineHeight
@@ -299,26 +327,27 @@ final class TodayRingView: UIView {
     /// - Parameters:
     ///   - cpuFraction: 0…1，外环。
     ///   - ramFraction: 0…1，内环。
-    ///   - ramDetail: 环内第二行，**只放容量数字**，例如「1.2GB」（不带「剩余」前缀）。
-    ///   - cpuPercentText: 外环占用率文本（含 `%`），例如「17%」—— 标签会拼成「CPU 17%」。
+    ///   - ramDetail: 环内第三行，**只放容量数字**，例如「1.2GB」（不带「剩余」前缀）。
+    ///   - cpuPercentText: 环内第一行的 CPU 占用率文本（含 `%`），例如「17%」。
     func apply(cpuFraction: Double, ramFraction: Double,
                ramDetail: String, cpuPercentText: String) {
         self.cpuFraction = min(max(cpuFraction, 0), 1)
         self.ramFraction = min(max(ramFraction, 0), 1)
 
+        // ── 环内三行：CPU 占用率 / 内存占用率 / 内存容量 ──
+        //
+        // CPU 那个数是用户 0.0.52 要求**从外环切口挪进来的**：两个占用率并排之后，
+        // 一眼能比出「是 CPU 紧还是内存紧」，比一个在切口、一个在环内要好读。
+        centerCPULabel.text = cpuPercentText
+        // **CPU 值固定用外环色**（用户 0.0.55：「环内 CPU 占用率颜色也对应下外环颜色」）
+        // —— 它不再走 `loadTint` 的变色阶梯。内存值仍走 `loadTint`，低档 = 内环色。
+        centerCPULabel.textColor = TodayStyle.cpuRing
         centerValueLabel.text = "\(Int((self.ramFraction * 100).rounded()))%"
-        // 读数颜色跟着占用率走（0.0.39 版 `Memory` 那一格的 `loadTint`）：绿 → 橙 → 红。
         centerValueLabel.textColor = TodayStyle.loadTint(self.ramFraction)
         centerDetailLabel.text = ramDetail
+        // 两个切口标签只负责标「这一圈是什么」—— 数值已经全在环内了。
         ramLabel.text = "RAM"
-        // 外环标签**带前缀「CPU」**（0.0.48 曾去掉，0.0.52 按要求加回）。
-        //
-        // 当初去掉是因为缺口里挤：那时 R = 41.8，缺口可用宽度只有约 36pt，而「CPU 12%」
-        // 这类双位数文本已经贴到边。现在环长大了（R = 43.75、可用约 38pt），而占用率
-        // 多数时候是 1~2 位，「CPU 7%」在 8pt 下约 26pt —— 余量 12pt，加回来不挤。
-        //
-        // 留着前缀的好处很实在：**两个环读的都是百分比，光看数字分不清哪个是 CPU**。
-        cpuLabel.text = "CPU \(cpuPercentText)"
+        cpuLabel.text = "CPU"
 
         setNeedsLayout()
     }

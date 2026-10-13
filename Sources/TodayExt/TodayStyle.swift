@@ -56,7 +56,17 @@ nonisolated enum TodayStyle {
     // 是**两个不同的量**并排显示，各用各的固定色才能一眼分清哪圈是 CPU、哪圈是 RAM。
     // 会变色的话，某个瞬间两圈都变红，就分不出谁是谁了。
     /// 外环：CPU。
-    static let cpuRing = dynamic(0x1F7AE0, 0x5AA9FF)
+    ///
+    /// **与主程序功率圆环的外环同色**（用户 0.0.54 要求）：那边外弧走
+    /// `PowerSegment.glow(for: .draw, …)`，正常插电、非无线、不降频时返回 **`.mwAccent`**
+    /// （`Theme.swift` 里是 `0x0086B3 / 0x35DFFF`）—— 与本文件的 `accent` 同值。
+    /// 所以这里**直接复用 `accent` 而不是再抄一遍色值**：功率环的 tint 本来就出自同一个
+    /// 数，两边共用一处来源，以后谁改了另一个不会悄悄留在原地（原来这里是 `0x1F7AE0`
+    /// 的纯蓝，与功率环的青色放在一起能看出不是一个调）。
+    ///
+    /// ⚠ 对齐的是**颜色**，不是效果：主程序那边外弧还套了 `Theme.gradient`
+    /// （左上 55% 透明 → 右下实色）与一层同色光晕，负一屏是纯色、无光晕。
+    static let cpuRing = accent
     /// 内环：RAM。
     static let ramRing = dynamic(0x4E9A06, 0x8BD44A)
 
@@ -82,17 +92,22 @@ nonisolated enum TodayStyle {
         }
     }
 
-    /// 负载色：CPU / 内存的占用率用。
+    /// 负载色：**内存占用率**读数用。
     ///
     /// 三段而不是连续渐变 —— 读数每秒都在动，连续渐变换色只会让人觉得整屏在闪；
     /// 三段的话只有跨过阈值那一下才变色，那一下恰好是需要被注意到的。
     ///
-    /// **负一屏的环内中心读数用它**（那个数就是内存占用率，等同于 0.0.39 版
-    /// `Memory` 那一格的读数）。存储进度条走的是另一个函数 `storageTint` ——
-    /// 那个看的是「剩余」而不是「占用」，方向相反。
+    /// **低档用 `ramRing`，也就是内环色**（用户 0.0.54 要求「内存占用率低占用时的颜色
+    /// 跟内环颜色一致」）。原来低档用的是 `battery`（`0x0E9B57` 青绿），而内环是
+    /// `ramRing`（`0x4E9A06` 黄绿）—— 两个绿摆在一起能看出不是一个调，而**低占用是
+    /// 绝大多数时候的状态**，所以那点差别一直挂在屏幕上。
+    /// 中档起才转橙、红：那时「量高」比「属于哪一圈」更该被看到。
+    ///
+    /// 存储进度条走的是另一个函数 `storageTint` —— 那个看的是「剩余」而不是「占用」，
+    /// 方向相反。
     static func loadTint(_ fraction: Double) -> UIColor {
         switch fraction {
-        case ..<0.70: return battery
+        case ..<0.70: return ramRing
         case ..<0.90: return loss
         default: return danger
         }
