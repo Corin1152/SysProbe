@@ -56,5 +56,19 @@
 	</array>
 	<key>com.apple.private.ioreporting.access</key>
 	<true/>
+
+	<!--
+	  `platform-application` —— 0.0.36 实测：补上上面两条之后负一屏**仍然**读不出频率，
+	  而主 App 一直正常。两边剩下的关键差异就是这一条。
+
+	  它的作用是给进程「平台应用」身份，能访问一些只对平台服务开放的 IOKit 服务
+	  （IOReport 背后的 CLPC 很可能就是其中之一）。TrollStore 安装时正是靠
+	  `platform-application` + `no-sandbox` 让 App 拿到平台权限，appex 同样适用。
+
+	  注意它同时会让「每一个 IOKit user client 都要显式例外」（TrollStore README
+	  原文）—— 所以上面那条 `IOReportUserClient` 必须同时存在，缺一不可。
+	-->
+	<key>platform-application</key>
+	<true/>
 </dict>
 </plist>

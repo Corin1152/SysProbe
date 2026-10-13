@@ -428,69 +428,92 @@ static BOOL name_is_efficiency(CFStringRef name)
 // 入口
 // ---------------------------------------------------------------------------
 
+/// 最近一次调用的结果说明。**只为诊断**。
+///
+/// IOReport 的失败是**静默**的：订阅返回 NULL，调用方只看到 0，界面显示「—」，
+/// 没有任何地方报错。主 App 能读出频率而负一屏读不出时，没有这个字符串就只能靠猜。
+/// 取值：`ok` / `no-symbols` / `no-subscription` / `no-freq-tables` /
+/// `sample1-null` / `sample2-null` / `delta-null` / `no-channels` / `all-idle`。
+static const char *gLastStatus = "not-called";
+
+const char *sysprobe_ioreport_last_status(void)
+{
+    return gLastStatus;
+}
+
 uint64_t sysprobe_real_cpu_frequency_mhz(void)
 {
     uint64_t result = 0;
 
-    // **刻意不检查 getuid。** IOReport 的访问门槛是沙箱的 IOKit user client 例外
-    // （`IOReportUserClient`，见 entitlements），**不是 uid** —— SysProbe 的主 App 与
-    // 负一屏都以 mobile 身份运行，一样能订阅。
+    // **刻意不检查 getuid。** IOReport 的访问门槛是「沙箱的 IOKit user client 例外
+    // + `com.apple.private.ioreporting.access` 特权标记」，**不是 uid** ——
+    // SysProbe 的主 App 与负一屏都以 mobile 身份运行，一样能订阅。
     //
     // 0.0.34 第一版在这里写了 `if (getuid() != 0) return 0;`（从「powermetrics 要 root」
-    // 想当然抄来的），结果主 App 与负一屏永远拿到 0、频率那一格只显示「—」——
+    // 想当然抄来的），结果两边永远拿到 0、频率那一格只显示「—」——
     // 而占用率是 host_processor_info 采的、不受影响，症状正好是「只有占用没有频率」。
-    if (!ensure_symbols()) return 0;
-    if (!ensure_subscription()) return 0;
+    if (!ensure_symbols())      { gLastStatus = "no-symbols";      return 0; }
+    if (!ensure_subscription()) { gLastStatus = "no-subscription"; return 0; }
 
     ensure_freq_tables();
-    if (!gPFreqs && !gEFreqs) return 0;       // 没有档位表，驻留没有意义
+    if (!gPFreqs && !gEFreqs)   { gLastStatus = "no-freq-tables";  return 0; }
 
     CFDictionaryRef s1 = pCreateSamples(gSubscription, gSubscribedChannels, NULL);
-    if (!s1) return 0;
+    if (!s1) { gLastStatus = "sample1-null"; return 0; }
 
     // 两次采样隔 200 ms —— 有这段时间，DVFS 驻留计数器才有东西可差分。
     //
-    // **为什么是 200 ms 而不是 100 ms**：这个窗口里只要**一次非 IDLE 驻留都没有**，
-    // 加权平均就无从算起，函数返回 0、界面闪一下「—」。设备空闲时 100 ms 全空闲
-    // 并不罕见（0.0.35 实测主程序会偶发「—」）。窗口拉长一倍把概率压下去，
-    // 代价只是采样线程多睡 100 ms —— 它在后台队列上，不挡渲染。
-    //
-    // 这只降低概率、不能根除，所以 `CPUFrequency` 那一层还叠了一道「沿用上次读数」
-    // 的短缓存（见 Sources/Shared/Hardware/CPUFrequency.swift）。
+    // 这个窗口里只要**一次非 IDLE 驻留都没有**，加权平均就无从算起，函数返回 0。
+    // 窗口从 100 ms 拉到 200 ms 是为了把概率压下去（采样在后台队列上，多睡 100 ms
+    // 不挡渲染）；`CPUFrequency` 那一层还叠了一道「沿用上次读数」的短缓存。
     struct timespec ts = { 0, 200 * 1000 * 1000 };
     nanosleep(&ts, NULL);
 
     CFDictionaryRef s2 = pCreateSamples(gSubscription, gSubscribedChannels, NULL);
-    if (!s2) { CFRelease(s1); return 0; }
+    if (!s2) { CFRelease(s1); gLastStatus = "sample2-null"; return 0; }
 
     CFDictionaryRef delta = pCreateSamplesDelta(s1, s2, NULL);
-    if (delta) {
-        CFArrayRef channels = channel_array_of(delta);
-        double pMHz = 0.0;
-        double eMHz = 0.0;
+    if (!delta) {
+        CFRelease(s2);
+        CFRelease(s1);
+        gLastStatus = "delta-null";
+        return 0;
+    }
 
-        if (channels) {
-            CFIndex n = CFArrayGetCount(channels);
-            for (CFIndex i = 0; i < n; i++) {
-                CFDictionaryRef metric = (CFDictionaryRef)CFArrayGetValueAtIndex(channels, i);
-                if (!metric || CFGetTypeID(metric) != CFDictionaryGetTypeID()) continue;
+    CFArrayRef channels = channel_array_of(delta);
+    double pMHz = 0.0;
+    double eMHz = 0.0;
+    int channelCount = 0;
 
-                CFStringRef name = pChannelGetChannelName(metric);
-                if (name_is_performance(name)) {
-                    double m = weighted_mhz_for_channel(metric, gPFreqs);
-                    if (m > pMHz) pMHz = m;
-                } else if (name_is_efficiency(name)) {
-                    double m = weighted_mhz_for_channel(metric, gEFreqs);
-                    if (m > eMHz) eMHz = m;
-                }
+    if (channels) {
+        CFIndex n = CFArrayGetCount(channels);
+        channelCount = (int)n;
+        for (CFIndex i = 0; i < n; i++) {
+            CFDictionaryRef metric = (CFDictionaryRef)CFArrayGetValueAtIndex(channels, i);
+            if (!metric || CFGetTypeID(metric) != CFDictionaryGetTypeID()) continue;
+
+            CFStringRef name = pChannelGetChannelName(metric);
+            if (name_is_performance(name)) {
+                double m = weighted_mhz_for_channel(metric, gPFreqs);
+                if (m > pMHz) pMHz = m;
+            } else if (name_is_efficiency(name)) {
+                double m = weighted_mhz_for_channel(metric, gEFreqs);
+                if (m > eMHz) eMHz = m;
             }
         }
-
-        // 优先性能簇；P 簇全空闲时用 E 簇兜底。
-        double chosen = pMHz > 0 ? pMHz : eMHz;
-        if (chosen > 0) result = (uint64_t)(chosen + 0.5);
-        CFRelease(delta);
     }
+
+    // 优先性能簇；P 簇全空闲时用 E 簇兜底。
+    double chosen = pMHz > 0 ? pMHz : eMHz;
+    if (chosen > 0) {
+        result = (uint64_t)(chosen + 0.5);
+        gLastStatus = "ok";
+    } else {
+        // 分两种：一个通道都没匹配上（通道名与预期不符），还是窗口内确实全空闲。
+        gLastStatus = (channelCount == 0) ? "no-channels" : "all-idle";
+    }
+
+    CFRelease(delta);
     CFRelease(s2);
     CFRelease(s1);
 
@@ -502,6 +525,11 @@ uint64_t sysprobe_real_cpu_frequency_mhz(void)
 uint64_t sysprobe_real_cpu_frequency_mhz(void)
 {
     return 0;
+}
+
+const char *sysprobe_ioreport_last_status(void)
+{
+    return "unsupported-arch";
 }
 
 #endif

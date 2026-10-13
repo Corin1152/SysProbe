@@ -22,4 +22,14 @@
 /// 所以两个进程同时读没有副作用。
 uint64_t sysprobe_real_cpu_frequency_mhz(void);
 
+/// 最近一次 `sysprobe_real_cpu_frequency_mhz()` 的结果说明（**静态字符串，不需要释放**）。
+///
+/// IOReport 的失败是静默的 —— 订阅返回 NULL、调用方只看到 0、界面显示「—」，
+/// 没有任何地方报错。排查「某个进程读不出频率」时，这个字符串就是唯一的线索。
+///
+/// 取值：`ok` · `no-symbols` · `no-subscription` · `no-freq-tables` ·
+/// `sample1-null` · `sample2-null` · `delta-null` · `no-channels` · `all-idle` ·
+/// `not-called` · `unsupported-arch`。
+const char *sysprobe_ioreport_last_status(void);
+
 #endif /* SYSPROBE_CPU_FREQUENCY_IOREPORT_H */
