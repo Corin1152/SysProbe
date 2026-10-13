@@ -357,8 +357,16 @@ jobs:
           #    清单只含**两边都在用**的那几个。守护进程提供但只有一边调用的，
           #    列进来只会让这条断言无缘无故地红 —— 那种情况见下面那段说明。
           for api in get_conf set_conf get_bat_info; do
-            grep -q "\"$api\"" Sources/ChargeControl/ChargeBridge.swift || {
-              echo "::error::ChargeBridge.swift no longer calls the '$api' api."; exit 1; }
+            if [ "$api" = "get_bat_info" ]; then
+              # 2026-10-13：电池读取（get_bat_info）搬到了 Shared/Power —— 负一屏
+              # 显示电芯温度也要用它，而扩展的编译源里没有 Sources/ChargeControl。
+              # 这条 api 的 Swift 侧检查跟着搬。
+              grep -q "\"$api\"" Sources/Shared/Power/BatteryBridge.swift || {
+                echo "::error::BatteryBridge.swift no longer calls the '$api' api."; exit 1; }
+            else
+              grep -q "\"$api\"" Sources/ChargeControl/ChargeBridge.swift || {
+                echo "::error::ChargeBridge.swift no longer calls the '$api' api."; exit 1; }
+            fi
             grep -q "'$api'" Sources/ChargeControl/Resources/www/js/app.js || {
               echo "::error::www/js/app.js no longer calls the '$api' api."; exit 1; }
           done
