@@ -65,11 +65,10 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 否则组件总高与实际布局对不上。
     private static var systemHeaderHeight: CGFloat { TodayWidgetView.systemHeaderHeight }
 
-    /// 内容在组件内的上 / 下留白（**不等**，理由见 `TodayWidgetView` 里那两个常量）。
+    /// 内容在组件内的下留白（右列专用，见 `TodayWidgetView`）。
     ///
-    /// 它们同时被 `TodayWidgetView` 用作布局约束、被本类用来算组件总高 ——
-    /// 与系统头部同理，只留一份真值。
-    private static var contentTopInset: CGFloat { TodayWidgetView.contentTopInset }
+    /// **组件总高不再逐项相加**：`systemLayoutSizeFitting` 出来的高度已经含了环那一列的
+    /// 上下留白（那两条约束是相对本视图的），所以只要再加系统头部即可。
     private static var contentBottomInset: CGFloat { TodayWidgetView.contentBottomInset }
 
     override func viewDidLoad() {
@@ -264,12 +263,12 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
             CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-        // 组件总高 = 内容自然高 + 系统头部 + 上下留白（上下**不等**：上 2 / 下 10）。
-        //   · 头部：`preferredContentSize.height` 是**含它**的总高，少算会被底边裁；
-        //   · 留白：上小是为了把内容往上顶（头部只占上方）、下大是为了不贴底边。
+        // 组件总高 = 内容自然高 + 系统头部。
+        //   · 内容自然高由 `systemLayoutSizeFitting` 给出，它**已经含**环那一列的上下留白
+        //     （那两条约束是相对本视图写的），这里不要再加一遍；
+        //   · 头部：`preferredContentSize.height` 是**含它**的总高，少算会被底边裁。
         let wanted = max(minimumHeight,
-                         (fitted.height + Self.systemHeaderHeight
-                          + Self.contentTopInset + Self.contentBottomInset).rounded(.up))
+                         (fitted.height + Self.systemHeaderHeight).rounded(.up))
         let height = min(wanted, limit)
         guard preferredContentSize.width != width
                 || abs(preferredContentSize.height - height) > 0.5 else { return }

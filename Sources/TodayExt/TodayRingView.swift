@@ -51,10 +51,15 @@ final class TodayRingView: UIView {
     private static let innerLineWidth: CGFloat = 4.5
     /// 两个环之间的净间隙。
     ///
-    /// 线宽收细之后这里**要跟着放宽**：两个切口标签中心的径向距离 =
-    /// `0.866 × (0.5·外线宽 + ringGap + 0.5·内线宽)`，10pt 时约 13pt，
-    /// 正好比 12pt 的标签框高留出一点余量；若还留 7.5，就只有 12.1pt，太贴。
-    private static let ringGap: CGFloat = 10
+    /// **10 → 5（用户 0.0.48 要求「外环直径不变、内环加大」）。** 内环半径 =
+    /// `outerRadius − 0.5·外线宽 − ringGap − 0.5·内线宽`，间隙每让出 1pt，内环直径
+    /// 就多 2pt。实机上环只能拿到约 80pt 外沿（系统给的高度就那么大），内环因此很挤
+    /// —— 中心的「314.2MB」直接压在绿环上，所以这里必须让。
+    ///
+    /// ⚠ 代价是**两个切口标签靠得更近**（中心距 = `0.866 × (ringGap + 线宽和/2)`）：
+    /// 10pt 时约 13pt、5pt 时只有 8.7pt，而标签框高 8pt —— 几乎贴住。所以两个标签
+    /// 的**落点也一起错开了**（见 `layoutLabels`：内环标签往里、外环标签往外）。
+    private static let ringGap: CGFloat = 5
 
     // MARK: - 图层
 
@@ -114,9 +119,10 @@ final class TodayRingView: UIView {
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
 
-        // 第二行是纯数字 + 西文的短行（`1.2GB`），按主程序副行（`mwMono`）的规矩用
-        // **真等宽**；再往下那两个切口标签是拉丁标签，与主程序 caption 同规，用 text。
-        centerDetailLabel.textColor = TodayStyle.muted
+        // 第二行是纯数字 + 西文的短行（`1.2GB` / `314.2MB`），按主程序副行（`mwMono`）的
+        // 规矩用**真等宽**。**颜色是纯黑**（用户 0.0.48 要求）—— 它与上面那个占用率
+        // 一起构成「环内读数」，不再走次要灰。
+        centerDetailLabel.textColor = TodayStyle.text
         centerDetailLabel.textAlignment = .center
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
@@ -159,6 +165,13 @@ final class TodayRingView: UIView {
     private static let referenceValueSize: CGFloat = 12
     private static let referenceDetailSize: CGFloat = 12
 
+    /// 两个切口标签（`RAM` / 占用率）的字号 —— **7 → 8pt**（用户 0.0.48 要求加大）。
+    ///
+    /// 它们能放多大由**缺口的可用宽度**决定：缺口是 60° 扇形，标签落在窄口里，
+    /// 那一行高度上能给的宽度约等于所在环的半径（再扣掉弧端圆头线帽）。
+    /// 8pt 下「RAM」约 19pt、纯数字占用率（如「7%」）约 15pt，在半径 25pt 以上都放得下。
+    private static let referenceLabelSize: CGFloat = 8
+
     /// 上一次应用过的缩放，避免每帧重建字体（`layoutSubviews` 是高频回调）。
     private var appliedFontScale: CGFloat = 0
 
@@ -166,8 +179,8 @@ final class TodayRingView: UIView {
         centerValueLabel.font = TodayFont.readout(Self.referenceValueSize * scale,
                                                   weight: .semibold)
         centerDetailLabel.font = TodayFont.mono(Self.referenceDetailSize * scale)
-        ramLabel.font = TodayFont.text(7 * scale, weight: .medium)
-        cpuLabel.font = TodayFont.text(7 * scale, weight: .medium)
+        ramLabel.font = TodayFont.text(Self.referenceLabelSize * scale, weight: .medium)
+        cpuLabel.font = TodayFont.text(Self.referenceLabelSize * scale, weight: .medium)
     }
 
     // MARK: - 布局
@@ -232,30 +245,36 @@ final class TodayRingView: UIView {
         // 现在两行同号（都是 12pt），两种判据结果一致，但这里仍按中心对称写 ——
         // 以后谁再改字号，居中也不会歪。
         let spacing = (valueHeight + detailHeight) / 2 + lineGap
-        centerValueLabel.frame = CGRect(x: center.x - innerRadius,
+        // ⚠ 宽度取**内环的内沿**（`innerRadius − 半条线宽`），不是中心线直径 ——
+        // 按中心线给宽度，文字两端会压在内环的笔画上。用户 0.0.48 反馈的
+        // 「内存剩余量跟内环重叠」有一半是这个原因（另一半是内环太小，见 `ringGap`）。
+        let innerWidth = (innerRadius - Self.innerLineWidth / 2) * 2
+        centerValueLabel.frame = CGRect(x: center.x - innerWidth / 2,
                                         y: center.y - spacing / 2 - valueHeight / 2,
-                                        width: innerRadius * 2,
+                                        width: innerWidth,
                                         height: valueHeight)
-        centerDetailLabel.frame = CGRect(x: center.x - innerRadius,
+        centerDetailLabel.frame = CGRect(x: center.x - innerWidth / 2,
                                          y: center.y + spacing / 2 - detailHeight / 2,
-                                         width: innerRadius * 2,
+                                         width: innerWidth,
                                          height: detailHeight)
 
-        // 切口标签：**落在两个断点（7 点、5 点）连线的中点上**，而不是贴在弧的外沿。
+        // 切口标签：**落在各自环缺口的中央**（两个断点连线的中点，距圆心 0.866R）。
         //
-        // 贴外沿时文字紧挨着弧最粗的那一圈，看着往外坠；移到断点连线中点，视觉上正好
-        // 落进缺口的中央。该点的垂直偏移 = R × sin60° —— 7 点与 5 点分别在 210° / 150°
-        // 方向，两个方向上的余弦相消、正弦同号，中点就落在圆心正下方 0.866R 处。
+        // 7 点与 5 点分别在 210° / 150° 方向，余弦相消、正弦同号，所以连线中点必然
+        // 落在圆心正下方 0.866R 处。
         //
-        // 两个标签中心相距 `0.866 × (outerRadius − innerRadius)`（= 0.866 × 半径差）：
-        // 基准尺寸下半径差 15pt → 13pt 间距，框高 10pt → 剩 3pt。**环缩小时半径差
-        // 不变（线宽与环间距都是定值），所以间距也不变，但字号小了框也矮，余量反而变大。**
-        // 框宽 68pt 只是给文字留居中余量，**能不能放下由缺口宽度决定**。
+        // 间隙从 10pt 让到 5pt 之后，两个标签在「标准位置」上的中心距只剩
+        // `0.866 × (ringGap + 线宽和/2) = 8.7pt`，而标签框高 8pt —— 几乎贴住。
+        // 所以这里把**落点也错开**：内环标签往圆心方向收（0.80R）、外环标签往外推
+        // （0.96R），中心距拉到 13pt 左右。两个方向都还在 60° 缺口里，
+        // 不会碰到弧（缺口那一行给的宽度约为所在环的半径）。
+        //
+        // 框宽 68pt 只是给文字居中留余量，**能不能放下由缺口的宽度决定**。
         let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 68
-        let labelHeight = 10 * scale
-        let cutCentreY = center.y + outerRadius * sin60
-        let innerCutCentreY = center.y + innerRadius * sin60
+        let labelHeight = ramLabel.font.lineHeight
+        let cutCentreY = center.y + outerRadius * sin60 * 0.96
+        let innerCutCentreY = center.y + innerRadius * sin60 * 0.80
 
         ramLabel.frame = CGRect(x: center.x - labelWidth / 2,
                                 y: innerCutCentreY - labelHeight / 2,
@@ -282,7 +301,10 @@ final class TodayRingView: UIView {
         centerValueLabel.textColor = TodayStyle.loadTint(self.ramFraction)
         centerDetailLabel.text = ramDetail
         ramLabel.text = "RAM"
-        cpuLabel.text = "CPU \(cpuPercentText)"
+        // **只显示占用率本身**（「CPU 7%」→「7%」，用户 0.0.48 要求）。
+        // 外环是蓝色的，这一行又紧贴着外环的缺口 —— 哪个环是 CPU 看颜色就知道，
+        // 「CPU」四个字符纯属占地方（而且去掉之后标签窄了一半，缺口里立刻宽松了）。
+        cpuLabel.text = cpuPercentText
 
         setNeedsLayout()
     }
