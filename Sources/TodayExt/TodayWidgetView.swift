@@ -167,9 +167,13 @@ final class TodayWidgetView: UIView {
         // 内存那两个数走 CPU-X 的口径：百分比和剩余容量都是「只有完全空闲的页才算数」
         // （`strictUsage` + `free`）。不这么统一的话，93% 配一个 199 MB 会读不通 ——
         // 3 GB 的机器剩 199 MB 对应 93%、剩 87 MB 对应 97%，两个数必须出自同一套算法。
+        //
+        // 中心第二行**只放容量数字**，不带「剩余 / Free」前缀 —— 用户反馈那两个字在
+        // 内环里太占地方（为了塞下它，整行曾被 `adjustsFontSizeToFitWidth` 压到 0.8 倍
+        // 以下）。`Formatting.memory` 出的是「1.2GB」这种紧凑写法，正是为这种窄处写的。
         ringView.apply(cpuFraction: hardware.cpu.usage,
                        ramFraction: hardware.memory.strictUsage,
-                       ramDetail: "\(Strings.text("Free")) \(Formatting.bytes(hardware.memory.free))",
+                       ramDetail: Formatting.memory(hardware.memory.free),
                        cpuPercentText: "\(Formatting.number(hardware.cpu.usage * 100))%")
 
         // 第 2 格：电芯温度。
@@ -177,6 +181,10 @@ final class TodayWidgetView: UIView {
         // 读数来自守护进程（`BatteryInfo.temperature`，也就是电源页「电池」面板里
         // 那个 Temperature）—— 负一屏自己读不到：iOS 不允许 appex 访问 IOReport，
         // 而电池温度那一路要的正是它。
+        //
+        // **配色走 `TodayStyle.temperature` 的暖色阶梯，与本次「次要文字改用 muted」
+        // 无关** —— 用户明确要求这一格的数值颜色保持原样（29~33 °C 落在 `cool` 档，
+        // 显示为绿 0x0E9B57）。推送脚本里有断言钉住这五级色阶，改 muted 不会波及它。
         let temperature = battery?.temperature
         temperatureCell.apply(caption: Strings.text("Cell temperature"),
                               value: temperature.map { String(format: "%.1f", $0) } ?? "—",
@@ -206,23 +214,25 @@ final class TodayWidgetView: UIView {
 /// **2026-10-13 去掉了原来的第三层「副标签」。** 它当时只为「输入功率」四个字存在 ——
 /// 而那句话说的事看标题就知道。
 ///
-/// 两层各自固定字号（12 / 12 / 11，即改版前的尺寸），且读数用等宽数字 ——
-/// 每秒刷新时宽度不会跳动。
+/// 两层各自固定字号（caption 12 medium ／ 读数 12 semibold ／ 单位 9 medium），
+/// 读数用等宽数字 —— 每秒刷新时宽度不会跳动。
 final class TodayCellView: UIView {
 
     private let captionLabel = UILabel()
     private let valueLabel = UILabel()
     private let unitLabel = UILabel()
 
-    // 字号集中在这里。`init` 里设一次，`apply` 里拼 attributedText 时还要再用一次 ——
-    // 两处各写一遍迟早会写岔。
+    // 字号与字重**对齐主 App 的功率圆环**（`Sources/Shared/Design/PowerRing.swift`
+    // 的 `centre`）：读数 semibold + 等宽数字（主程序 `mwReadout` 也是这个组合），
+    // 其余文字一律 **medium** —— 主程序那边 caption 是 `AppFont.text(12, .medium)`，
+    // **不是** semibold；负一屏原来用 semibold，摆在一起 caption 的份量比读数还重。
+    // 单位也要明显小一档（功率圆环是 52 : 20），这里取 12 : 9。
     //
-    // **2026-10-13 改回 12 / 12 / 11。** 当天先按「让读数有分量」把数值放大到 26pt，
-    // 真机上四格并排时那个尺寸把这一屏压得站不住（数值比双圆环还抢眼），用户要求
-    // 恢复之前的字号。电芯温度那格用的是同一组字号，四格因此天然一致。
-    private static let captionFont = TodayFont.text(12, weight: .semibold)
-    private static let valueFont = TodayFont.mono(12, weight: .semibold)
-    private static let unitFont = TodayFont.text(11, weight: .medium)
+    // **2026-10-13 改回 12 / 12 / 9。** 数值 26pt 那版在真机上过重，用户要求恢复；
+    // 单位 11 → 9 是为了让「大读数 + 小单位」的层级和主程序一致。
+    private static let captionFont = TodayFont.text(12, weight: .medium)
+    private static let valueFont = TodayFont.readout(12, weight: .semibold)
+    private static let unitFont = TodayFont.text(9, weight: .medium)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -292,10 +302,10 @@ final class TodayStorageView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        captionLabel.font = TodayFont.text(12, weight: .semibold)
+        captionLabel.font = TodayFont.text(12, weight: .medium)
         captionLabel.textColor = TodayStyle.muted
 
-        detailLabel.font = TodayFont.mono(12)
+        detailLabel.font = TodayFont.readout(12)
         detailLabel.textColor = TodayStyle.muted
         detailLabel.textAlignment = .right
 
@@ -353,7 +363,7 @@ final class TodayStorageView: UIView {
             ? Strings.text("Storage").uppercased()
             : Strings.text("Storage")
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
-            .font: TodayFont.text(12, weight: .semibold),
+            .font: TodayFont.text(12, weight: .medium),
             .foregroundColor: TodayStyle.muted,
             .kern: TodayFont.captionTracking,
         ])

@@ -87,29 +87,37 @@ final class TodayRingView: UIView {
         outerProgress.lineWidth = Self.outerLineWidth
         innerProgress.lineWidth = Self.innerLineWidth
 
-        // 字号：**环是主体，文字只能占内环里那点空间**。
+        // 字号：**环是主体，文字只能是环内的配角**。
         //
-        // 0.0.42 的预览图被指出「数值与文案太大、超出圆环」，就是这里定的比例不对 ——
-        // 13 / 8 / 8 是照着「内环直径约 47pt」反推的：`96%` 在 13pt 等宽下约 26pt，
-        // 「剩余 1.2 GB」在 8pt 下约 53pt（超出 47pt 时由 `adjustsFontSizeToFitWidth`
-        // 收一档到约 0.9），`CPU 96%` 在 8pt 下约 30pt —— 三者都不会压到环的笔画。
-        centerValueLabel.font = TodayFont.mono(13, weight: .semibold)
+        // 比例调了三轮：0.0.42 是 15 / 9 / 9（被指出「太大、超出圆环」），0.0.43 先收到
+        // 13 / 8 / 8、再收到 11 / 7 / 7，切口标签仍被要求「继续缩小」→ 现在定在
+        // **11 / 7 / 6**：
+        //   · 「96%」11pt 等宽约 20pt，内环直径约 47pt，占四成；
+        //   · 「1.2GB」7pt 约 22pt（已去掉「剩余」前缀）；
+        //   · 切口标签 6pt：「CPU 96%」约 23pt、「RAM」约 14pt。
+        //
+        // **字重对齐主 App 的功率圆环**：那边只有「读数」是 semibold，caption 与单位
+        // 都是 medium（`AppFont.text(12, .medium)`）。所以这里也把两个切口标签降到
+        // medium —— 它们是标签、不是读数。
+        centerValueLabel.font = TodayFont.readout(11, weight: .semibold)
         centerValueLabel.textColor = TodayStyle.primary
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
 
-        centerDetailLabel.font = TodayFont.text(8)
+        // 第二行是纯数字 + 西文的短行（`1.2GB`），按主程序副行（`mwMono`）的规矩用
+        // **真等宽**；再往下那两个切口标签是拉丁标签，与主程序 caption 同规，用 text。
+        centerDetailLabel.font = TodayFont.mono(7)
         centerDetailLabel.textColor = TodayStyle.muted
         centerDetailLabel.textAlignment = .center
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        ramLabel.font = TodayFont.text(8, weight: .semibold)
+        ramLabel.font = TodayFont.text(6, weight: .medium)
         ramLabel.textColor = TodayStyle.ramRing
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(8, weight: .semibold)
+        cpuLabel.font = TodayFont.text(6, weight: .medium)
         cpuLabel.textColor = TodayStyle.cpuRing
         cpuLabel.textAlignment = .center
 
@@ -123,18 +131,15 @@ final class TodayRingView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // 圆环水平居中；竖直方向让「环顶 → 标签底」这段内容整体落在视图正中。
-        //
-        // 高度由 `TodayWidgetView` 给（92pt，比环自身需要的高），若还按 `available`
-        // 定位，多出来的空间会全堆在标签下方，肉眼就是整个环偏上。
-        // 推导：内容顶 = c − (R + 线宽/2)，内容底 = c + (R + 线宽/2) + 标签框高/2，
-        // 两者中点 = c + 标签框高/4 = c + 2.5 —— 令它等于 midY，即得 c = midY − 2.5。
+        // 圆环水平居中，竖直方向也居中 —— 两个切口标签已经移到环内，内容就是环本身，
+        // 不再需要像早先那样为环下方的标签预留偏移。
         let lineWidths = Self.outerLineWidth + Self.innerLineWidth
+        // 四条边各留 20pt 余量后取正圆：`available` 既是环的可用直径，也是它到边界的距离。
         let available = min(bounds.width, bounds.height - 20)
         let outerRadius = max(12, (available - lineWidths - Self.ringGap) / 2)
         let innerRadius = max(6, outerRadius - Self.outerLineWidth / 2 - Self.ringGap - Self.innerLineWidth / 2)
 
-        let center = CGPoint(x: bounds.midX, y: bounds.midY - 2.5)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
 
         // 轨道：从 7 点沿**顺时针**扫满 300°，缺口自然落在正下方（起点 7 点、终点 5 点）。
         outerTrack.path = Self.arcPath(center: center, radius: outerRadius,
@@ -154,9 +159,9 @@ final class TodayRingView: UIView {
     }
 
     private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat) {
-        // 行高跟着字号走（13pt 等宽约 16pt 行高，8pt 约 10pt 行高）。
-        let valueHeight: CGFloat = 16
-        let detailHeight: CGFloat = 10
+        // 行高跟着字号走（11pt 等宽约 14pt 行高，7pt 约 9pt 行高）。
+        let valueHeight: CGFloat = 14
+        let detailHeight: CGFloat = 9
 
         // 中心两行以**内环圆心**为基准居中：先算两行的总高，再把它对称地摆到圆心两侧。
         let total = valueHeight + detailHeight
@@ -169,19 +174,25 @@ final class TodayRingView: UIView {
                                          width: innerRadius * 2,
                                          height: detailHeight)
 
-        // 切口标签：以各自环的断口中心为准，水平居中。
+        // 切口标签：**落在两个断点（7 点、5 点）连线的中点上**，而不是贴在弧的外沿。
         //
-        // 10pt 框高与 `ringGap = 5` 配对：两个标签中心相距「两条环中心线的径向差」
-        // = 2.5 + 5 + 2 = 9.5pt，框高再大一点就会叠在一起 —— 0.0.41 用 12pt 框压进
-        // 8.5pt 的间隙里，实机上 `RAM` 与 `CPU xx%` 叠成了一团。
+        // 贴外沿时文字紧挨着弧最粗的那一圈，看着往外坠；移到断点连线中点，视觉上正好
+        // 落进缺口的中央。该点的垂直偏移 = R × sin60° —— 7 点与 5 点分别在 210° / 150°
+        // 方向，两个方向上的余弦相消、正弦同号，中点就落在圆心正下方 0.866R 处。
+        //
+        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) = 8.2pt，框高取 8pt
+        // 正好不叠（0.0.41 曾用 12pt 框压进 8.5pt 的间隙，实机上叠成了一团）。
+        let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 52
-        let labelHeight: CGFloat = 10
-        let cutY = center.y + outerRadius + Self.outerLineWidth / 2 - labelHeight / 2
-        let innerCutY = center.y + innerRadius + Self.innerLineWidth / 2 - labelHeight / 2
+        let labelHeight: CGFloat = 8
+        let cutCentreY = center.y + outerRadius * sin60
+        let innerCutCentreY = center.y + innerRadius * sin60
 
-        ramLabel.frame = CGRect(x: center.x - labelWidth / 2, y: innerCutY,
+        ramLabel.frame = CGRect(x: center.x - labelWidth / 2,
+                                y: innerCutCentreY - labelHeight / 2,
                                 width: labelWidth, height: labelHeight)
-        cpuLabel.frame = CGRect(x: center.x - labelWidth / 2, y: cutY,
+        cpuLabel.frame = CGRect(x: center.x - labelWidth / 2,
+                                y: cutCentreY - labelHeight / 2,
                                 width: labelWidth, height: labelHeight)
     }
 
@@ -190,7 +201,7 @@ final class TodayRingView: UIView {
     /// - Parameters:
     ///   - cpuFraction: 0…1，外环。
     ///   - ramFraction: 0…1，内环。
-    ///   - ramDetail: 环内第二行，例如「剩余 1.2 GB」。
+    ///   - ramDetail: 环内第二行，**只放容量数字**，例如「1.2GB」（不带「剩余」前缀）。
     ///   - cpuPercentText: 外环标签里的数值部分，例如「17%」。
     func apply(cpuFraction: Double, ramFraction: Double,
                ramDetail: String, cpuPercentText: String) {

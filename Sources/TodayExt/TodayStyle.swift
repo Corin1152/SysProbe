@@ -29,7 +29,12 @@ nonisolated enum TodayStyle {
     static let danger = dynamic(0xC5342B, 0xFF6058)
     /// 无线 / MagSafe。
     static let wireless = dynamic(0x6B4EE6, 0xB49BFF)
-    static let muted = dynamic(0x3E4757, 0x9AA3B5)
+    /// 次要文字（caption / 单位 / 副行）。
+    ///
+    /// **与主 App 的 `Theme.mwMuted` 同值** —— 负一屏原来用的是 0x3E4757（偏蓝黑），
+    /// 两屏放在一起能看出不是一个调。颜色是「风格一致」里最先被眼睛抓到的一项，
+    /// 字体族、字重对上了、颜色不对，看着仍然像两个 App。
+    static let muted = dynamic(0x60687A, 0x8C93A6)
     static let card = dynamic(0xFFFFFF, 0x14171F)
     static let stroke = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.08)
     /// 轨道底色（进度条、环的未填充部分）。
@@ -107,6 +112,8 @@ nonisolated extension UIColor {
 /// `UserDefaults`，见 `TodayViewController.viewDidLoad`）。
 nonisolated enum TodayFont {
 
+    /// 正文、标题、标签。**与主程序 `AppFont.text` 同构**：系统字体，中文下走
+    /// SF Pro + 苹方 SC 那条字形链（不请求 `.rounded`），英文界面才切圆体。
     static func text(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
         let base = UIFont.systemFont(ofSize: size, weight: weight)
         guard AppLanguage.current.prefersRoundedDesign,
@@ -114,9 +121,25 @@ nonisolated enum TodayFont {
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    /// 等宽数字。读数用它，免得每秒刷新时数字宽度跳动。
-    static func mono(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+    /// 读数：**系统字体 + 等宽数字**，对应主程序的 `mwReadout`。
+    ///
+    /// `mwReadout` = `AppFont.text(...)` + `.monospacedDigit()`；UIKit 里的等价构造
+    /// 就是 `monospacedDigitSystemFont` —— 字形仍走 SF Pro / 苹方，只把数字换成等宽
+    /// 变体，所以每秒刷新时数字宽度不跳。
+    ///
+    /// **这是原来那个 `mono(_:)` 改的名。** 旧名字与主程序的 `AppFont.mono`（真等宽）
+    /// 撞名却是两回事，读代码的人极易用错 —— 拿真等宽去排读数，读数会变成代码字体的
+    /// 样子，而这正是两边字体"看着不是一个调"的常见来源。
+    static func readout(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
         UIFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+    }
+
+    /// **真等宽（SF Mono）**，对应主程序的 `AppFont.mono` / `mwMono`。
+    ///
+    /// 只用在**纯数字或西文**的短行上（负一屏目前只有环内那行 `1.2GB`）——
+    /// SF Mono 没有中文字形，汉字会掉回苹方、与同一行的西文对不齐。
+    static func mono(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+        UIFont.monospacedSystemFont(ofSize: size, weight: weight)
     }
 
     /// 微标签的字距。汉字没有大小写概念，也不需要拉丁那套字距。
