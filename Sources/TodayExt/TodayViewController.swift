@@ -52,39 +52,25 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 收起态的高度下限。数值对齐 CPU-X 的组件（约 118pt）。
     private let minimumHeight: CGFloat = 118
 
-    /// 组件顶部那行（App 图标 + 名称 + 展开箭头）由**系统**绘制；它占的高度既不在
-    /// `systemLayoutSizeFitting` 的结果里，也不是我们报给系统的 `preferredContentSize`
-    /// 的「内容部分」—— `preferredContentSize.height` 是**含那一行**的总高度。
+    /// **系统在组件顶部画的那一行**（App 图标 + 名称 + 展开箭头）的高度估算。
     ///
-    /// 少算这段补偿，内容就会被组件底边裁掉。**0.0.41 实机上「存储」那一条连同
-    /// 「已用 … · 剩余 …」被切掉一半，就是这么来的**：内容自然高 119pt、我们报了
-    /// 120pt，系统再扣掉头部，内容区就只剩 99pt。
+    /// `preferredContentSize.height` 是**含那一行**的总高度，所以算组件总高时必须加上它。
     ///
     /// 取值依据是两次实机反推，互相印证：
     ///   · 0.0.40：内容 92pt、报 118pt → 显示完整且略有富余，说明头部 ≤ 26pt；
     ///   · 0.0.41：内容 119pt、报 120pt → 被裁约 20pt，说明头部 ≈ 21pt。
     /// 取 24pt，落在两者之间偏保守一侧。
     ///
-    /// **定义在 `TodayWidgetView` 上**（那里是唯一真值来源）：本类用它算组件总高，
-    /// 那边用它把内容上移半个头部（`contentLift`）—— 两处必须同源，否则内容会在
-    /// 组件里偏上或偏下。
+    /// **定义在 `TodayWidgetView` 上**（那里是唯一真值来源）—— 两边必须同源，
+    /// 否则组件总高与实际布局对不上。
     private static var systemHeaderHeight: CGFloat { TodayWidgetView.systemHeaderHeight }
 
-    /// 内容区上下各留的呼吸空间。
+    /// 内容在组件内的上 / 下留白（**不等**，理由见 `TodayWidgetView` 里那两个常量）。
     ///
-    /// 组件高度必须比「内容 + 系统头部」**再多出这一段**：多出来的部分由
-    /// `TodayWidgetView` 的 `centerY` 约束平均分到上下两端；少掉它，最下面那条存储
-    /// 进度条就会紧贴组件底边。
-    ///
-    /// **8 → 10（0.0.46 实机反馈「存储的进度条不要贴边」）。** 8pt 在实机上仍显贴边
-    /// —— 因为存储条还额外被那一列的高度差顶掉了约 7pt（`side` 高 = 环外沿直径
-    /// 105.5pt，比环格的 120pt 矮，垂直居中后其底边距环格底边还有约 7pt，这段是
-    /// 用不到的）。取 10 之后下方实际余量约 17pt。
-    ///
-    /// ⚠ **不能随手再往上加**：组件总高 = 内容 120 + 头部 24 + 留白 ×2，每加 1pt 都在
-    /// 逼近系统的展开态上限；0.0.44/0.0.45 报到 180pt 时**超限被静默 clamp**，环反而
-    /// 缩到 46pt（不报错、不打日志）。现在的 164pt 只比已验证可用的 160pt 多 4pt。
-    private static let contentBreathing: CGFloat = 10
+    /// 它们同时被 `TodayWidgetView` 用作布局约束、被本类用来算组件总高 ——
+    /// 与系统头部同理，只留一份真值。
+    private static var contentTopInset: CGFloat { TodayWidgetView.contentTopInset }
+    private static var contentBottomInset: CGFloat { TodayWidgetView.contentBottomInset }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -249,6 +235,14 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
 
     // MARK: 尺寸
 
+    /// 系统在形态切换回调里给的最大高度（nil = 还没拿到）。
+    ///
+    /// **这是这份代码里唯一「不用猜」的高度信息** —— 系统会主动告诉能给我们多大。
+    /// 我们报的 `preferredContentSize.height` 必须夹在它之内，否则系统会**静默 clamp**：
+    /// 视图被压矮 → 内部那条「环格高度」的约束被打破 → 环缩多少完全不可控
+    /// （0.0.44~0.0.47 每版环的大小都不一样，就是没夹住的结果）。
+    private var systemMaximumHeight: CGFloat?
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updatePreferredHeight()
@@ -256,25 +250,27 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
 
     /// 按内容的自然高度定展开态的高度。
     ///
-    /// `maximumHeight` 是系统在形态切换回调里给的上限；平时不传，即不设限。
+    /// `maximumHeight` 是系统在形态切换回调里给的上限；平时不传，就用记住的那个。
     ///
     /// 只有变化超过半点时才会写回，否则会自己触发一轮新的布局，形成死循环。
-    private func updatePreferredHeight(maximumHeight: CGFloat = .greatestFiniteMagnitude) {
+    private func updatePreferredHeight(maximumHeight: CGFloat? = nil) {
         guard let widget else { return }
         let width = view.bounds.width
         guard width > 1 else { return }
+
+        let limit = maximumHeight ?? systemMaximumHeight ?? .greatestFiniteMagnitude
 
         let fitted = widget.systemLayoutSizeFitting(
             CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-        // 组件总高 = 内容自然高 + 系统头部 + 上下留白。
+        // 组件总高 = 内容自然高 + 系统头部 + 上下留白（上下**不等**：上 2 / 下 10）。
         //   · 头部：`preferredContentSize.height` 是**含它**的总高，少算会被底边裁；
-        //   · 留白：给内容上下各匀一截，否则存储条那条进度条会贴着组件底边。
+        //   · 留白：上小是为了把内容往上顶（头部只占上方）、下大是为了不贴底边。
         let wanted = max(minimumHeight,
                          (fitted.height + Self.systemHeaderHeight
-                          + Self.contentBreathing * 2).rounded(.up))
-        let height = min(wanted, maximumHeight)
+                          + Self.contentTopInset + Self.contentBottomInset).rounded(.up))
+        let height = min(wanted, limit)
         guard preferredContentSize.width != width
                 || abs(preferredContentSize.height - height) > 0.5 else { return }
         preferredContentSize = CGSize(width: width, height: height)
@@ -289,15 +285,24 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         completionHandler(.newData)
     }
 
-    /// 高度已经按内容算好（见 `updatePreferredHeight`），但**这里仍要重设一次**：
-    /// 系统在形态切换时会把 `preferredContentSize` 归到它给的上限（收起态那条很小），
-    /// 不重设的话展开态也会被按那个高度裁掉内容。
+    /// 系统告诉我们「这个形态下最大能给多大」。
+    ///
+    /// **只认展开态（`.expanded`）的上限。** 收起态也会回调一次，给的值很小
+    /// （约一行文字的高度）—— 记下它的话，之后每次算高度都被那个小值夹住，
+    /// **展开后的组件也跟着矮一截、环跟着变小**。这正是 0.0.44~0.0.47
+    /// 「环每版大小都不一样、总是明显小于设计值」的**上游原因**：
+    /// 设计 105.5pt 的环，真机上只画到 72~86pt。
+    ///
+    /// 接住展开态上限之后，`preferredContentSize` 就能报到系统真正允许的值，
+    /// 环也就能长到它该有的尺寸（环格 = 组件高 − 头部 − 留白，环格外沿 = 环格 − 14.5）。
     ///
     /// 回调由系统在主线程上发起，所以 `assumeIsolated` 是安全的；改成 `Task { @MainActor }`
     /// 反而会因为捕获非 Sendable 的 `self` 而编译不过。
     nonisolated func widgetActiveDisplayModeDidChange(_ activeDisplayMode: NCWidgetDisplayMode,
                                                       withMaximumSize maxSize: CGSize) {
         MainActor.assumeIsolated {
+            guard activeDisplayMode == .expanded else { return }
+            systemMaximumHeight = maxSize.height
             updatePreferredHeight(maximumHeight: maxSize.height)
         }
     }

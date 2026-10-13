@@ -31,7 +31,16 @@ import UIKit
 /// ——它们一个是**从充电器进来**的功率、一个是**真正进到电芯**的功率，光写名词看不出
 /// 这层区别；存储那行把「剩余」两字换成了百分比，容量与比例一次看全。
 ///
-/// 组件总高约 164pt（环格 120 + 系统头部 24 + 上下留白各 10）。
+/// ## 尺寸
+///
+/// **环格是自适应的**：`ringView.height = row.height`，而 `row.height` = 组件高度 −
+/// 上下留白（2 / 8）。组件高度由 `preferredContentSize` 报给系统，并且**夹在系统给的
+/// 上限之内**（`TodayViewController.systemMaximumHeight`，来自
+/// `widgetActiveDisplayModeDidChange`）。
+///
+/// 换句话说：**环的大小 = 系统允许的组件最大高度 − 系统头部 − 留白 − 14.5**。
+/// 想让它更大，只能从留白里抠（见那两个常量的注释）；把环格写成固定值是行不通的 ——
+/// 高度不够时那条约束会被 Auto Layout 打破，环缩多少完全随机（0.0.46~0.0.47 就是这样）。
 ///
 /// ## 颜色（用户要求，2026-10-13）
 ///
@@ -66,10 +75,17 @@ import UIKit
 ///      「CPU 12%」要 44pt，超了；→ 标签降到 **7pt**（约 34pt）；
 ///   ② 右列**行距一大一小**、第 3/4 行挤在一起 —— `side` 的 `.equalSpacing` 因为两个
 ///      子视图自身高度未定而失效；→ 改成上下贴紧、高度确定；
-///   ③ 存储进度条**贴着组件底边** —— 留白 8pt 不够（存储条自己还被列高差顶掉约 7pt）；
-///      → `contentBreathing` 提到 10（总高 160 → 164pt，仍在系统上限之内）。
-///   同一次还确认**环不能再大**：环格高度直接等于组件总高减去头部与留白，上限卡在
-///   系统的展开态高度上（一超就静默 clamp，环反而缩小）。
+///   ③ 存储进度条**贴着组件底边** —— 留白 8pt 不够（存储条自己还被列高差顶掉约 7pt）。
+/// · **0.0.47** 实机：切口标签仍压弧（环比设计小，缺口能给的宽度也跟着小）、
+///   右列文案调整；用户还指出内容**整体偏下**。
+/// · **0.0.48**（本版）—— 把「环每版大小都不一样」这件事从根上解决：
+///   `ringView.height` 由**固定 120pt** 改成**吃满行高**（`= row.height`），
+///   固定的「期望值」降级成 750 优先级、只用于算组件想要多高。
+///   原因：组件高度受系统上限压着，高度不够时那条 required 的固定高度与
+///   「内容不得超出组件」冲突，**Auto Layout 打破哪一条是不确定的** ——
+///   0.0.46 环外沿约 86pt、0.0.47 约 72pt，设计的 105.5pt 从没出现过，
+///   而且没有任何报错。同批还有：字号随环的尺寸等比缩放、上下留白改成
+///   不对称的 2 / 8（比居中少一层换算，也顺手把内容顶回中间）。
 ///
 /// 频率**不再显示**：iOS 不允许 appex 访问 IOReport（实测 `IOReportCopyAllChannels`
 /// 在扩展里返回空通道集），而主 App 被挂起时也供不了数 —— 与其显示一个常年「—」，
@@ -94,56 +110,62 @@ final class TodayWidgetView: UIView {
     /// 圆环那一列占整行宽度的比例。
     ///
     /// **排列方式参照 CPU-X 的负一屏组件**：圆环独占左列，右侧一列放四行读数。
-    /// 0.40（iPhone X 上约 132pt）配 `ringHeight = 120` → 可用直径 `min(132, 120) = 120`
-    /// → 外沿直径约 105.5pt（环因此是**受高度限制**的，加宽这一列并不会让环更大）。
+    /// 0.40（iPhone X 上约 132pt）—— 环真正卡住的是**高度**（见 `ringPreferredHeight`），
+    /// 所以这一列再宽也不会让环更大，反而会挤掉右列。
     ///
     /// 提醒：这一列的宽度约束**必须与右列一起写成 required**（见 `build()`）。
     /// 0.0.43 曾只给它一条 750 优先级的约束，被右列的 compression resistance 顶掉，
     /// 实机上环只画到约 39pt（设计值 71pt）。
     private static let ringWidthRatio: CGFloat = 0.40
 
-    /// 圆环那一列的高度，也是整块内容的高度。
+    /// 环格**期望**的高度 —— 只用来算「组件需要多高」，不是硬约束。
     ///
-    /// **这个值受系统给的展开态上限约束，不能随便加。** 0.0.44/0.0.45 取过 140pt，
-    /// 组件总高随之到 180pt —— 实机上高度被系统 clamp，`ringView` 的 140pt 约束被打破，
-    /// 环只画到约 46pt（设计值 105.5pt）。0.0.43 的 163pt 总高是实测可用的，
-    /// 所以这里保持 120pt（配 `contentBreathing = 10` → 总高 164pt），留出安全余量。
+    /// ## 为什么不能写成硬约束（0.0.44 ~ 0.0.47 连环踩的坑）
     ///
-    /// 也就是说：**环的大小被组件总高锁死**（总高 − 头部 − 上下留白 = 这一列的高度），
-    /// 想让它再大只能抬高总高，而超限的代价是静默缩小 —— 收益小、风险大。
-    private static let ringHeight: CGFloat = 120
+    /// 组件总高 = 环格 + 系统头部 + 上下留白，而**系统对 `preferredContentSize.height`
+    /// 有上限**（实测约 130pt）。一旦我们报的总高超过它：
+    ///
+    ///   1. 系统把高度压下来 → 本视图变矮 → 留给 row 的高度不够；
+    ///   2. 那条 `ringView.height = 120` 的 required 约束与「内容不得超出组件」的约束
+    ///      冲突，**Auto Layout 只好打破一条 —— 打破哪一条是不确定的**；
+    ///   3. 结果就是**每一版环的大小都不一样**，而且没有任何报错（0.0.47 实机环外沿
+    ///      只有约 72pt，0.0.46 那张约 86pt，设计的 105.5pt 从未真正出现过）。
+    ///
+    /// 现在改成：`ringView.height = row.height`（吃满行高，见 `build()`），
+    /// **本常量降级成 750 优先级的「期望值」** —— 只在 `systemLayoutSizeFitting`
+    /// 算「组件想多高」时起作用；真机上可用高度不够时它自动让位，不会再有冲突。
+    private static let ringPreferredHeight: CGFloat = 120
 
-    /// 圆环的**外沿直径**（含线宽），用来把右侧四行的总高对齐到环上（用户要求）。
+    /// 环**外沿直径**比环格高度小多少。
     ///
-    /// 推导（线宽收细后重算）：`available = min(列宽约 125, 列高 120) = 120`
-    /// → `outerRadius = (120 − 10 − 10) / 2 = 50`（10 是两条线宽之和，10 是环间距）
-    /// → 外沿直径 = `2 × 50 + 5.5 = 105.5`。
-    private static let ringDiameter: CGFloat = 105.5
+    /// 从 `TodayRingView` 的几何反推：`available = min(列宽, 环格高)`，
+    /// `outerRadius = (available − 线宽和 − 环间距) / 2 = (available − 20) / 2`，
+    /// 外沿直径 = `2 × outerRadius + 外线宽 = available − 14.5`
+    /// （5.5 + 4.5 是两条线宽，10 是环间距）。右列四行的总高要跟**环外沿**对齐，
+    /// 所以它 = 环格高 − 14.5。
+    private static let ringEdgeInset: CGFloat = 14.5
 
     /// **系统在组件顶部画的那一行**（App 图标 + 名称 + 展开箭头）的高度估算。
     ///
     /// 这里是**唯一真值来源** —— `TodayViewController` 用它算组件总高
-    /// （`preferredContentSize` 是**含这一行**的总高），本视图用它换算内容该上移多少。
-    /// 取值依据见 `TodayViewController` 里那段反推（两次实机互相印证，约 21~26pt）。
+    /// （`preferredContentSize` 是**含这一行**的总高）。取值依据见那边的反推
+    /// （两次实机互相印证，约 21~26pt）。
     static let systemHeaderHeight: CGFloat = 24
 
-    /// 内容整体**上移**的量，抵消「系统头部把内容往下挤」的那半个头部。
+    /// 内容在组件内的上 / 下留白。
     ///
-    /// `preferredContentSize.height` 含系统画的那一行，但本视图覆盖的是**头部以下
-    /// 那一截** —— 于是「在 view 里居中」等于「在整块组件里偏下约 `系统头部/2`」。
-    /// 用户 0.0.47 实机反馈「看着有点偏下方了」，就是这个。
+    /// 两者**刻意不等**，各有一个理由：
+    ///   · **上留白取小（2pt）**：`preferredContentSize.height` 含系统头部，而头部只占
+    ///     上方 —— 内容整体本来就偏下，上留白小一点正好把它顶回去（这是 0.0.47
+    ///     那次 `contentLift` 想干的事，现在直接用不对称留白表达，少一层换算）；
+    ///   · **下留白留 8pt**：存储进度条不能贴着组件底边（用户 0.0.46 反馈）。
     ///
-    /// 推导（要让组件内上方空白 = 下方空白）。注意**看的是视觉内容的边**，不是 row 的
-    /// 边：环格 120pt 而环外沿只有 105.5pt，右列同理，各自上下还空着 `7.25pt`
-    /// （`(120 − 105.5)/2`），所以
-    ///   · 组件内**上方**空白 = 头部 24 + (10 − lift) + 7.25
-    ///   · 组件内**下方**空白 = (10 + lift) + 7.25
-    ///   · 令两者相等 → `lift = 12`。
-    ///
-    /// **但取 10**：`lift` 一旦超过 `contentBreathing`（10），row 的顶边就会越过本视图
-    /// 顶边，撞上 `row.top ≥ top` 那条防溢出约束。取 10 时组件内上方 31.25pt、
-    /// 下方 27.25pt —— 差 4pt，肉眼已看不出偏斜，而约束恰好卡在边界（10 − 10 = 0）不冲突。
-    private static let contentLift: CGFloat = 10
+    /// ⚠ **组件高度是定量的，留白与环严格此消彼长**：系统给的最大高度（见
+    /// `TodayViewController.systemMaximumHeight`）减去系统头部，剩下的全部由
+    /// 「留白 + 环格」分掉，每多 1pt 留白环就少 1pt。所以这两个值已经压到
+    /// 「刚好看不出贴边」的下限（0.0.47 那版上 2 下 10，用户反馈环又小了 —— 这里收回 2pt 给环）。
+    static let contentTopInset: CGFloat = 2
+    static let contentBottomInset: CGFloat = 8
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -206,29 +228,42 @@ final class TodayWidgetView: UIView {
             side.widthAnchor.constraint(equalTo: row.widthAnchor,
                                         multiplier: 1 - Self.ringWidthRatio,
                                         constant: -row.spacing),
-            // 右侧四行的总高对齐到环的外径（用户要求）。
-            side.heightAnchor.constraint(equalToConstant: Self.ringDiameter),
-            ringView.heightAnchor.constraint(equalToConstant: Self.ringHeight),
+            // **环格吃满行高**（行高 = 组件高 − 上下留白），**不再写死**。
+            //
+            // 写死高度是 0.0.44~0.0.47 连环踩的坑：组件总高受系统上限压着，
+            // 高度不够时那条 required 的固定高度与「内容不得超出组件」冲突，
+            // Auto Layout 打破哪一条不确定 —— 实机上就是每版环的大小都不一样
+            // （0.0.46 约 86pt、0.0.47 约 72pt，设计的 105.5pt 从没出现过）。
+            // 改成吃满行高后没有冲突，环拿到的是**可用空间的上限**。
+            ringView.heightAnchor.constraint(equalTo: row.heightAnchor),
+            // 右侧四行总高 = **环外沿直径** = 环格高 − 14.5（用户要求）。
+            side.heightAnchor.constraint(equalTo: ringView.heightAnchor,
+                                         constant: -Self.ringEdgeInset),
         ])
+        // 「期望高度」降级成 750：只在 `systemLayoutSizeFitting` 算「组件想多高」时
+        // 起作用（环是纯自绘、没有固有高度，否则这里算出来是 0）。真机上可用高度
+        // 不够时它自动让位，不会把布局撑破。见 `ringPreferredHeight` 的注释。
+        let preferredRingHeight = ringView.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: Self.ringPreferredHeight)
+        preferredRingHeight.priority = .defaultHigh
+        preferredRingHeight.isActive = true
 
         addSubview(row)
 
-        // 整块内容**垂直居中**，但要往上提 `contentLift`。
+        // 内容按**不对称留白**定位：上紧下松。
         //
-        // 组件总高 = 内容 + 系统头部 + 上下留白，多出来的部分由 `centerY` 平均分到
-        // 上下两端；偏移那一截是为了抵消「头部只占上方、却要从总高里扣掉」——
-        // 否则内容在整块组件里会偏下约半个头部（用户 0.0.47 实机反馈的观感）。
-        // 推导见 `contentLift` 的注释。
+        // 不用 `centerY` 居中，是因为组件总高含系统头部（只占上方）—— 居中的话内容会
+        // 整体偏下（用户 0.0.47 反馈「看着有点偏下方」）。上 2 / 下 10 直接把这件事
+        // 表达在约束里，比「居中再上移 X」少一层换算，也不会因为留白不够而上溢。
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: leadingAnchor,
                                          constant: Self.horizontalInset),
             row.trailingAnchor.constraint(equalTo: trailingAnchor,
                                           constant: -Self.horizontalInset),
-            row.centerYAnchor.constraint(equalTo: centerYAnchor,
-                                         constant: -Self.contentLift),
-            // 内容万一长得超过组件高度，这两个不等式保证它不会溢出到边界外。
-            row.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
-            row.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor,
+                                     constant: Self.contentTopInset),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor,
+                                        constant: -Self.contentBottomInset),
         ])
     }
 
@@ -417,9 +452,9 @@ final class TodayStorageView: UIView {
         captionLabel.textColor = TodayStyle.text
 
         detailLabel.font = TodayFont.readout(12)
-        // 「剩余 11.54 GB」是**数值**，回到 0.0.39 版的次要灰（它没有独立语义色，
-        // 存储那个量由进度条自身的颜色表达）。纯黑只留给文案。
-        detailLabel.textColor = TodayStyle.muted
+        // **纯黑**（用户 0.0.47 要求）—— 它与上面三个读数不同，不是「量」而是
+        // 「还剩多少」的说明，跟着标签一起走纯黑；存储那个量本身由进度条的颜色表达。
+        detailLabel.textColor = TodayStyle.text
         detailLabel.textAlignment = .right
         // 「剩余 11.54 GB」在右侧那一列（约 177pt）里仍可能差一点点，允许收一档 ——
         // 总好过把左边的「存储」挤掉。

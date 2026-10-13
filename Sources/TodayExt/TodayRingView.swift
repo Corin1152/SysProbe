@@ -97,19 +97,14 @@ final class TodayRingView: UIView {
         outerProgress.lineWidth = Self.outerLineWidth
         innerProgress.lineWidth = Self.innerLineWidth
 
-        // 字号：**2026-10-13 实机反馈后整组放大 1.5 倍**（11 / 7 / 6 → 16 / 10 / 9）。
+        // ── 字号：**随环的尺寸等比缩放**，见 `applyFontScale` ──
         //
-        // 比例调过三轮：0.0.42 是 15 / 9 / 9（被指出「太大、超出圆环」）→ 0.0.43 收到
-        // 13 / 8 / 8 → 11 / 7 / 7 → 6pt。但 0.0.43 装到真机上，环与文字一起显得偏小
-        // （根因见 `TodayWidgetView.ringWidthRatio` 那段：宽度约束优先级太低，环格被
-        // 后三格抢掉、环实际只画到约 39pt），用户要求**圆环及文案整体放大 50%**。
-        //   · 「96%」16pt 等宽约 29pt，内环直径约 70pt，占四成；
-        //   · 「1.2GB」10pt 约 31pt（已去掉「剩余」前缀）；
-        //   · 切口标签 9pt：「CPU 96%」约 34pt、「RAM」约 21pt。
-        //
-        // **字重沿用对齐主 App 功率圆环的那一套**：只有「读数」是 semibold，caption
-        // 与标签都是 medium（`AppFont.text(12, .medium)`）。
-        centerValueLabel.font = TodayFont.readout(16, weight: .semibold)
+        // 基准是「可用直径 120pt」（也就是 `TodayWidgetView.ringPreferredHeight`）时的
+        // **12 / 12 / 7pt**（环内两行与右侧文案同号，切口标签更小一号）。
+        // 写成固定值是不行的：环实际能拿到多大由组件高度决定，而组件高又被系统的
+        // 展开态上限压着 —— 环小的时候固定字号会把内环和缺口塞满、两个标签挤成一片。
+        applyFontScale(1)
+
         // 内环中心那个数是**内存占用率** —— 就是 0.0.39 版 `Memory` 那一格的读数，
         // 所以配色沿用那边：`loadTint` 三段（<70% 绿 / <90% 橙 / ≥90% 红）。
         // 初值取 0 档，`apply` 每来一次数据都会重设（这里是「数值」不是「文案」，
@@ -121,36 +116,58 @@ final class TodayRingView: UIView {
 
         // 第二行是纯数字 + 西文的短行（`1.2GB`），按主程序副行（`mwMono`）的规矩用
         // **真等宽**；再往下那两个切口标签是拉丁标签，与主程序 caption 同规，用 text。
-        centerDetailLabel.font = TodayFont.mono(10)
         centerDetailLabel.textColor = TodayStyle.muted
         centerDetailLabel.textAlignment = .center
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        // 切口标签：**7pt 是被缺口的可用宽度逼出来的上限**。
+        // 切口标签的宽度上限由缺口决定：缺口是 60° 扇形，标签落在两个断点连线的中点上
+        // （距圆心 `0.866R`），那一行高度上缺口给出的**水平宽度** =
+        // `2 × 0.866R × tan30° = R`，再扣掉弧端点的圆头线帽（线宽/2，左右各吃一点）。
+        //   环大时（R = 50）：可用约 44pt，「CPU 12%」7pt 约 34pt ✓ 留 10pt 余量；
+        //   环小时（R = 36）：可用约 32pt，7pt 的字就只剩 0 余量 → 所以必须跟着缩。
         //
-        // 缺口是 60° 的扇形（边界是从圆心出发、与竖直向下各成 30° 的两条射线）。
-        // 标签中心落在两个断点连线的中点上，距圆心 `0.866R = 43.3pt`；在那一行高度上，
-        // 缺口给出的**水平宽度** = `2 × 43.3 × tan30° = 50pt`。再扣掉弧端点的圆头线帽
-        // （线宽 5.5pt → 半径 2.75pt，左右各吃进一点），**实际能用的约 44pt**。
-        //
-        //   ·「CPU 12%」8 个字符，9pt 下约 44pt —— **正好等于可用宽度**，
-        //     实机上（0.0.46 截图）文字两端就压在弧和圆头上；
-        //   · 7pt 下约 34pt，留出约 10pt 余量 ✓。
-        //
-        // ⚠ 别用「把标签往外挪」来解决：半径越小，同样宽度占的角度越大，反而更挤；
+        // ⚠ 别用「把标签往外挪」来解决拥挤：半径越小，同样宽度占的角度越大，反而更挤；
         // 往外挪则直接落到环外去。
-        ramLabel.font = TodayFont.text(7, weight: .medium)
         ramLabel.textColor = TodayStyle.text
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(7, weight: .medium)
         cpuLabel.textColor = TodayStyle.text
         cpuLabel.textAlignment = .center
 
         for label in [centerValueLabel, centerDetailLabel, ramLabel, cpuLabel] {
             addSubview(label)
         }
+    }
+
+    // MARK: - 字号自适应
+
+    /// 字号基准：**环格可用直径 120pt**（= `TodayWidgetView.ringPreferredHeight`）。
+    ///
+    /// 环拿不到那么大时（组件总高被系统压下来），字号按比例缩 —
+    /// 这样「数字占内环几成、标签占缺口几成」在任何尺寸下都保持一致。
+    private static let referenceDiameter: CGFloat = 120
+    /// 缩放下限。再小字就糊了，宁可让 `adjustsFontSizeToFitWidth` 去裁。
+    private static let minimumFontScale: CGFloat = 0.7
+
+    /// 环内两行的字号 —— **与右侧的标签 / 读数同号（12pt）**（用户 0.0.48 要求）。
+    ///
+    /// 原来这两行比右侧大得多（16 / 10pt），环里那两行字重得压过整块组件；
+    /// 统一到 12pt 之后，环内环外是同一套字号，视线不会被环吸住。
+    /// 字族与字重仍分工：占用率是**读数**（等宽数字 + semibold），
+    /// 容量那行是**纯数字短行**，按主程序副行的规矩走真等宽（`mono`）。
+    private static let referenceValueSize: CGFloat = 12
+    private static let referenceDetailSize: CGFloat = 12
+
+    /// 上一次应用过的缩放，避免每帧重建字体（`layoutSubviews` 是高频回调）。
+    private var appliedFontScale: CGFloat = 0
+
+    private func applyFontScale(_ scale: CGFloat) {
+        centerValueLabel.font = TodayFont.readout(Self.referenceValueSize * scale,
+                                                  weight: .semibold)
+        centerDetailLabel.font = TodayFont.mono(Self.referenceDetailSize * scale)
+        ramLabel.font = TodayFont.text(7 * scale, weight: .medium)
+        cpuLabel.font = TodayFont.text(7 * scale, weight: .medium)
     }
 
     // MARK: - 布局
@@ -166,6 +183,13 @@ final class TodayRingView: UIView {
         let available = min(bounds.width, bounds.height)
         let outerRadius = max(12, (available - lineWidths - Self.ringGap) / 2)
         let innerRadius = max(6, outerRadius - Self.outerLineWidth / 2 - Self.ringGap - Self.innerLineWidth / 2)
+
+        // 字号跟着环的尺寸走（只在跨过阈值时才真的重建字体）。
+        let fontScale = max(Self.minimumFontScale, min(1, available / Self.referenceDiameter))
+        if abs(fontScale - appliedFontScale) > 0.02 {
+            appliedFontScale = fontScale
+            applyFontScale(fontScale)
+        }
 
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
 
@@ -183,22 +207,37 @@ final class TodayRingView: UIView {
         applyProgress(innerProgress, center: center, radius: innerRadius,
                       fraction: ramFraction, color: TodayStyle.ramRing)
 
-        layoutLabels(center: center, outerRadius: outerRadius, innerRadius: innerRadius)
+        layoutLabels(center: center, outerRadius: outerRadius, innerRadius: innerRadius,
+                     scale: appliedFontScale)
     }
 
-    private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat) {
-        // 行高跟着字号走（16pt 等宽约 21pt 行高，10pt 约 13pt 行高）。
-        let valueHeight: CGFloat = 21
-        let detailHeight: CGFloat = 13
+    private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat,
+                              scale: CGFloat) {
+        // 行高**直接用字体自己的行高**（12pt 系统字约 14.3pt）。
+        //
+        // 以前写的是估算常量（21 / 13pt，对应 16 / 10pt 字号），比字体真实行高大出一截
+        // —— 文字在框里居中后上下各留一段空白，两行相接时净间隙只剩 1.4pt，
+        // 实机上看着像贴在一起。现在框高 = 行高，两行之间的净间隙就等于下面的 `lineGap`。
+        let valueHeight = centerValueLabel.font.lineHeight
+        let detailHeight = centerDetailLabel.font.lineHeight
+        // 两行之间留一点缝（随环缩放）。
+        let lineGap = 2 * scale
 
-        // 中心两行以**内环圆心**为基准居中：先算两行的总高，再把它对称地摆到圆心两侧。
-        let total = valueHeight + detailHeight
+        // **两行关于内环圆心对称**摆放。
+        //
+        // 先定两行**中心之间**的距离（两个半行高 + 行间隙），再让两个中心等距地分居
+        // 圆心上下。用这个判据而不是「把整块包围盒居中」：两行字号一旦不同
+        // （0.0.47 之前是 16 / 10pt），包围盒居中会让**大字的中心离圆心更近、
+        // 小字的中心更远**（7.5pt vs 11.5pt）—— 看着就是「上挤下空、整组往下坠」。
+        // 现在两行同号（都是 12pt），两种判据结果一致，但这里仍按中心对称写 ——
+        // 以后谁再改字号，居中也不会歪。
+        let spacing = (valueHeight + detailHeight) / 2 + lineGap
         centerValueLabel.frame = CGRect(x: center.x - innerRadius,
-                                        y: center.y - total / 2,
+                                        y: center.y - spacing / 2 - valueHeight / 2,
                                         width: innerRadius * 2,
                                         height: valueHeight)
         centerDetailLabel.frame = CGRect(x: center.x - innerRadius,
-                                         y: center.y - total / 2 + valueHeight,
+                                         y: center.y + spacing / 2 - detailHeight / 2,
                                          width: innerRadius * 2,
                                          height: detailHeight)
 
@@ -208,12 +247,13 @@ final class TodayRingView: UIView {
         // 落进缺口的中央。该点的垂直偏移 = R × sin60° —— 7 点与 5 点分别在 210° / 150°
         // 方向，两个方向上的余弦相消、正弦同号，中点就落在圆心正下方 0.866R 处。
         //
-        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) ≈ 13pt，框高取 10pt
-        // 正好不叠（0.0.41 曾用 12pt 框压进 8.5pt 的间隙，实机上叠成了一团）。
-        // 框宽 68pt 只是给文字留居中余量，**能不能放下由上面那条缺口宽度决定**。
+        // 两个标签中心相距 `0.866 × (outerRadius − innerRadius)`（= 0.866 × 半径差）：
+        // 基准尺寸下半径差 15pt → 13pt 间距，框高 10pt → 剩 3pt。**环缩小时半径差
+        // 不变（线宽与环间距都是定值），所以间距也不变，但字号小了框也矮，余量反而变大。**
+        // 框宽 68pt 只是给文字留居中余量，**能不能放下由缺口宽度决定**。
         let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 68
-        let labelHeight: CGFloat = 10
+        let labelHeight = 10 * scale
         let cutCentreY = center.y + outerRadius * sin60
         let innerCutCentreY = center.y + innerRadius * sin60
 
