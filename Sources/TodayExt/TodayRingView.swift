@@ -127,15 +127,24 @@ final class TodayRingView: UIView {
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        // 切口标签用**纯黑**：它们是文案（标明哪一圈是什么），颜色交给环本身。
-        // 原来这里上的是环色，两个标签一红一绿反而把最该被看清的一小块地方弄花了；
-        // 用户要求的「纯黑只改文案颜色」正好把标签与中心读数分到了两侧 ——
-        // 标签纯黑、读数按量变色。字重仍是 medium，层级靠字重不靠颜色。
-        ramLabel.font = TodayFont.text(9, weight: .medium)
+        // 切口标签：**7pt 是被缺口的可用宽度逼出来的上限**。
+        //
+        // 缺口是 60° 的扇形（边界是从圆心出发、与竖直向下各成 30° 的两条射线）。
+        // 标签中心落在两个断点连线的中点上，距圆心 `0.866R = 43.3pt`；在那一行高度上，
+        // 缺口给出的**水平宽度** = `2 × 43.3 × tan30° = 50pt`。再扣掉弧端点的圆头线帽
+        // （线宽 5.5pt → 半径 2.75pt，左右各吃进一点），**实际能用的约 44pt**。
+        //
+        //   ·「CPU 12%」8 个字符，9pt 下约 44pt —— **正好等于可用宽度**，
+        //     实机上（0.0.46 截图）文字两端就压在弧和圆头上；
+        //   · 7pt 下约 34pt，留出约 10pt 余量 ✓。
+        //
+        // ⚠ 别用「把标签往外挪」来解决：半径越小，同样宽度占的角度越大，反而更挤；
+        // 往外挪则直接落到环外去。
+        ramLabel.font = TodayFont.text(7, weight: .medium)
         ramLabel.textColor = TodayStyle.text
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(9, weight: .medium)
+        cpuLabel.font = TodayFont.text(7, weight: .medium)
         cpuLabel.textColor = TodayStyle.text
         cpuLabel.textAlignment = .center
 
@@ -199,11 +208,12 @@ final class TodayRingView: UIView {
         // 落进缺口的中央。该点的垂直偏移 = R × sin60° —— 7 点与 5 点分别在 210° / 150°
         // 方向，两个方向上的余弦相消、正弦同号，中点就落在圆心正下方 0.866R 处。
         //
-        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) ≈ 12.3pt，框高取 12pt
+        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) ≈ 13pt，框高取 10pt
         // 正好不叠（0.0.41 曾用 12pt 框压进 8.5pt 的间隙，实机上叠成了一团）。
+        // 框宽 68pt 只是给文字留居中余量，**能不能放下由上面那条缺口宽度决定**。
         let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 68
-        let labelHeight: CGFloat = 12
+        let labelHeight: CGFloat = 10
         let cutCentreY = center.y + outerRadius * sin60
         let innerCutCentreY = center.y + innerRadius * sin60
 

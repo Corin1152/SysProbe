@@ -180,6 +180,8 @@
 "Widget" = "Widget";
 "not bundled" = "not bundled";
 "Charger" = "Charger";
+"Charger input" = "Charger input";
+"Cell input" = "Cell input";
 "Input power" = "Input power";
 "%@ used · %@ free" = "%@ used · %@ free";
 

@@ -180,6 +180,8 @@
 "Widget" = "负一屏组件";
 "not bundled" = "未打进包";
 "Charger" = "充电器";
+"Charger input" = "充电器输入";
+"Cell input" = "输入电芯";
 "Input power" = "输入功率";
 "%@ used · %@ free" = "已用 %@ · 剩余 %@";
 

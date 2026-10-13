@@ -64,15 +64,27 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     ///   · 0.0.40：内容 92pt、报 118pt → 显示完整且略有富余，说明头部 ≤ 26pt；
     ///   · 0.0.41：内容 119pt、报 120pt → 被裁约 20pt，说明头部 ≈ 21pt。
     /// 取 24pt，落在两者之间偏保守一侧。
-    private static let systemHeaderHeight: CGFloat = 24
+    ///
+    /// **定义在 `TodayWidgetView` 上**（那里是唯一真值来源）：本类用它算组件总高，
+    /// 那边用它把内容上移半个头部（`contentLift`）—— 两处必须同源，否则内容会在
+    /// 组件里偏上或偏下。
+    private static var systemHeaderHeight: CGFloat { TodayWidgetView.systemHeaderHeight }
 
     /// 内容区上下各留的呼吸空间。
     ///
     /// 组件高度必须比「内容 + 系统头部」**再多出这一段**：多出来的部分由
     /// `TodayWidgetView` 的 `centerY` 约束平均分到上下两端；少掉它，最下面那条存储
-    /// 进度条就会紧贴组件底边（0.0.44 的效果图里正是如此）。
-    /// 0.0.39 看着舒服，也是因为它报的高度（118）比内容（约 92）多出二十几点。
-    private static let contentBreathing: CGFloat = 8
+    /// 进度条就会紧贴组件底边。
+    ///
+    /// **8 → 10（0.0.46 实机反馈「存储的进度条不要贴边」）。** 8pt 在实机上仍显贴边
+    /// —— 因为存储条还额外被那一列的高度差顶掉了约 7pt（`side` 高 = 环外沿直径
+    /// 105.5pt，比环格的 120pt 矮，垂直居中后其底边距环格底边还有约 7pt，这段是
+    /// 用不到的）。取 10 之后下方实际余量约 17pt。
+    ///
+    /// ⚠ **不能随手再往上加**：组件总高 = 内容 120 + 头部 24 + 留白 ×2，每加 1pt 都在
+    /// 逼近系统的展开态上限；0.0.44/0.0.45 报到 180pt 时**超限被静默 clamp**，环反而
+    /// 缩到 46pt（不报错、不打日志）。现在的 164pt 只比已验证可用的 160pt 多 4pt。
+    private static let contentBreathing: CGFloat = 10
 
     override func viewDidLoad() {
         super.viewDidLoad()
