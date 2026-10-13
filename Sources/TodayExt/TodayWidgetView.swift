@@ -33,9 +33,10 @@ import UIKit
 ///
 /// ## 尺寸
 ///
-/// **环格是自适应的**：它的上下边直接钉在本视图上（各留 `ringTopInset` / `ringBottomInset`
-/// = 2pt），所以 `环格高 = 组件高 − 4`。而**右列单独算** —— 它下面要留
-/// `contentBottomInset`（8pt）给存储进度条，上边比环列低。
+/// **环格是自适应的**：它的上下边直接钉在本视图上，`ringTopInset` / `ringBottomInset`
+/// 都为 0 —— 所以 `环格高 = 组件高`，**每一个点都给了环**。而**右列单独算** ——
+/// 它下面要留 `contentBottomInset`（8pt）给存储进度条，所以右列整体比环外沿高一点
+/// （两列下界不同，环的中心因此比右列略高，这是「环更大」换来的一点不齐）。
 ///
 /// 组件高度由 `preferredContentSize` 报给系统，并且**夹在系统给的上限之内**
 /// （`TodayViewController.systemMaximumHeight`，来自 `widgetActiveDisplayModeDidChange`）。
@@ -159,17 +160,21 @@ final class TodayWidgetView: UIView {
     /// （两次实机互相印证，约 21~26pt）。
     static let systemHeaderHeight: CGFloat = 24
 
-    /// 环那一列的上下留白 —— **与右列分开算**。
+    /// 环那一列的上下留白 —— **归零，把每一分空间都给环**（用户 0.0.50 要求）。
     ///
-    /// 用户 0.0.48 追问「不考虑跟右侧等高，环是否还能加大」—— 答案是能，这里就是那份空间。
-    /// 环的大小 = 组件高 − 这个留白 − `ringEdgeInset`，而组件高是系统给的、动不了。
-    /// 右列的下留白（8pt）是**为存储进度条**留的，可存储条在**右列**，环那一列的下方
-    /// 本来就是空的 —— 以前两列挤在同一个水平 stack 里、共用一套留白，那 6pt 白丢了。
+    /// 账很简单：`环格高 = 组件高 − 这两个留白`，而 `环外沿直径 = 环格高 − ringEdgeInset`。
+    /// 组件高是系统给的、动不了，所以**这里留 1pt，环就小 1pt**。
     ///
-    /// 取 2pt 而不是 0：环外沿距环格边界还有 `ringEdgeInset / 2 = 4.75pt` 的空隙，
-    /// 加上这 2pt 是 6.75pt，视觉上不贴边。
-    private static let ringTopInset: CGFloat = 2
-    private static let ringBottomInset: CGFloat = 2
+    /// ⚠ **归零不等于环会贴到组件边缘** —— 环外沿距环格边界仍有
+    /// `ringEdgeInset / 2 = 4.75pt` 的弧形空隙。那 9.5pt 是 `ringGap + 内环线宽` 的几何
+    /// 残余（环是正圆、格是矩形，外环笔画只补回自己线宽的一半），**不是留白，改不掉**。
+    /// 所以视觉上环顶离组件顶还有 4.75pt。
+    ///
+    /// 这一改让环格多拿到 4pt：**环外沿 +4pt，内外环直径同步 +4pt**
+    /// （内环直径 = 环外沿 − 25.5，两者刚性联动）。这是不动结构能拿到的最后一截空间 ——
+    /// 再往下只剩压 `ringGap` 或线宽（会挤两个切口标签 / 让环壁变细）。
+    private static let ringTopInset: CGFloat = 0
+    private static let ringBottomInset: CGFloat = 0
 
     /// 右列的下留白 —— 存储进度条不能贴组件底边（用户 0.0.46 要求）。
     ///
@@ -226,12 +231,12 @@ final class TodayWidgetView: UIView {
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             // ── 左列：环 ──
-            // **上下各只留 2pt，不与右列共用留白。**
+            // **上下留白为 0：这一列铺满本视图的整个高度。**
             //
-            // 以前两列挤在同一个水平 stack 里，于是共用一套留白（上 2 / 下 8）——
-            // 可那 8pt 是**为存储进度条**留的，而存储条在**右列**，环那一列的下方
-            // 本来就是空的。把环列解放出来，环外沿能多 6pt（约 +8%）。
-            // 这正是用户 0.0.48 问的「不考虑跟右侧等高，环是否还能加大」。
+            // 环格高 = 组件高 − 这两个留白，而组件高是系统给的、动不了 —— 所以留白就是
+            // 从环身上割肉。用户 0.0.50 要求「上下不留白、加大圆环」，这里就是那 4pt。
+            // 归零后环外沿距本视图边界仍有 `ringEdgeInset / 2 = 4.75pt` 的弧形空隙
+            // （几何必然，见那两个常量的注释），视觉上并不贴边。
             ringView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             ringView.topAnchor.constraint(equalTo: content.topAnchor,
                                           constant: Self.ringTopInset),

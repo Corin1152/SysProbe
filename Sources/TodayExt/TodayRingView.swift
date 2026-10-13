@@ -129,9 +129,9 @@ final class TodayRingView: UIView {
 
         // 切口标签的宽度上限由缺口决定：缺口是 60° 扇形，标签落在两个断点连线的中点上
         // （距圆心 `0.866R`），那一行高度上缺口给出的**水平宽度** =
-        // `2 × 0.866R × tan30° = R`，再扣掉弧端点的圆头线帽（线宽/2，左右各吃一点）。
-        //   环大时（R = 50）：可用约 44pt，「CPU 12%」7pt 约 34pt ✓ 留 10pt 余量；
-        //   环小时（R = 36）：可用约 32pt，7pt 的字就只剩 0 余量 → 所以必须跟着缩。
+        // `2 × 0.866R × tan30° = R`，再扣掉弧端点的圆头线帽（外线宽 5.5pt）。
+        //   当前（R = 43.75）：可用约 38pt ——「CPU 7%」在 8pt 下约 26pt ✓ 留 12pt 余量；
+        //   环小到 R = 36：可用约 30pt，同一个标签就只剩 4pt 余量 → 所以字体要跟着缩。
         //
         // ⚠ 别用「把标签往外挪」来解决拥挤：半径越小，同样宽度占的角度越大，反而更挤；
         // 往外挪则直接落到环外去。
@@ -148,11 +148,20 @@ final class TodayRingView: UIView {
 
     // MARK: - 字号自适应
 
-    /// 字号基准：**环格可用直径 120pt**（= `TodayWidgetView.ringPreferredHeight`）。
+    /// 字号基准：**可用直径 90pt** —— 到了这个尺寸就用满 12pt，不再往下缩。
     ///
-    /// 环拿不到那么大时（组件总高被系统压下来），字号按比例缩 —
-    /// 这样「数字占内环几成、标签占缺口几成」在任何尺寸下都保持一致。
-    private static let referenceDiameter: CGFloat = 120
+    /// 为什么是 90：内环直径 = `可用直径 − 35`（环外沿 = 可用 − 9.5、内环 = 外沿 − 25.5），
+    /// 而 12pt 的「314.2MB」约 47pt 宽，留点边距就要求内环 ≥ 55pt →
+    /// **可用直径 ≥ 90pt**。实机上这个值在 100 上下，所以**正常情况下缩放恒为 1**，
+    /// 环内字号就是 12pt，与右侧文案严格同号（用户 0.0.48 的要求）。
+    ///
+    /// 只有环被系统压得很小时（可用直径 < 90）才开始缩 —— 那种尺寸下 12pt 会撑满
+    /// 内环、两个切口标签也会挤到一起，缩是必要的（0.0.47 实机就是这样）。
+    ///
+    /// ⚠ **别把它改回 `ringPreferredHeight`（120）**：那是「期望环格高」，而真机给的
+    /// 可用直径小于它，缩放会常年停在 0.85 上下 —— 环内字永远比右侧小一号，
+    /// 「跟右侧文案一样大」这个要求就落不了地。
+    private static let referenceDiameter: CGFloat = 90
     /// 缩放下限。再小字就糊了，宁可让 `adjustsFontSizeToFitWidth` 去裁。
     private static let minimumFontScale: CGFloat = 0.7
 
@@ -258,23 +267,24 @@ final class TodayRingView: UIView {
                                          width: innerWidth,
                                          height: detailHeight)
 
-        // 切口标签：**落在各自环缺口的中央**（两个断点连线的中点，距圆心 0.866R）。
+        // 切口标签：**落在各自环缺口的底边上**（也就是两个起止点 7 点 / 5 点所在的那一行）。
         //
-        // 7 点与 5 点分别在 210° / 150° 方向，余弦相消、正弦同号，所以连线中点必然
-        // 落在圆心正下方 0.866R 处。
+        // 7 点与 5 点分别在 210° / 150° 方向，余弦相消、正弦同号，所以它们连线的中点
+        // 必然落在圆心正下方 `0.866R` 处 —— 这一行就是「缺口底边」。
         //
-        // 间隙从 10pt 让到 5pt 之后，两个标签在「标准位置」上的中心距只剩
-        // `0.866 × (ringGap + 线宽和/2) = 8.7pt`，而标签框高 8pt —— 几乎贴住。
-        // 所以这里把**落点也错开**：内环标签往圆心方向收（0.80R）、外环标签往外推
-        // （0.96R），中心距拉到 13pt 左右。两个方向都还在 60° 缺口里，
-        // 不会碰到弧（缺口那一行给的宽度约为所在环的半径）。
+        // 0.0.47 曾为了避让把落点错开（内环 0.80R、外环 0.96R），结果两个标签
+        // **都吊在半空中**，看着比缺口底边高一截（用户 0.0.49 实机反馈「RAM 跟下方的
+        // 占用率有点偏高了，下移一些，跟环的起止点对齐在同一行」）。
         //
-        // 框宽 68pt 只是给文字居中留余量，**能不能放下由缺口的宽度决定**。
+        // 现在两个都回到 `0.866R`。间隙只有 5pt、两个标签的中心距因此只有 8.7pt，
+        // 小于字体行高 9.5pt —— 但**字形本身只有约 5.7pt 高**（行高里的上下空白不可见），
+        // 所以视觉上不会叠。而缺口在这一行给出的宽度约等于外环半径（41.8pt），
+        // 「RAM」19pt、「7%」12pt 都放得下，不会压到弧。
         let sin60 = sin(CGFloat.pi / 3)
         let labelWidth: CGFloat = 68
         let labelHeight = ramLabel.font.lineHeight
-        let cutCentreY = center.y + outerRadius * sin60 * 0.96
-        let innerCutCentreY = center.y + innerRadius * sin60 * 0.80
+        let cutCentreY = center.y + outerRadius * sin60
+        let innerCutCentreY = center.y + innerRadius * sin60
 
         ramLabel.frame = CGRect(x: center.x - labelWidth / 2,
                                 y: innerCutCentreY - labelHeight / 2,
@@ -290,7 +300,7 @@ final class TodayRingView: UIView {
     ///   - cpuFraction: 0…1，外环。
     ///   - ramFraction: 0…1，内环。
     ///   - ramDetail: 环内第二行，**只放容量数字**，例如「1.2GB」（不带「剩余」前缀）。
-    ///   - cpuPercentText: 外环标签里的数值部分，例如「17%」。
+    ///   - cpuPercentText: 外环占用率文本（含 `%`），例如「17%」—— 标签会拼成「CPU 17%」。
     func apply(cpuFraction: Double, ramFraction: Double,
                ramDetail: String, cpuPercentText: String) {
         self.cpuFraction = min(max(cpuFraction, 0), 1)
@@ -301,10 +311,14 @@ final class TodayRingView: UIView {
         centerValueLabel.textColor = TodayStyle.loadTint(self.ramFraction)
         centerDetailLabel.text = ramDetail
         ramLabel.text = "RAM"
-        // **只显示占用率本身**（「CPU 7%」→「7%」，用户 0.0.48 要求）。
-        // 外环是蓝色的，这一行又紧贴着外环的缺口 —— 哪个环是 CPU 看颜色就知道，
-        // 「CPU」四个字符纯属占地方（而且去掉之后标签窄了一半，缺口里立刻宽松了）。
-        cpuLabel.text = cpuPercentText
+        // 外环标签**带前缀「CPU」**（0.0.48 曾去掉，0.0.52 按要求加回）。
+        //
+        // 当初去掉是因为缺口里挤：那时 R = 41.8，缺口可用宽度只有约 36pt，而「CPU 12%」
+        // 这类双位数文本已经贴到边。现在环长大了（R = 43.75、可用约 38pt），而占用率
+        // 多数时候是 1~2 位，「CPU 7%」在 8pt 下约 26pt —— 余量 12pt，加回来不挤。
+        //
+        // 留着前缀的好处很实在：**两个环读的都是百分比，光看数字分不清哪个是 CPU**。
+        cpuLabel.text = "CPU \(cpuPercentText)"
 
         setNeedsLayout()
     }
