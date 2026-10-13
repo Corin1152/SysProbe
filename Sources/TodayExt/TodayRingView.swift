@@ -26,6 +26,12 @@ import UIKit
 ///
 /// 为什么把标签放在切口：切口那里本来就没有笔画，文字落在上面不会被弧压住，
 /// 而且它天然指明了「这个标签说的是哪一圈」—— 放在环外就得靠颜色去猜。
+///
+/// ## 颜色
+///
+/// · **中心读数按量变色**（`TodayStyle.loadTint`：<70% 绿 / <90% 橙 / ≥90% 红），
+///   它显示的是内存占用率，与 0.0.39 版 `Memory` 那一格同一套；
+/// · **两个切口标签纯黑**（`TodayStyle.text`）—— 它们是文案，不是读数。
 final class TodayRingView: UIView {
 
     // MARK: - 几何常量
@@ -36,15 +42,19 @@ final class TodayRingView: UIView {
     private static let sweepDegrees: CGFloat = 300
 
     /// 外环（CPU）线宽。
-    private static let outerLineWidth: CGFloat = 7.5
+    ///
+    /// **5.5pt 是对着 CPU-X 的参考图定的**：那边环的外沿直径与线宽之比约 5%，
+    /// 我们原来是 7%（7.5 / 106.5），看着偏「胖」。线宽收细之后，同样的可用直径会
+    /// 算出更大的半径（`outerRadius` 里要减掉的线宽变少），环反而略微变大。
+    private static let outerLineWidth: CGFloat = 5.5
     /// 内环（RAM）线宽。
-    private static let innerLineWidth: CGFloat = 6
+    private static let innerLineWidth: CGFloat = 4.5
     /// 两个环之间的净间隙。
     ///
-    /// 线宽与间隙一起按 1.5 倍放大（原来是 5 / 4 / 5）—— **只放大半径、不放大线宽，
-    /// 环壁会相对变薄**，看着就不是同一个环了。放大后两个切口标签中心的径向距离 =
-    /// 3.75 + 7.5 + 3 = 14.25pt，框高 12pt 正好不叠。
-    private static let ringGap: CGFloat = 7.5
+    /// 线宽收细之后这里**要跟着放宽**：两个切口标签中心的径向距离 =
+    /// `0.866 × (0.5·外线宽 + ringGap + 0.5·内线宽)`，10pt 时约 13pt，
+    /// 正好比 12pt 的标签框高留出一点余量；若还留 7.5，就只有 12.1pt，太贴。
+    private static let ringGap: CGFloat = 10
 
     // MARK: - 图层
 
@@ -100,7 +110,11 @@ final class TodayRingView: UIView {
         // **字重沿用对齐主 App 功率圆环的那一套**：只有「读数」是 semibold，caption
         // 与标签都是 medium（`AppFont.text(12, .medium)`）。
         centerValueLabel.font = TodayFont.readout(16, weight: .semibold)
-        centerValueLabel.textColor = TodayStyle.primary
+        // 内环中心那个数是**内存占用率** —— 就是 0.0.39 版 `Memory` 那一格的读数，
+        // 所以配色沿用那边：`loadTint` 三段（<70% 绿 / <90% 橙 / ≥90% 红）。
+        // 初值取 0 档，`apply` 每来一次数据都会重设（这里是「数值」不是「文案」，
+        // 用户明确要求纯黑只给文案）。
+        centerValueLabel.textColor = TodayStyle.loadTint(0)
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
@@ -113,12 +127,16 @@ final class TodayRingView: UIView {
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
+        // 切口标签用**纯黑**：它们是文案（标明哪一圈是什么），颜色交给环本身。
+        // 原来这里上的是环色，两个标签一红一绿反而把最该被看清的一小块地方弄花了；
+        // 用户要求的「纯黑只改文案颜色」正好把标签与中心读数分到了两侧 ——
+        // 标签纯黑、读数按量变色。字重仍是 medium，层级靠字重不靠颜色。
         ramLabel.font = TodayFont.text(9, weight: .medium)
-        ramLabel.textColor = TodayStyle.ramRing
+        ramLabel.textColor = TodayStyle.text
         ramLabel.textAlignment = .center
 
         cpuLabel.font = TodayFont.text(9, weight: .medium)
-        cpuLabel.textColor = TodayStyle.cpuRing
+        cpuLabel.textColor = TodayStyle.text
         cpuLabel.textAlignment = .center
 
         for label in [centerValueLabel, centerDetailLabel, ramLabel, cpuLabel] {
@@ -131,11 +149,12 @@ final class TodayRingView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // 圆环水平居中，竖直方向也居中 —— 两个切口标签已经移到环内，内容就是环本身，
-        // 不再需要像早先那样为环下方的标签预留偏移。
+        // 圆环水平居中，竖直方向也居中 —— 两个切口标签都在环内，内容就是环本身。
         let lineWidths = Self.outerLineWidth + Self.innerLineWidth
-        // 四条边各留 20pt 余量后取正圆：`available` 既是环的可用直径，也是它到边界的距离。
-        let available = min(bounds.width, bounds.height - 20)
+        // **可用直径 = min(列宽, 列高)，不再额外扣 20pt。**
+        // 早先扣的那 20pt 是给「挂在环下方」的切口标签留的；0.0.43 起标签移到了环内
+        // （落在两个断点连线的中点上），那 20pt 就成了纯粹白丢的直径。
+        let available = min(bounds.width, bounds.height)
         let outerRadius = max(12, (available - lineWidths - Self.ringGap) / 2)
         let innerRadius = max(6, outerRadius - Self.outerLineWidth / 2 - Self.ringGap - Self.innerLineWidth / 2)
 
@@ -209,6 +228,8 @@ final class TodayRingView: UIView {
         self.ramFraction = min(max(ramFraction, 0), 1)
 
         centerValueLabel.text = "\(Int((self.ramFraction * 100).rounded()))%"
+        // 读数颜色跟着占用率走（0.0.39 版 `Memory` 那一格的 `loadTint`）：绿 → 橙 → 红。
+        centerValueLabel.textColor = TodayStyle.loadTint(self.ramFraction)
         centerDetailLabel.text = ramDetail
         ramLabel.text = "RAM"
         cpuLabel.text = "CPU \(cpuPercentText)"

@@ -27,7 +27,21 @@ import UIKit
 ///       ╲  RAM  ╱       存储    已用 47.96 · 剩余 11.54
 ///        CPU 26%        ▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░
 ///
-/// 组件总高约 180pt（环 140 + 系统头部 24 + 上下留白 16）。
+/// 组件总高约 160pt（环 120 + 系统头部 24 + 上下留白 16）。
+///
+/// ## 颜色（用户要求，2026-10-13）
+///
+/// **文案纯黑、数值保留各自的配色**，两者不混用：
+///
+/// | 元素 | 颜色 | 依据 |
+/// |---|---|---|
+/// | 标签 / 单位 / 环内切口标签 / 存储标题 | `TodayStyle.text`（浅色纯黑） | 与参考图 CPU-X 一致 |
+/// | 电芯温度读数 | `TodayStyle.temperature(°C)` | **主程序电源分页那套暖色阶梯** |
+/// | 充电器 / 电芯读数 | `TodayStyle.battery` | 0.0.39 版的功率配色 |
+/// | 环内中心读数（内存占用率） | `TodayStyle.loadTint` | 0.0.39 版 `Memory` 那一格 |
+///
+/// 一句话：**纯黑只改文案**。读数若也刷成纯黑，这一屏就只剩一堆黑字，
+/// 看不出哪个数是「量」、哪个是说明它的标签。
 ///
 /// ## 演进（2026-10-13 一天内五版，每一条都是实机反馈逼出来的）
 ///
@@ -77,10 +91,18 @@ final class TodayWidgetView: UIView {
 
     /// 圆环那一列的高度，也是整块内容的高度。
     ///
-    /// 环的可用直径 = `min(列宽, 高度 − 20)`；要拿到 120pt 的可用直径，高度取 140pt。
-    /// 右侧四行加起来约 90pt（`.fillEqually` 摊到 140pt），所以**组件总高由环决定**：
-    /// 140 + 系统头部 24 + 上下留白 16 = **约 180pt**。
-    private static let ringHeight: CGFloat = 140
+    /// **这个值受系统给的展开态上限约束，不能随便加。** 0.0.44/0.0.45 取过 140pt，
+    /// 组件总高随之到 180pt —— 实机上高度被系统 clamp，`ringView` 的 140pt 约束被打破，
+    /// 环只画到约 46pt（设计值 106.5pt）。0.0.43 的 163pt 总高是实测可用的，
+    /// 所以这里压回 120pt（总高 160pt），留出安全余量。
+    private static let ringHeight: CGFloat = 120
+
+    /// 圆环的**外沿直径**（含线宽），用来把右侧四行的总高对齐到环上（用户要求）。
+    ///
+    /// 推导（线宽收细后重算）：`available = min(列宽约 125, 列高 120) = 120`
+    /// → `outerRadius = (120 − 10 − 10) / 2 = 50`（10 是两条线宽之和，10 是环间距）
+    /// → 外沿直径 = `2 × 50 + 5.5 = 105.5`。
+    private static let ringDiameter: CGFloat = 105.5
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -97,10 +119,11 @@ final class TodayWidgetView: UIView {
         // 高 140pt，组件总高于是由环决定（约 180pt，比横排方案的 219pt 矮 39pt）。
         let side = UIStackView(arrangedSubviews: [temperatureCell, chargerCell, cellCell, storage])
         side.axis = .vertical
-        side.spacing = 12
-        // **不摊满、只用自己的自然高度**（`.fill` + `row.alignment = .center`）。
-        // 早先用 `.fillEqually` 把四行拉到与环同高，行与行的距离被撑到 33pt 上下 ——
-        // 用户要求「拉近点」，所以改成「内容高约 104pt、整体在环高内居中」。
+        // **`.equalSpacing`：把高度里剩下的空间全平均分到三个行距上。**
+        // 配合下面那条「高度 = 环直径」的约束，右侧四行从第一行顶到最后一行底**正好
+        // 等于环的外径**（用户要求），行距也就自动收紧 —— 不必手填一个会随字体度量
+        // 漂移的数字（十二点几这种值手写出来必然与实测对不上）。
+        side.distribution = .equalSpacing
 
         let row = UIStackView(arrangedSubviews: [ringView, side])
         row.axis = .horizontal
@@ -136,6 +159,8 @@ final class TodayWidgetView: UIView {
             side.widthAnchor.constraint(equalTo: row.widthAnchor,
                                         multiplier: 1 - Self.ringWidthRatio,
                                         constant: -row.spacing),
+            // 右侧四行的总高对齐到环的外径（用户要求）。
+            side.heightAnchor.constraint(equalToConstant: Self.ringDiameter),
             ringView.heightAnchor.constraint(equalToConstant: Self.ringHeight),
         ])
 
@@ -186,9 +211,9 @@ final class TodayWidgetView: UIView {
         // 那个 Temperature）—— 负一屏自己读不到：iOS 不允许 appex 访问 IOReport，
         // 而电池温度那一路要的正是它。
         //
-        // **配色走 `TodayStyle.temperature` 的暖色阶梯，与本次「次要文字改用 muted」
-        // 无关** —— 用户明确要求这一格的数值颜色保持原样（29~33 °C 落在 `cool` 档，
-        // 显示为绿 0x0E9B57）。推送脚本里有断言钉住这五级色阶，改 muted 不会波及它。
+        // **配色走 `TodayStyle.temperature` 的暖色阶梯 —— 这是主程序电源分页里电芯
+        // 温度用的同一套**（29~33 °C 落在 `cool` 档，显示为绿 0x0E9B57）。用户明确
+        // 要求这一格的数值配色保留主程序的方案；推送脚本里有断言钉住这五级色阶。
         let temperature = battery?.temperature
         temperatureCell.apply(caption: Strings.text("Cell temperature"),
                               value: temperature.map { String(format: "%.1f", $0) } ?? "—",
@@ -221,6 +246,9 @@ final class TodayWidgetView: UIView {
 ///
 /// 字号固定为 caption 12 medium ／ 读数 12 semibold ／ 单位 11 medium，
 /// 读数用等宽数字 —— 每秒刷新时宽度不会跳动。
+///
+/// 颜色：**标签与单位纯黑（`TodayStyle.text`），读数走传进来的 `tint`**。
+/// 用户的原话是「纯黑只改文案颜色」—— 读数保留语义色，这一行才有主次。
 final class TodayCellView: UIView {
 
     private let captionLabel = UILabel()
@@ -243,7 +271,8 @@ final class TodayCellView: UIView {
         super.init(frame: frame)
 
         captionLabel.font = Self.captionFont
-        captionLabel.textColor = TodayStyle.muted
+        // 标签与单位是**文案**，走纯黑（用户要求）；数值的颜色由 `apply` 的 `tint` 给。
+        captionLabel.textColor = TodayStyle.text
         captionLabel.numberOfLines = 1
 
         valueLabel.font = Self.valueFont
@@ -252,7 +281,7 @@ final class TodayCellView: UIView {
         valueLabel.numberOfLines = 1
 
         unitLabel.font = Self.unitFont
-        unitLabel.textColor = TodayStyle.muted
+        unitLabel.textColor = TodayStyle.text
 
         let valueRow = UIStackView(arrangedSubviews: [valueLabel, unitLabel])
         valueRow.axis = .horizontal
@@ -292,11 +321,14 @@ final class TodayCellView: UIView {
         let shown = TodayFont.captionUppercases ? caption.uppercased() : caption
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
             .font: Self.captionFont,
-            .foregroundColor: TodayStyle.muted,
+            .foregroundColor: TodayStyle.text,
             .kern: TodayFont.captionTracking,
         ])
         valueLabel.text = value
-        // 占位符画成弱化的灰 —— 它表示「没有读数」，不该看起来像一个值。
+        // **读数走传进来的 `tint`，与 0.0.39 版一致**：电芯温度是暖色阶梯
+        // （`TodayStyle.temperature`，主程序那套），功率是 `battery` 绿。
+        // 用户明确要求「纯黑只改文案颜色」—— 读数一旦也刷成纯黑，这一屏就只剩
+        // 一堆黑字，看不出哪个数是「量」、哪个是标签。
         valueLabel.textColor = value == "—" ? TodayStyle.muted.withAlphaComponent(0.55) : tint
         unitLabel.text = unit
         unitLabel.isHidden = unit == nil
@@ -305,7 +337,7 @@ final class TodayCellView: UIView {
 
 // MARK: - 存储条
 
-/// 系统存储：一条进度条 + 「已用 / 剩余」。
+/// 系统存储：一条进度条 + 「剩余 ⋯」（已用的信息在主 App 的存储页里更完整）。
 final class TodayStorageView: UIView {
 
     private let captionLabel = UILabel()
@@ -319,13 +351,16 @@ final class TodayStorageView: UIView {
         super.init(frame: frame)
 
         captionLabel.font = TodayFont.text(12, weight: .medium)
-        captionLabel.textColor = TodayStyle.muted
+        // 标题是文案 → 纯黑。
+        captionLabel.textColor = TodayStyle.text
 
         detailLabel.font = TodayFont.readout(12)
+        // 「剩余 11.54 GB」是**数值**，回到 0.0.39 版的次要灰（它没有独立语义色，
+        // 存储那个量由进度条自身的颜色表达）。纯黑只留给文案。
         detailLabel.textColor = TodayStyle.muted
         detailLabel.textAlignment = .right
-        // 「已用 47.96 GB · 剩余 11.54 GB」在右侧那一列（约 177pt）里会差一点点，
-        // 允许收一档 —— 总好过把左边的「存储」挤掉。
+        // 「剩余 11.54 GB」在右侧那一列（约 177pt）里仍可能差一点点，允许收一档 ——
+        // 总好过把左边的「存储」挤掉。
         detailLabel.adjustsFontSizeToFitWidth = true
         detailLabel.minimumScaleFactor = 0.75
 
@@ -387,7 +422,7 @@ final class TodayStorageView: UIView {
             : Strings.text("Storage")
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
             .font: TodayFont.text(12, weight: .medium),
-            .foregroundColor: TodayStyle.muted,
+            .foregroundColor: TodayStyle.text,
             .kern: TodayFont.captionTracking,
         ])
         // **只报剩余**（用户要求）。已用的信息在主 App 的存储页里更完整，负一屏这一行

@@ -39,8 +39,16 @@ nonisolated enum TodayStyle {
     static let stroke = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.08)
     /// 轨道底色（进度条、环的未填充部分）。
     static let track = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.10)
-    /// 主要读数（大号数字）。
-    static let primary = dynamic(0x111318, 0xF2F4F8)
+    /// **文案**：caption 标签、单位、环内切口标签、存储标题。
+    ///
+    /// 浅色下是**纯黑**（用户要求，与参考图 CPU-X 一致）；深色下换近白 ——
+    /// 纯黑在深色背景上根本看不见。
+    ///
+    /// **别拿它去染读数。** 数值有自己的语义色：CPU / RAM / 存储走 `loadTint`、
+    /// 电芯温度走 `TodayStyle.temperature`、功率走 `battery` —— 这些是「29°C 是绿、
+    /// 95% 是红」那套信息，一旦被刷成纯黑，读数与标签就分不出主次了。
+    /// 用户的原话：「纯黑只改文案颜色」。
+    static let text = dynamic(0x000000, 0xFFFFFF)
 
     // 双圆环的两条环色。
     //
@@ -78,6 +86,10 @@ nonisolated enum TodayStyle {
     ///
     /// 三段而不是连续渐变 —— 读数每秒都在动，连续渐变换色只会让人觉得整屏在闪；
     /// 三段的话只有跨过阈值那一下才变色，那一下恰好是需要被注意到的。
+    ///
+    /// **负一屏的环内中心读数用它**（那个数就是内存占用率，等同于 0.0.39 版
+    /// `Memory` 那一格的读数）。存储进度条走的是另一个函数 `storageTint` ——
+    /// 那个看的是「剩余」而不是「占用」，方向相反。
     static func loadTint(_ fraction: Double) -> UIColor {
         switch fraction {
         case ..<0.70: return battery
