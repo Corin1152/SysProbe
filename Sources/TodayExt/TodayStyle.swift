@@ -92,25 +92,36 @@ nonisolated enum TodayStyle {
         }
     }
 
-    /// 负载色：**内存占用率**读数用。
+    /// 负载色阶的公共骨架：**低档用传入的「本环色」，中 / 高档转橙、红**。
     ///
     /// 三段而不是连续渐变 —— 读数每秒都在动，连续渐变换色只会让人觉得整屏在闪；
     /// 三段的话只有跨过阈值那一下才变色，那一下恰好是需要被注意到的。
     ///
-    /// **低档用 `ramRing`，也就是内环色**（用户 0.0.54 要求「内存占用率低占用时的颜色
-    /// 跟内环颜色一致」）。原来低档用的是 `battery`（`0x0E9B57` 青绿），而内环是
-    /// `ramRing`（`0x4E9A06` 黄绿）—— 两个绿摆在一起能看出不是一个调，而**低占用是
-    /// 绝大多数时候的状态**，所以那点差别一直挂在屏幕上。
-    /// 中档起才转橙、红：那时「量高」比「属于哪一圈」更该被看到。
-    ///
-    /// 存储进度条走的是另一个函数 `storageTint` —— 那个看的是「剩余」而不是「占用」，
-    /// 方向相反。
-    static func loadTint(_ fraction: Double) -> UIColor {
+    /// 中高两档 CPU 与内存共用同一对颜色（用户 0.0.56「中高占用参考内存占用颜色」）：
+    /// 那时「量高」比「属于哪一圈」更该被看到，两个环一起转橙 / 红正是要传达的事。
+    private static func loadTint(_ fraction: Double, normal: UIColor) -> UIColor {
         switch fraction {
-        case ..<0.70: return ramRing
+        case ..<0.70: return normal
         case ..<0.90: return loss
         default: return danger
         }
+    }
+
+    /// **CPU** 的负载色阶：低占用 = 外环色 `cpuRing`。
+    ///
+    /// **外环弧与环内那个读数用同一个函数取色** —— 两者因此天然同步，不会出现
+    /// 「环红了、数字还是蓝的」这种半截状态（用户 0.0.56 明确要求「同步变色」）。
+    static func cpuLoadTint(_ fraction: Double) -> UIColor {
+        loadTint(fraction, normal: cpuRing)
+    }
+
+    /// **内存**的负载色阶：低占用 = 内环色 `ramRing`。
+    ///
+    /// 低档本来是 `battery`（`0x0E9B57` 青绿），与内环的 `ramRing`（`0x4E9A06` 黄绿）
+    /// **不是一个绿** —— 而低占用是绝大多数时候的状态，那点色差一直挂在屏幕上。
+    /// 0.0.55 把读数改成内环色，0.0.56 又把**内环本身**也交给这个函数取色，两边同源。
+    static func memoryLoadTint(_ fraction: Double) -> UIColor {
+        loadTint(fraction, normal: ramRing)
     }
 
     /// 存储条的颜色。

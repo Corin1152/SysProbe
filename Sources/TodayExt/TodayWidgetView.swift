@@ -62,8 +62,8 @@ import UIKit
 /// | 标签 / 单位 / 环内切口标签 / 存储标题 | `TodayStyle.text`（浅色纯黑） | 与参考图 CPU-X 一致 |
 /// | 电芯温度读数 | `TodayStyle.temperature(°C)` | **主程序电源分页那套暖色阶梯** |
 /// | 充电器 / 电芯读数 | `TodayStyle.battery` | 0.0.39 版的功率配色 |
-/// | 环内 CPU 占用率 | `TodayStyle.cpuRing`（= 外环色，固定） | 与它那一圈同色（0.0.54） |
-/// | 环内内存占用率 | `TodayStyle.loadTint`（低档 = 内环色 `ramRing`） | 低占用与内环同色，中档起转警示色 |
+/// | 两个圆环本身 | `TodayStyle.cpuLoadTint` / `memoryLoadTint` | 低占用 = 本环色，中高同步转警示色（0.0.56） |
+/// | 环内两个占用率 | **同上（与环同一个函数）** | 环与读数同步变色，不会一半红一半蓝 |
 /// | 环内内存容量 | `TodayStyle.text`（浅色纯黑） | 它是数字，但没有「量」的含义 |
 ///
 /// 一句话：**纯黑只改文案**。读数若也刷成纯黑，这一屏就只剩一堆黑字，

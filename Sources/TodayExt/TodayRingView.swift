@@ -31,8 +31,8 @@ import UIKit
 ///
 /// ## 颜色
 ///
-/// · **环内两个占用率各自对应自己那一圈的颜色**：CPU 值 = 外环色 `cpuRing`（固定不变）；
-///   内存值走 `loadTint`，**低档就是内环色 `ramRing`**，中档起转橙 / 红；
+/// · **环与环内的读数取同一个色阶函数**（`cpuLoadTint` / `memoryLoadTint`）：
+///   低占用时是两环本来的颜色（外环青蓝 / 内环黄绿），中档起**环与数字一起**转橙、红；
 /// · **容量那行与两个切口标签纯黑**（`TodayStyle.text`）—— 容量没有「量」的含义
 ///   （进度条已经表达了），标签则是文案，不是读数。
 final class TodayRingView: UIView {
@@ -122,19 +122,19 @@ final class TodayRingView: UIView {
         //      98%       ← 内存占用率
         //      54.8MB    ← 内存容量
         //
-        // 配色（0.0.55 起）：**两个占用率各自对应自己那一圈的颜色**（用户要求）——
-        //   · CPU 值固定用**外环色** `cpuRing`；
-        //   · 内存值用 `loadTint`，而它的**低档就是内环色** `ramRing`（见那边的注释）。
+        // 配色（0.0.56 起）：**环与环内的读数取同一个色阶函数**，两者因此天然同步 ——
+        //   · CPU 值 = `cpuLoadTint(cpuFraction)`，低占用就是外环色 `cpuRing`；
+        //   · 内存值 = `memoryLoadTint(ramFraction)`，低占用就是内环色 `ramRing`。
         // 低占用是绝大多数时候的状态，所以「读数和它所属的环同色」是常态；
-        // 内存值到中档才转橙 / 红 —— 那时「量高」比「属于哪一圈」更该被看到。
+        // 中档起两个一起转橙、红 —— 那时「量高」比「属于哪一圈」更该被看到。
         // 初值取低档，`apply` 每来一次数据都会重设。这三行都是「数值」不是「文案」，
         // 用户明确要求纯黑只给文案。
-        centerCPULabel.textColor = TodayStyle.cpuRing
+        centerCPULabel.textColor = TodayStyle.cpuLoadTint(0)
         centerCPULabel.textAlignment = .center
         centerCPULabel.adjustsFontSizeToFitWidth = true
         centerCPULabel.minimumScaleFactor = 0.7
 
-        centerValueLabel.textColor = TodayStyle.loadTint(0)
+        centerValueLabel.textColor = TodayStyle.memoryLoadTint(0)
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
@@ -252,10 +252,13 @@ final class TodayRingView: UIView {
         innerTrack.frame = bounds
 
         // 进度弧：与轨道同一个起点，长度 = 300° × 百分比（满量程是那 300°，不是整圆）。
+        // **弧色跟着各自的占用量走**（用户 0.0.56）：低占用时就是两环本来的颜色
+        // （外环青蓝 / 内环黄绿），中 / 高占用时环与环内那个读数**同步**转橙、红 ——
+        // 「该注意了」这件事由环和数字一起说，比只有数字变色显眼得多。
         applyProgress(outerProgress, center: center, radius: outerRadius,
-                      fraction: cpuFraction, color: TodayStyle.cpuRing)
+                      fraction: cpuFraction, color: TodayStyle.cpuLoadTint(cpuFraction))
         applyProgress(innerProgress, center: center, radius: innerRadius,
-                      fraction: ramFraction, color: TodayStyle.ramRing)
+                      fraction: ramFraction, color: TodayStyle.memoryLoadTint(ramFraction))
 
         layoutLabels(center: center, outerRadius: outerRadius, innerRadius: innerRadius,
                      scale: appliedFontScale)
@@ -339,11 +342,11 @@ final class TodayRingView: UIView {
         // CPU 那个数是用户 0.0.52 要求**从外环切口挪进来的**：两个占用率并排之后，
         // 一眼能比出「是 CPU 紧还是内存紧」，比一个在切口、一个在环内要好读。
         centerCPULabel.text = cpuPercentText
-        // **CPU 值固定用外环色**（用户 0.0.55：「环内 CPU 占用率颜色也对应下外环颜色」）
-        // —— 它不再走 `loadTint` 的变色阶梯。内存值仍走 `loadTint`，低档 = 内环色。
-        centerCPULabel.textColor = TodayStyle.cpuRing
+        // 两行读数与各自的环**取同一个色阶函数**（用户 0.0.56 要求「同步变色」）——
+        // 低占用时分别是外环色 / 内环色，中高占用时与环一起转橙、红。
+        centerCPULabel.textColor = TodayStyle.cpuLoadTint(self.cpuFraction)
         centerValueLabel.text = "\(Int((self.ramFraction * 100).rounded()))%"
-        centerValueLabel.textColor = TodayStyle.loadTint(self.ramFraction)
+        centerValueLabel.textColor = TodayStyle.memoryLoadTint(self.ramFraction)
         centerDetailLabel.text = ramDetail
         // 两个切口标签只负责标「这一圈是什么」—— 数值已经全在环内了。
         ramLabel.text = "RAM"
