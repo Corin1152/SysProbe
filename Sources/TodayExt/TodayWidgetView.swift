@@ -75,9 +75,10 @@ final class TodayWidgetView: UIView {
     ///
     /// 环的可用直径 = `min(格宽, 格高 − 20)`（−20 是给正下方那两个切口标签留的）。
     /// 格宽已由上面的比例保证（约 99pt），所以真正卡住环大小的是**高度**：
-    ///   · 92pt → 可用 72pt → 外环外径约 63pt、内环直径约 39pt，中心两行放得下；
-    ///   · 低于 80pt 时内环直径掉到 33pt 以下，中心那行又开始缩、标签重新压到弧上。
-    private static let ringHeight: CGFloat = 92
+    ///   · 100pt → 可用 80pt → 外环外径约 71pt、内环直径约 47pt —— 中心那行
+    ///     「剩余 1.2 GB」（8pt，约 53pt 宽）只会被收一档，不会缩到看不清；
+    ///   · 低于 92pt 时内环直径掉到 43pt 以下，那一行又要被压到 0.8 倍以下。
+    private static let ringHeight: CGFloat = 100
 
     override init(frame: CGRect) {
         super.init(frame: frame)

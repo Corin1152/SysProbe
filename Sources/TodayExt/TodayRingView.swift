@@ -87,23 +87,29 @@ final class TodayRingView: UIView {
         outerProgress.lineWidth = Self.outerLineWidth
         innerProgress.lineWidth = Self.innerLineWidth
 
-        centerValueLabel.font = TodayFont.mono(15, weight: .semibold)
+        // 字号：**环是主体，文字只能占内环里那点空间**。
+        //
+        // 0.0.42 的预览图被指出「数值与文案太大、超出圆环」，就是这里定的比例不对 ——
+        // 13 / 8 / 8 是照着「内环直径约 47pt」反推的：`96%` 在 13pt 等宽下约 26pt，
+        // 「剩余 1.2 GB」在 8pt 下约 53pt（超出 47pt 时由 `adjustsFontSizeToFitWidth`
+        // 收一档到约 0.9），`CPU 96%` 在 8pt 下约 30pt —— 三者都不会压到环的笔画。
+        centerValueLabel.font = TodayFont.mono(13, weight: .semibold)
         centerValueLabel.textColor = TodayStyle.primary
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
         centerValueLabel.minimumScaleFactor = 0.7
 
-        centerDetailLabel.font = TodayFont.text(9)
+        centerDetailLabel.font = TodayFont.text(8)
         centerDetailLabel.textColor = TodayStyle.muted
         centerDetailLabel.textAlignment = .center
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        ramLabel.font = TodayFont.text(9, weight: .semibold)
+        ramLabel.font = TodayFont.text(8, weight: .semibold)
         ramLabel.textColor = TodayStyle.ramRing
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(9, weight: .semibold)
+        cpuLabel.font = TodayFont.text(8, weight: .semibold)
         cpuLabel.textColor = TodayStyle.cpuRing
         cpuLabel.textAlignment = .center
 
@@ -148,8 +154,9 @@ final class TodayRingView: UIView {
     }
 
     private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat) {
-        let valueHeight: CGFloat = 18
-        let detailHeight: CGFloat = 11
+        // 行高跟着字号走（13pt 等宽约 16pt 行高，8pt 约 10pt 行高）。
+        let valueHeight: CGFloat = 16
+        let detailHeight: CGFloat = 10
 
         // 中心两行以**内环圆心**为基准居中：先算两行的总高，再把它对称地摆到圆心两侧。
         let total = valueHeight + detailHeight
