@@ -448,8 +448,16 @@ uint64_t sysprobe_real_cpu_frequency_mhz(void)
     CFDictionaryRef s1 = pCreateSamples(gSubscription, gSubscribedChannels, NULL);
     if (!s1) return 0;
 
-    // 两次采样隔 100 ms —— 有这段时间，DVFS 驻留计数器才有东西可差分。
-    struct timespec ts = { 0, 100 * 1000 * 1000 };
+    // 两次采样隔 200 ms —— 有这段时间，DVFS 驻留计数器才有东西可差分。
+    //
+    // **为什么是 200 ms 而不是 100 ms**：这个窗口里只要**一次非 IDLE 驻留都没有**，
+    // 加权平均就无从算起，函数返回 0、界面闪一下「—」。设备空闲时 100 ms 全空闲
+    // 并不罕见（0.0.35 实测主程序会偶发「—」）。窗口拉长一倍把概率压下去，
+    // 代价只是采样线程多睡 100 ms —— 它在后台队列上，不挡渲染。
+    //
+    // 这只降低概率、不能根除，所以 `CPUFrequency` 那一层还叠了一道「沿用上次读数」
+    // 的短缓存（见 Sources/Shared/Hardware/CPUFrequency.swift）。
+    struct timespec ts = { 0, 200 * 1000 * 1000 };
     nanosleep(&ts, NULL);
 
     CFDictionaryRef s2 = pCreateSamples(gSubscription, gSubscribedChannels, NULL);
