@@ -17,31 +17,32 @@ import UIKit
 ///
 /// ## 排版
 ///
-/// 四组横排：第一格是 CPU/RAM 双圆环（比后三格宽、也更高），后三格等宽，最下面是
-/// 一条系统存储的进度条。组件总高约 156pt（环格 92pt + 间距 + 存储条 + 系统头部）。
+/// **左环 + 右列**（排列方式参照 CPU-X 的负一屏组件）：左列是 CPU/RAM 双圆环；
+/// 右列自上而下四行 —— 电芯温度 / 充电器 / 电芯 / 存储，每行「标签靠左、读数靠右」，
+/// 存储那行多一条进度条。
 ///
-///      ╭─╮           电芯温度      充电器        电芯
-///     ╱   ╲          32.5 °C       4.91 W       87 %
-///    │ 62% │
-///     ╲RAM╱
+///        ╭─────╮        电芯温度         32.1 °C
+///       ╱  98%  ╲       充电器            1.63 W
+///      │  1.2GB  │      电芯              0.00 W
+///       ╲  RAM  ╱       存储    已用 47.96 · 剩余 11.54
+///        CPU 26%        ▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░
 ///
-///      存储              已用 12.2 GB · 剩余 51.8 GB
-///      ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+/// 组件总高约 180pt（环 140 + 系统头部 24 + 上下留白 16）。
 ///
-/// **2026-10-13 改版**：第 1 格从「CPU 读数」换成 CPU/RAM 双圆环（`TodayRingView`），
-/// 第 2 格从「内存读数」换成电芯温度；第 3、4 格保留，去掉「输入功率」脚注。存储条不变。
+/// ## 演进（2026-10-13 一天内五版，每一条都是实机反馈逼出来的）
 ///
-/// **0.0.41 实机修正**：第一次实机暴露两个问题 ——
-/// ① 圆环**完全不可见**（高度塌缩，根因见 `build()` 里那段说明）；
-/// ② 数值放大到 26pt 在真机上过重，已恢复 12/12/11。
-///
-/// **0.0.42 实机修正**：第二次实机暴露三个问题 ——
-/// ① 环太小、中心读数被截成 "9…"、两个切口标签叠在一起：四等分时格宽只有 76pt，
-///    环最大只能到 47pt；改成「圆环格占三成宽 + 单独给 92pt 高」（见两个常量）；
-/// ② 圆环两端位置不对：`UIBezierPath` 的 `clockwise` 在翻转坐标系里方向是反的，
-///    已改成按角度自己采样（见 `TodayRingView.arcPath`）；
-/// ③ 「存储」那一条被组件底边裁掉一半：`preferredContentSize` 少算了系统绘制的那行
-///    头部，已补上（见 `TodayViewController.systemHeaderHeight`）。
+/// · **0.0.40**：第 1 格换成 CPU/RAM 双圆环，第 2 格换成电芯温度。
+/// · **0.0.41** 实机：圆环**完全不可见**。纯自绘视图既没有 `intrinsicContentSize`、
+///   内部也没有约束，而横向 stack 在 `alignment != .fill` 时不给 arrangedSubview
+///   加高度约束 → 高度解析为 0 → `CAShapeLayer` 的 bounds 高 0 时**整个 path 都不渲染**。
+///   → 补尺寸约束。
+/// · **0.0.42** 实机：环太小（格宽仅 76pt）、两端位置不对（`UIBezierPath` 的
+///   `clockwise` 在翻转坐标系里方向是反的）、存储条被底边裁（`preferredContentSize`
+///   少算了系统头部）。→ 反等宽 + 自采样弧 + 头部补偿。
+/// · **0.0.43** 实机：环只画到约 39pt —— 环格那条宽度约束优先级 750，被右列 stack 的
+///   compression resistance 顶掉。→ 两条宽度一起写成 required。
+/// · **0.0.44 / 0.0.45**：环与文案放大 50%、字体对齐主程序的功率圆环、内容上下各留 8pt；
+///   最后按用户给的 CPU-X 参考图改成**左环 + 右列的排列**（比横排方案矮约 40pt）。
 ///
 /// 频率**不再显示**：iOS 不允许 appex 访问 IOReport（实测 `IOReportCopyAllChannels`
 /// 在扩展里返回空通道集），而主 App 被挂起时也供不了数 —— 与其显示一个常年「—」，
@@ -55,8 +56,6 @@ final class TodayWidgetView: UIView {
     private let cellCell = TodayCellView()
     private let storage = TodayStorageView()
 
-    private let root = UIStackView()
-
     /// 左右留白。
     ///
     /// 这个数值不是随手定的：负一屏的组件标题（图标 + App 名 + 箭头）由**系统**绘制，
@@ -65,20 +64,23 @@ final class TodayWidgetView: UIView {
     /// 右边也顺带留出空间，「已用 … · 剩余 …」不会再顶到组件右边缘。
     private static let horizontalInset: CGFloat = 14
 
-    /// 圆环那一格占整行宽度的比例。
+    /// 圆环那一列占整行宽度的比例。
     ///
-    /// 留三成给圆环（iPhone X 上约 99pt），剩下的由后三格平分（各约 70pt）—— 它们的
-    /// 内容本来就短（"电芯温度" 约 48pt、"33.1 °C" 约 42pt），收窄后仍放得下。
-    private static let ringWidthRatio: CGFloat = 0.30
+    /// **排列方式参照 CPU-X 的负一屏组件**：圆环独占左列，右侧一列放四行读数。
+    /// 0.40（iPhone X 上约 125pt）配 `ringHeight = 140` → 可用直径 120pt →
+    /// 外径约 106pt，正是「环放大 50%」的目标。
+    ///
+    /// 提醒：这一列的宽度约束**必须与右列一起写成 required**（见 `build()`）。
+    /// 0.0.43 曾只给它一条 750 优先级的约束，被右列的 compression resistance 顶掉，
+    /// 实机上环只画到约 39pt（设计值 71pt）。
+    private static let ringWidthRatio: CGFloat = 0.40
 
-    /// 圆环那一格的高度。
+    /// 圆环那一列的高度，也是整块内容的高度。
     ///
-    /// 环的可用直径 = `min(格宽, 格高 − 20)`（−20 是给正下方那两个切口标签留的）。
-    /// 格宽已由上面的比例保证（约 99pt），所以真正卡住环大小的是**高度**：
-    ///   · 100pt → 可用 80pt → 外环外径约 71pt、内环直径约 47pt —— 中心那行
-    ///     「剩余 1.2 GB」（8pt，约 53pt 宽）只会被收一档，不会缩到看不清；
-    ///   · 低于 92pt 时内环直径掉到 43pt 以下，那一行又要被压到 0.8 倍以下。
-    private static let ringHeight: CGFloat = 100
+    /// 环的可用直径 = `min(列宽, 高度 − 20)`；要拿到 120pt 的可用直径，高度取 140pt。
+    /// 右侧四行加起来约 90pt（`.fillEqually` 摊到 140pt），所以**组件总高由环决定**：
+    /// 140 + 系统头部 24 + 上下留白 16 = **约 180pt**。
+    private static let ringHeight: CGFloat = 140
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -88,22 +90,26 @@ final class TodayWidgetView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func build() {
-        // 后三格等宽：它们的内容（标题 + 读数 + 单位）都短，等分就够。
-        let cells = UIStackView(arrangedSubviews: [temperatureCell, chargerCell, cellCell])
-        cells.axis = .horizontal
-        cells.spacing = 4
-        cells.distribution = .fillEqually
+        // **排列方式参照 CPU-X 的负一屏组件**：圆环独占左列，右侧一列自上而下放四行
+        // —— 电芯温度 / 充电器 / 电芯 / 存储，每行都是「标签靠左、读数靠右」。
+        //
+        // 这比早先「四格横排 + 存储占一整条」明显省高度：右侧四行加起来约 90pt，而环
+        // 高 140pt，组件总高于是由环决定（约 180pt，比横排方案的 219pt 矮 39pt）。
+        let side = UIStackView(arrangedSubviews: [temperatureCell, chargerCell, cellCell, storage])
+        side.axis = .vertical
+        side.spacing = 12
+        // **不摊满、只用自己的自然高度**（`.fill` + `row.alignment = .center`）。
+        // 早先用 `.fillEqually` 把四行拉到与环同高，行与行的距离被撑到 33pt 上下 ——
+        // 用户要求「拉近点」，所以改成「内容高约 104pt、整体在环高内居中」。
 
-        // 圆环那一格**不再与后三格等宽** —— 环的直径受 `min(格宽, 格高 − 20)` 双重
-        // 限制：四等分时格宽只有约 76pt，环最多到 47pt、内环直径 22pt，中心那行
-        // "96%" 根本放不下（0.0.41 实机被截成了 "9…"）。按用户提的方案把这一格加宽，
-        // 后三格相应收窄 —— 它们的内容本来就短，收窄后仍然放得下。
-        let row = UIStackView(arrangedSubviews: [ringView, cells])
+        let row = UIStackView(arrangedSubviews: [ringView, side])
         row.axis = .horizontal
-        row.spacing = 6
+        row.spacing = 10
         row.distribution = .fill
-        // 行高由圆环那一格定（它比三格文字高得多），三格文字垂直居中才配得平。
+        // `.center` 而不是 `.fill`：右侧一列保持自然高度并垂直居中，行距才由
+        // `side.spacing` 说了算（`.fill` 会把它拉到与环等高）。
         row.alignment = .center
+        row.translatesAutoresizingMaskIntoConstraints = false
 
         // **圆环必须自己有确定的尺寸** —— 这是 0.0.40 实机「一个环都看不到」的根因。
         //
@@ -119,35 +125,33 @@ final class TodayWidgetView: UIView {
         // 同文件里 `TodayCellView` / `TodayStorageView` 都靠内部约束链把自己的高度
         // 撑起来，所以这个坑只有圆环会踩。
         ringView.translatesAutoresizingMaskIntoConstraints = false
-        let ringWidth = ringView.widthAnchor.constraint(equalTo: row.widthAnchor,
-                                                        multiplier: Self.ringWidthRatio)
-        // 750 而不是 required：窄屏或英文界面下后三格的文字会更宽，让 stack 有余地
-        // 稍微压缩圆环那一格（环跟着小一点），总好过把文字挤掉。
-        ringWidth.priority = .defaultHigh
-        ringWidth.isActive = true
-        ringView.heightAnchor.constraint(equalToConstant: Self.ringHeight).isActive = true
-
-        root.axis = .vertical
-        root.spacing = 14
-        root.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(row)
-        root.addArrangedSubview(storage)
-        addSubview(root)
-
-        // 内容**垂直居中**，而不是贴上下边缘。
-        //
-        // 组件的实际高度由 `preferredContentSize` 定（内容自然高 + 系统头部），比内容
-        // 的自然高度略高一点。原来上下贴边、中间只留一个 spacing，多出来的那截就全堆在
-        // 四组与存储条之间，看着空。改成居中后，多余空间平均分到上下两端。
+        // **两条宽度都写成 required，明确把整行切开。** 这是 0.0.43 实机「环比设计小一半」
+        // 的根因：当时只给圆环一条 750 优先级的比例约束，与后三格 stack 的
+        // compression resistance（同为 750）撞在一起，真机上后者赢了 —— 环格被压到
+        // 约 53pt，环于是只画到约 39pt（设计值 71pt）。让两者之和恒等于行宽，
+        // 就没有这种争夺。
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: leadingAnchor,
-                                          constant: Self.horizontalInset),
-            root.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                           constant: -Self.horizontalInset),
-            root.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ringView.widthAnchor.constraint(equalTo: row.widthAnchor,
+                                            multiplier: Self.ringWidthRatio),
+            side.widthAnchor.constraint(equalTo: row.widthAnchor,
+                                        multiplier: 1 - Self.ringWidthRatio,
+                                        constant: -row.spacing),
+            ringView.heightAnchor.constraint(equalToConstant: Self.ringHeight),
+        ])
+
+        addSubview(row)
+
+        // 整块内容**垂直居中**：组件的实际高度由 `preferredContentSize` 定
+        // （内容自然高 + 系统头部 + 上下留白），多出来的部分平均分到上下两端。
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor,
+                                         constant: Self.horizontalInset),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                          constant: -Self.horizontalInset),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor),
             // 内容万一长得超过组件高度，这两个不等式保证它不会溢出到边界外。
-            root.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
-            root.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+            row.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
+            row.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
     }
 
@@ -162,7 +166,7 @@ final class TodayWidgetView: UIView {
     /// 数字与单位**分开**传：单位要小一号、颜色也更淡。所以这里用 `Formatting.number`
     /// 而不是 `Formatting.percent` —— 后者会把 `%` 一起吐出来，再叠一个单位就印出两个。
     func apply(hardware: HardwareSnapshot, power: PowerSnapshot, battery: BatteryInfo?) {
-        // 第 1 格：CPU + RAM 双圆环。
+        // 左列：CPU + RAM 双圆环。
         //
         // 内存那两个数走 CPU-X 的口径：百分比和剩余容量都是「只有完全空闲的页才算数」
         // （`strictUsage` + `free`）。不这么统一的话，93% 配一个 199 MB 会读不通 ——
@@ -176,7 +180,7 @@ final class TodayWidgetView: UIView {
                        ramDetail: Formatting.memory(hardware.memory.free),
                        cpuPercentText: "\(Formatting.number(hardware.cpu.usage * 100))%")
 
-        // 第 2 格：电芯温度。
+        // 右列第 1 行：电芯温度。
         //
         // 读数来自守护进程（`BatteryInfo.temperature`，也就是电源页「电池」面板里
         // 那个 Temperature）—— 负一屏自己读不到：iOS 不允许 appex 访问 IOReport，
@@ -209,12 +213,13 @@ final class TodayWidgetView: UIView {
 
 // MARK: - 一组读数
 
-/// 一组读数的两层：小标签 / 大读数（+ 单位）。
+/// 右侧清单里的一行：**标签靠左、读数靠右**（+ 单位）。
 ///
-/// **2026-10-13 去掉了原来的第三层「副标签」。** 它当时只为「输入功率」四个字存在 ——
-/// 而那句话说的事看标题就知道。
+/// **2026-10-13 去掉了原来的第三层「副标签」**（它当时只为「输入功率」四个字存在）；
+/// 0.0.45 又从「标签在上、读数在下」的竖排改成 CPU-X 那种一行一条的横排 ——
+/// 同样的信息，横排只占一行的高度。
 ///
-/// 两层各自固定字号（caption 12 medium ／ 读数 12 semibold ／ 单位 9 medium），
+/// 字号固定为 caption 12 medium ／ 读数 12 semibold ／ 单位 11 medium，
 /// 读数用等宽数字 —— 每秒刷新时宽度不会跳动。
 final class TodayCellView: UIView {
 
@@ -226,13 +231,13 @@ final class TodayCellView: UIView {
     // 的 `centre`）：读数 semibold + 等宽数字（主程序 `mwReadout` 也是这个组合），
     // 其余文字一律 **medium** —— 主程序那边 caption 是 `AppFont.text(12, .medium)`，
     // **不是** semibold；负一屏原来用 semibold，摆在一起 caption 的份量比读数还重。
-    // 单位也要明显小一档（功率圆环是 52 : 20），这里取 12 : 9。
     //
-    // **2026-10-13 改回 12 / 12 / 9。** 数值 26pt 那版在真机上过重，用户要求恢复；
-    // 单位 11 → 9 是为了让「大读数 + 小单位」的层级和主程序一致。
+    // **字号按用户要求恢复到 0.0.39 那一版：12 / 12 / 11。** 0.0.43 曾把单位压到 9pt
+    // 去凑「大读数 + 小单位」的层级，但真机上三格整体显得偏小 —— 层级靠**字重**区分
+    // 就够了，不必再压字号。
     private static let captionFont = TodayFont.text(12, weight: .medium)
     private static let valueFont = TodayFont.readout(12, weight: .semibold)
-    private static let unitFont = TodayFont.text(9, weight: .medium)
+    private static let unitFont = TodayFont.text(11, weight: .medium)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -254,18 +259,29 @@ final class TodayCellView: UIView {
         valueRow.spacing = 2
         valueRow.alignment = .firstBaseline
 
-        let stack = UIStackView(arrangedSubviews: [captionLabel, valueRow])
-        stack.axis = .vertical
-        stack.spacing = 2
-        stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        // **标签靠左、读数靠右**（CPU-X 那种「一行一条」的排法）。中间那个空视图负责
+        // 吸收余量 —— 它的 hugging 压到 1，多余宽度就全归它，两侧文字各自贴边。
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(UILayoutPriority(1), for: .horizontal)
+
+        let line = UIStackView(arrangedSubviews: [captionLabel, spacer, valueRow])
+        line.axis = .horizontal
+        line.spacing = 6
+        // `.center` 而不是 `.firstBaseline`：spacer 没有基线，用基线对齐会退化。
+        // 两边的字都是 12 / 11pt，居中对齐与基线对齐肉眼看不出差别。
+        line.alignment = .center
+        line.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(line)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            line.leadingAnchor.constraint(equalTo: leadingAnchor),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor),
+            // **垂直居中，不贴满**：右侧那一列用 `.fillEqually` 把每行拉到等高，
+            // 贴满会把这一行撑开、文字跑到行中央偏上的位置。
+            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
+            line.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
     }
 
@@ -308,6 +324,10 @@ final class TodayStorageView: UIView {
         detailLabel.font = TodayFont.readout(12)
         detailLabel.textColor = TodayStyle.muted
         detailLabel.textAlignment = .right
+        // 「已用 47.96 GB · 剩余 11.54 GB」在右侧那一列（约 177pt）里会差一点点，
+        // 允许收一档 —— 总好过把左边的「存储」挤掉。
+        detailLabel.adjustsFontSizeToFitWidth = true
+        detailLabel.minimumScaleFactor = 0.75
 
         track.backgroundColor = TodayStyle.track
         track.layer.cornerRadius = 2.5
@@ -344,8 +364,11 @@ final class TodayStorageView: UIView {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // **垂直居中，不贴满**：它现在被右侧那一列的 `.fillEqually` 拉着等高，
+            // 贴满会把「存储」那行文字与进度条之间的距离撑开一大截。
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
     }
 
@@ -367,9 +390,10 @@ final class TodayStorageView: UIView {
             .foregroundColor: TodayStyle.muted,
             .kern: TodayFont.captionTracking,
         ])
-        detailLabel.text = Strings.text("%@ used · %@ free",
-                                        Formatting.bytes(used),
-                                        Formatting.bytes(free))
+        // **只报剩余**（用户要求）。已用的信息在主 App 的存储页里更完整，负一屏这一行
+        // 给它只会把文案撑长 —— 上一版「已用 47.96 GB · 剩余 11.54 GB」在右侧那一列里
+        // 已经要靠自动缩字号才放得下。
+        detailLabel.text = "\(Strings.text("Free")) \(Formatting.bytes(free))"
         setNeedsLayout()
     }
 

@@ -66,6 +66,14 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 取 24pt，落在两者之间偏保守一侧。
     private static let systemHeaderHeight: CGFloat = 24
 
+    /// 内容区上下各留的呼吸空间。
+    ///
+    /// 组件高度必须比「内容 + 系统头部」**再多出这一段**：多出来的部分由
+    /// `TodayWidgetView` 的 `centerY` 约束平均分到上下两端；少掉它，最下面那条存储
+    /// 进度条就会紧贴组件底边（0.0.44 的效果图里正是如此）。
+    /// 0.0.39 看着舒服，也是因为它报的高度（118）比内容（约 92）多出二十几点。
+    private static let contentBreathing: CGFloat = 8
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -248,8 +256,12 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
             CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-        // 加上系统头部那一段，才是「组件总高」—— 少这一段内容就会被底边裁掉。
-        let wanted = max(minimumHeight, (fitted.height + Self.systemHeaderHeight).rounded(.up))
+        // 组件总高 = 内容自然高 + 系统头部 + 上下留白。
+        //   · 头部：`preferredContentSize.height` 是**含它**的总高，少算会被底边裁；
+        //   · 留白：给内容上下各匀一截，否则存储条那条进度条会贴着组件底边。
+        let wanted = max(minimumHeight,
+                         (fitted.height + Self.systemHeaderHeight
+                          + Self.contentBreathing * 2).rounded(.up))
         let height = min(wanted, maximumHeight)
         guard preferredContentSize.width != width
                 || abs(preferredContentSize.height - height) > 0.5 else { return }

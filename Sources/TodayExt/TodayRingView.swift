@@ -36,15 +36,15 @@ final class TodayRingView: UIView {
     private static let sweepDegrees: CGFloat = 300
 
     /// 外环（CPU）线宽。
-    private static let outerLineWidth: CGFloat = 5
+    private static let outerLineWidth: CGFloat = 7.5
     /// 内环（RAM）线宽。
-    private static let innerLineWidth: CGFloat = 4
+    private static let innerLineWidth: CGFloat = 6
     /// 两个环之间的净间隙。
     ///
-    /// 5pt 是贴着下限取的：两个切口标签（`RAM` / `CPU xx%`）就落在这圈间隙里，
-    /// 每个约 10pt 高，而两个标签中心的径向距离 = 2.5 + ringGap + 2 = 9.5pt ——
-    /// 间隙再小一点它们就会叠在一起。0.0.41 实机用的 4pt（= 8.5pt）正是这么叠的。
-    private static let ringGap: CGFloat = 5
+    /// 线宽与间隙一起按 1.5 倍放大（原来是 5 / 4 / 5）—— **只放大半径、不放大线宽，
+    /// 环壁会相对变薄**，看着就不是同一个环了。放大后两个切口标签中心的径向距离 =
+    /// 3.75 + 7.5 + 3 = 14.25pt，框高 12pt 正好不叠。
+    private static let ringGap: CGFloat = 7.5
 
     // MARK: - 图层
 
@@ -87,19 +87,19 @@ final class TodayRingView: UIView {
         outerProgress.lineWidth = Self.outerLineWidth
         innerProgress.lineWidth = Self.innerLineWidth
 
-        // 字号：**环是主体，文字只能是环内的配角**。
+        // 字号：**2026-10-13 实机反馈后整组放大 1.5 倍**（11 / 7 / 6 → 16 / 10 / 9）。
         //
-        // 比例调了三轮：0.0.42 是 15 / 9 / 9（被指出「太大、超出圆环」），0.0.43 先收到
-        // 13 / 8 / 8、再收到 11 / 7 / 7，切口标签仍被要求「继续缩小」→ 现在定在
-        // **11 / 7 / 6**：
-        //   · 「96%」11pt 等宽约 20pt，内环直径约 47pt，占四成；
-        //   · 「1.2GB」7pt 约 22pt（已去掉「剩余」前缀）；
-        //   · 切口标签 6pt：「CPU 96%」约 23pt、「RAM」约 14pt。
+        // 比例调过三轮：0.0.42 是 15 / 9 / 9（被指出「太大、超出圆环」）→ 0.0.43 收到
+        // 13 / 8 / 8 → 11 / 7 / 7 → 6pt。但 0.0.43 装到真机上，环与文字一起显得偏小
+        // （根因见 `TodayWidgetView.ringWidthRatio` 那段：宽度约束优先级太低，环格被
+        // 后三格抢掉、环实际只画到约 39pt），用户要求**圆环及文案整体放大 50%**。
+        //   · 「96%」16pt 等宽约 29pt，内环直径约 70pt，占四成；
+        //   · 「1.2GB」10pt 约 31pt（已去掉「剩余」前缀）；
+        //   · 切口标签 9pt：「CPU 96%」约 34pt、「RAM」约 21pt。
         //
-        // **字重对齐主 App 的功率圆环**：那边只有「读数」是 semibold，caption 与单位
-        // 都是 medium（`AppFont.text(12, .medium)`）。所以这里也把两个切口标签降到
-        // medium —— 它们是标签、不是读数。
-        centerValueLabel.font = TodayFont.readout(11, weight: .semibold)
+        // **字重沿用对齐主 App 功率圆环的那一套**：只有「读数」是 semibold，caption
+        // 与标签都是 medium（`AppFont.text(12, .medium)`）。
+        centerValueLabel.font = TodayFont.readout(16, weight: .semibold)
         centerValueLabel.textColor = TodayStyle.primary
         centerValueLabel.textAlignment = .center
         centerValueLabel.adjustsFontSizeToFitWidth = true
@@ -107,17 +107,17 @@ final class TodayRingView: UIView {
 
         // 第二行是纯数字 + 西文的短行（`1.2GB`），按主程序副行（`mwMono`）的规矩用
         // **真等宽**；再往下那两个切口标签是拉丁标签，与主程序 caption 同规，用 text。
-        centerDetailLabel.font = TodayFont.mono(7)
+        centerDetailLabel.font = TodayFont.mono(10)
         centerDetailLabel.textColor = TodayStyle.muted
         centerDetailLabel.textAlignment = .center
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        ramLabel.font = TodayFont.text(6, weight: .medium)
+        ramLabel.font = TodayFont.text(9, weight: .medium)
         ramLabel.textColor = TodayStyle.ramRing
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(6, weight: .medium)
+        cpuLabel.font = TodayFont.text(9, weight: .medium)
         cpuLabel.textColor = TodayStyle.cpuRing
         cpuLabel.textAlignment = .center
 
@@ -159,9 +159,9 @@ final class TodayRingView: UIView {
     }
 
     private func layoutLabels(center: CGPoint, outerRadius: CGFloat, innerRadius: CGFloat) {
-        // 行高跟着字号走（11pt 等宽约 14pt 行高，7pt 约 9pt 行高）。
-        let valueHeight: CGFloat = 14
-        let detailHeight: CGFloat = 9
+        // 行高跟着字号走（16pt 等宽约 21pt 行高，10pt 约 13pt 行高）。
+        let valueHeight: CGFloat = 21
+        let detailHeight: CGFloat = 13
 
         // 中心两行以**内环圆心**为基准居中：先算两行的总高，再把它对称地摆到圆心两侧。
         let total = valueHeight + detailHeight
@@ -180,11 +180,11 @@ final class TodayRingView: UIView {
         // 落进缺口的中央。该点的垂直偏移 = R × sin60° —— 7 点与 5 点分别在 210° / 150°
         // 方向，两个方向上的余弦相消、正弦同号，中点就落在圆心正下方 0.866R 处。
         //
-        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) = 8.2pt，框高取 8pt
+        // 两个标签中心因此相距 0.866 × (outerRadius − innerRadius) ≈ 12.3pt，框高取 12pt
         // 正好不叠（0.0.41 曾用 12pt 框压进 8.5pt 的间隙，实机上叠成了一团）。
         let sin60 = sin(CGFloat.pi / 3)
-        let labelWidth: CGFloat = 52
-        let labelHeight: CGFloat = 8
+        let labelWidth: CGFloat = 68
+        let labelHeight: CGFloat = 12
         let cutCentreY = center.y + outerRadius * sin60
         let innerCutCentreY = center.y + innerRadius * sin60
 
