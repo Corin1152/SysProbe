@@ -46,6 +46,7 @@
 #include <dlfcn.h>
 #include <mach/mach.h>          // mach_port_t
 #include <objc/objc.h>          // BOOL / YES / NO
+#include <stdio.h>              // snprintf（诊断字符串）
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -314,25 +315,47 @@ static BOOL gSubscriptionOK = NO;
 static IORepSubRef gSubscription = NULL;
 static CFMutableDictionaryRef gSubscribedChannels = NULL;
 
+/// 订阅尝试的逐步结果。**只为诊断** —— 这两步会分别失败，混在一起看就只能靠猜：
+///
+///   · `copy-null`：连 `IOReportCopyChannelsInGroup` 都拿不到东西，
+///     说明 IOKit 访问在**更早的一步**就被拒了（不是订阅本身的问题）；
+///   · `sub-null`：通道枚举成功、但 `IOReportCreateSubscription` 返回 NULL，
+///     那才是「订阅被拒」。
+static const char *gCopyResult = "not-tried";
+static const char *gSubscribeResult = "not-tried";
+static int gChannelsSeen = 0;
+
 static BOOL try_subscribe(CFStringRef group, CFStringRef subgroup,
                           IORepSubRef *subOut, CFMutableDictionaryRef *channelsOut)
 {
-    if (!pCopyChannelsInGroup || !pCreateSubscription) return NO;
+    if (!pCopyChannelsInGroup || !pCreateSubscription) {
+        gCopyResult = "symbols-missing";
+        return NO;
+    }
 
     CFMutableDictionaryRef channels = pCopyChannelsInGroup(group, subgroup, 0, 0, 0);
-    if (!channels) return NO;
-    if (channel_count_of(channels) == 0) {   // group 不存在时也返回字典，但通道为空
+    if (!channels) {
+        gCopyResult = "copy-null";
+        return NO;
+    }
+    CFIndex n = channel_count_of(channels);
+    if (n == 0) {   // group 不存在时也返回字典，但通道为空
+        gCopyResult = "group-empty";
         CFRelease(channels);
         return NO;
     }
+    gCopyResult = "copy-ok";
+    gChannelsSeen = (int)n;
 
     CFMutableDictionaryRef subbed = NULL;
     IORepSubRef sub = pCreateSubscription(NULL, channels, &subbed, 0, NULL);
     if (!sub) {
+        gSubscribeResult = "sub-null";
         CFRelease(channels);
         if (subbed) CFRelease(subbed);
         return NO;
     }
+    gSubscribeResult = "sub-ok";
 
     CFMutableDictionaryRef target = subbed ? subbed : channels;
     if (target != channels) CFRelease(channels);
@@ -432,13 +455,100 @@ static BOOL name_is_efficiency(CFStringRef name)
 ///
 /// IOReport 的失败是**静默**的：订阅返回 NULL，调用方只看到 0，界面显示「—」，
 /// 没有任何地方报错。主 App 能读出频率而负一屏读不出时，没有这个字符串就只能靠猜。
-/// 取值：`ok` / `no-symbols` / `no-subscription` / `no-freq-tables` /
-/// `sample1-null` / `sample2-null` / `delta-null` / `no-channels` / `all-idle`。
+///
+/// 返回的是一个静态缓冲，内容形如
+/// `no-subscription copy=copy-ok subscribe=sub-null channels=4` ——
+/// 前半段是总体结论，后半段是**订阅那两步各自的**结果，用来区分
+/// 「连通道枚举都被拒」和「枚举成功但订阅被拒」。
 static const char *gLastStatus = "not-called";
+static char gStatusBuffer[512];
+
+/// 读**本进程实际生效**的 entitlements。
+///
+/// 为什么必须看这个：`ldid` 把三条 entitlement 签进了 appex 的 Mach-O（产物里能搜到
+/// 字符串），但**签进去 ≠ 内核认**。iOS 对 appex 的沙箱基线比 App 严，而且
+/// `platform-application` 之类的标记在内核侧可能有额外约束。把实际生效的值打出来，
+/// 才能区分「没签进去」和「签了但被内核忽略」。
+///
+/// `SecTaskCreateFromSelf` / `SecTaskCopyValueForEntitlement` 是 Security 的 SPI，
+/// 公开头文件里没有声明，所以走 dlsym。
+static void append_own_entitlements(char *buf, size_t size)
+{
+    typedef void *(*fn_create_from_self)(CFAllocatorRef);
+    typedef CFTypeRef (*fn_copy_value)(void *, CFStringRef, CFErrorRef *);
+
+    void *handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+    if (!handle) {
+        snprintf(buf, size, "ent=unavailable(no-security)");
+        return;
+    }
+    fn_create_from_self createSelf =
+        (fn_create_from_self)dlsym(handle, "SecTaskCreateFromSelf");
+    fn_copy_value copyValue =
+        (fn_copy_value)dlsym(handle, "SecTaskCopyValueForEntitlement");
+    if (!createSelf || !copyValue) {
+        snprintf(buf, size, "ent=unavailable(no-symbol)");
+        return;
+    }
+
+    void *task = createSelf(kCFAllocatorDefault);
+    if (!task) {
+        snprintf(buf, size, "ent=unavailable(no-task)");
+        return;
+    }
+
+    const char *keys[] = { "platform-application",
+                           "com.apple.private.ioreporting.access",
+                           "com.apple.private.security.no-sandbox" };
+    const char *short_[] = { "platform", "ioreporting", "nosandbox" };
+    char out[256];
+    int off = 0;
+    for (int i = 0; i < 3; i++) {
+        CFStringRef k = CFStringCreateWithCString(kCFAllocatorDefault, keys[i],
+                                                  kCFStringEncodingUTF8);
+        CFTypeRef v = k ? copyValue(task, k, NULL) : NULL;
+        int present = 0;
+        if (v) {
+            present = (CFGetTypeID(v) == CFBooleanGetTypeID())
+                        ? (CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0)
+                        : 1;
+            CFRelease(v);
+        }
+        off += snprintf(out + off, sizeof(out) - (size_t)off, "%s%s=%d",
+                        i ? " " : "", short_[i], present);
+        if (k) CFRelease(k);
+        if (off >= (int)sizeof(out)) break;
+    }
+
+    // iokit user client 例外是个数组，单独看它是否含 IOReportUserClient。
+    CFStringRef ik = CFSTR("com.apple.security.iokit-user-client-class");
+    CFTypeRef iv = copyValue(task, ik, NULL);
+    int hasIOReport = 0;
+    if (iv) {
+        if (CFGetTypeID(iv) == CFArrayGetTypeID()) {
+            CFArrayRef arr = (CFArrayRef)iv;
+            for (CFIndex i = 0; i < CFArrayGetCount(arr); i++) {
+                CFTypeRef e = CFArrayGetValueAtIndex(arr, i);
+                if (e && CFGetTypeID(e) == CFStringGetTypeID() &&
+                    CFStringCompare((CFStringRef)e, CFSTR("IOReportUserClient"), 0) == kCFCompareEqualTo) {
+                    hasIOReport = 1;
+                    break;
+                }
+            }
+        }
+        CFRelease(iv);
+    }
+    snprintf(buf, size, "ent[%s iokit-IOReport=%d]", out, hasIOReport);
+}
 
 const char *sysprobe_ioreport_last_status(void)
 {
-    return gLastStatus;
+    char ent[256];
+    append_own_entitlements(ent, sizeof(ent));
+    snprintf(gStatusBuffer, sizeof(gStatusBuffer),
+             "%s copy=%s subscribe=%s channels=%d %s",
+             gLastStatus, gCopyResult, gSubscribeResult, gChannelsSeen, ent);
+    return gStatusBuffer;
 }
 
 uint64_t sysprobe_real_cpu_frequency_mhz(void)
