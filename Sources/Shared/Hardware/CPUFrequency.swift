@@ -8,28 +8,33 @@ import Foundation
 /// （CLPC 的 per-state residency），也就是 `powermetrics` 的口径。
 /// 只是读内核里的计数器，**不抢性能核**，所以两个进程同时读没有副作用。
 ///
-/// 这条链曾经长期不可用：需要「沙箱例外 `IOReportUserClient` + 特权标记
+/// 这条链需要「沙箱例外 `IOReportUserClient` + 特权标记
 /// `com.apple.private.ioreporting.access`」**两条** entitlement 才能订阅，
 /// 详见 `CPUFrequencyIOReport.c`。
 ///
-/// ## 为什么**不再做**「标称主频 ±窗口」的校验（0.0.37 删除）
+/// ## 谁在用
 ///
-/// 0.0.34~0.0.36 这里有一道校验：读数必须落在标称主频的 1/5 ~ 1.15 倍之间，
-/// 否则判为「不可信」。那道校验是给**忙循环探针**准备的 —— 探针靠「依赖 `add`
-/// 的延迟 = 1 周期」这个**模型**推算频率，模型一旦不成立就会读出离谱数字，
-/// 所以需要一层合理性过滤。
+/// **只有主 App。** 负一屏在 0.0.40 撤掉了频率显示 —— iOS 不允许 appex 访问
+/// IOReport（实测 `IOReportCopyAllChannels` 在扩展里返回**空通道集**，而主 App
+/// 用同样的调用拿到 6036 个通道），所以那边连采样都跳过了
+/// （`HardwareMonitor(includeCPUFrequency: false)`）。
 ///
-/// 但 IOReport 不是模型：它是内核自己维护的档位驻留直方图，**读到的就是真实值**，
-/// 不存在「模型失效」这回事。给它套上探针的过滤窗口反而制造了新问题：
+/// ## 为什么**不做**「标称主频 ±窗口」的校验
+///
+/// 曾经有一道校验：读数必须落在标称主频的 1/5 ~ 1.15 倍之间。那是给**忙循环探针**
+/// 准备的 —— 探针靠「依赖 `add` 的延迟 = 1 周期」这个**模型**推算，模型失效会读出
+/// 离谱数字，所以需要合理性过滤。
+///
+/// 但 IOReport 不是模型：它是内核自己维护的档位驻留直方图，**读到的就是真实值**。
+/// 套上探针的窗口反而制造了新问题：
 ///
 ///   · A11 标称 2390 MHz → 下界 = 2390 / 5 = **478**；
 ///   · 而 A11 的 DVFS 最低档是 **453 MHz**（IOReport 实测）；
 ///   · 于是 CPU 一空闲、P 核落到最低档，读数就被判为不可信 → 界面闪「—」。
 ///
-/// 这正是「频率偶发「—」、而且越空闲越频繁」的来源。现在只保留一个哨兵检查
-/// （`1...10000`，纯粹防未初始化/脏数据），不再拿标称值当参照物。
+/// 现在只保留一个哨兵检查（`1...10000`，纯粹防未初始化/脏数据）。
 ///
-/// ## 短缓存（保留）
+/// ## 短缓存
 ///
 /// IOReport 给的是「这段窗口里的加权平均」。设备深度空闲时，采样窗口里可能
 /// **一次非 IDLE 驻留都没有** —— 加权平均无从算起，C 层返回 0。此时沿用上一次的
@@ -50,11 +55,12 @@ nonisolated enum CPUFrequency {
 
     /// 实测主频（MHz）。测不出时返回 nil。
     ///
-    /// - Parameter nominalMHz: 该机型芯片的标称主频。**当前只用于诊断输出**，
-    ///   不再参与可信度判定 —— 见文件头的说明。
+    /// - Parameter nominalMHz: 该机型芯片的标称主频。**当前不参与可信度判定** ——
+    ///   见文件头的说明。保留这个参数是为了让调用点不必改签名。
     static func measureMHz(nominalMHz: Int) -> Int? {
+        _ = nominalMHz
+
         let measured = Int(sysprobe_real_cpu_frequency_mhz())
-        let status = String(cString: sysprobe_ioreport_last_status())
 
         // 哨兵检查：只挡未初始化 / 脏数据，不拿标称值当参照。
         if measured > 0 && measured <= 10000 {
@@ -62,7 +68,6 @@ nonisolated enum CPUFrequency {
             lastGoodMHz = measured
             lastGoodStamp = CFAbsoluteTimeGetCurrent()
             cacheLock.unlock()
-            writeDiagnosis(status: status, value: measured, nominal: nominalMHz)
             return measured
         }
 
@@ -72,36 +77,9 @@ nonisolated enum CPUFrequency {
         let age = CFAbsoluteTimeGetCurrent() - lastGoodStamp
         cacheLock.unlock()
 
-        writeDiagnosis(status: status, value: 0, nominal: nominalMHz)
         if cached > 0 && age < staleWindow {
             return cached
         }
         return nil
     }
-
-    // MARK: - 诊断
-
-    /// 把最近一次 IOReport 调用的结果落到一个**容器外**的固定路径。
-    ///
-    /// 为什么需要：主 App 能读出频率、负一屏读不出，而 IOReport 的失败是**静默**的
-    /// （订阅返回 NULL，调用方只看到 0）。没有这个文件就只能靠猜。
-    ///
-    /// 只在内容变化时写，所以稳态下几乎不产生 I/O。两个进程各写各的文件
-    /// （用 bundle id 区分），不会互相覆盖。
-    private static func writeDiagnosis(status: String, value: Int, nominal: Int) {
-        let id = Bundle.main.bundleIdentifier ?? "unknown"
-        let line = "bundle=\(id) pid=\(ProcessInfo.processInfo.processIdentifier) "
-            + "status=\(status) value=\(value) nominal=\(nominal)\n"
-        let path = "/var/mobile/Library/Caches/sysprobe_ioreport_\(id).txt"
-
-        cacheLock.lock()
-        let changed = (line != lastDiagLine)
-        if changed { lastDiagLine = line }
-        cacheLock.unlock()
-        guard changed else { return }
-
-        try? line.write(toFile: path, atomically: true, encoding: .utf8)
-    }
-
-    private nonisolated(unsafe) static var lastDiagLine = ""
 }

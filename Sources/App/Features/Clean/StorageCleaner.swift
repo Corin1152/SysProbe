@@ -155,7 +155,7 @@ nonisolated enum StorageCleaner {
     ///
     /// 类型必须是 `Int32`：C 的 `int timeoutMs` 在 Swift 里是 `Int32`，而 Swift
     /// **不会**把 `Int` 隐式转过去（项目里所有 C `int` 参数都显式转换，
-    /// 如 `sysprobe_local_port_open(Int32(ChargeBridge.port))`）。
+    /// 如 `sysprobe_local_port_open(Int32(DaemonBridge.port))`）。
     private static let scanTimeoutMs: Int32 = 120_000
     /// 一次「全部清理」的预算。删几十万个小文件是 IOPS 活，给足余量。
     private static let cleanTimeoutMs: Int32 = 300_000

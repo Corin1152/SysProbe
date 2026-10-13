@@ -180,6 +180,14 @@ nonisolated struct SamplingState {
 final class HardwareMonitor: ObservableObject {
     @Published private(set) var snapshot = HardwareSnapshot()
 
+    /// 是否采 CPU 频率。
+    ///
+    /// **负一屏传 false。** iOS 不允许 appex 访问 IOReport（实测
+    /// `IOReportCopyAllChannels` 在扩展里返回**空通道集**，而主 App 用同样的调用拿到
+    /// 6036 个通道 —— 这是进程类型的沙箱限制，加 entitlement 也绕不过），所以扩展里
+    /// 那 200 ms 的采样窗口纯属白等。主 App 保持 true。
+    private let includeCPUFrequency: Bool
+
     private var ticker: AnyCancellable?
     /// 采样过程中要跨帧保留的状态（CPU tick 基线、容量缓存）。
     ///
@@ -202,6 +210,10 @@ final class HardwareMonitor: ObservableObject {
     private let samplingQueue = DispatchQueue(label: "com.corin.sysprobe.sampling",
                                               qos: .utility)
 
+    init(includeCPUFrequency: Bool = true) {
+        self.includeCPUFrequency = includeCPUFrequency
+    }
+
     func start() {
         guard ticker == nil else { return }
         // 首拍**同步**跑完，之后每一拍才走 `samplingQueue`。
@@ -222,7 +234,7 @@ final class HardwareMonitor: ObservableObject {
         //
         // 此刻 `ticker` 还没建起来，不可能有采样在飞，所以这里直接碰 `samplingState`
         // 是安全的（平时的约定是「只在 `samplingQueue` 上访问」）。
-        var first = Self.sample(state: &samplingState)
+        var first = Self.sample(state: &samplingState, includeFrequency: includeCPUFrequency)
         first.system = Self.readSystem()
         snapshot = first
 
@@ -253,7 +265,7 @@ final class HardwareMonitor: ObservableObject {
 
         samplingQueue.async { [weak self] in
             guard let self else { return }
-            let sampled = Self.sample(state: &self.samplingState)
+            let sampled = Self.sample(state: &self.samplingState, includeFrequency: self.includeCPUFrequency)
             Task { @MainActor in
                 var next = sampled
                 // `UIDevice.current` 是主 actor 隔离的，只能在这里读。剩下的是静态
@@ -272,7 +284,8 @@ final class HardwareMonitor: ObservableObject {
     /// 跨帧状态通过 `state` 进出 —— 它是 `nonisolated(unsafe)` 的，只允许在这条
     /// 串行队列上访问。返回值里**不含** `system`：那一项要读 `UIDevice`，由调用方
     /// 在主线程补上。
-    nonisolated private static func sample(state: inout SamplingState) -> HardwareSnapshot {
+    nonisolated private static func sample(state: inout SamplingState,
+                                           includeFrequency: Bool) -> HardwareSnapshot {
         var next = HardwareSnapshot()
         next.date = .now
 
@@ -283,15 +296,16 @@ final class HardwareMonitor: ObservableObject {
         // 只有频率以前借了共享文件。
         var cpu = readCPU(previous: &state.previousTicks)
 
-        // CPU 频率：自己读 IOReport（`sysprobe_real_cpu_frequency_mhz`，与 Helium
-        // 共用同一份实现）。它只读 CLPC 的驻留计数器、不占性能核，所以两个 App
-        // 同时读没有副作用 —— 这也正是「各自读」现在可行的前提。
+        // CPU 频率：主 App 自己读 IOReport（`sysprobe_real_cpu_frequency_mhz`）。
         //
-        // 读不到（非 root / 订阅被拒 / 采样窗口全 IDLE / 档位表缺失）就留 0，
-        // 界面显示「—」。**刻意不回落成标称主频**：那是个常数，摆在「当前频率」
-        // 的位置上会让人以为读数有效。
+        // **扩展侧跳过**（`includeFrequency == false`）：iOS 不允许 appex 访问 IOReport
+        // —— 实测 `IOReportCopyAllChannels` 在扩展里返回**空通道集**，而主 App 用同样
+        // 的调用拿到 6036 个通道。既然拿不到，那 200 ms 的采样窗口就是白等。
+        // 负一屏本来也不再显示频率了。
         cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
-        cpu.frequencyMHz = CPUFrequency.measureMHz(nominalMHz: cpuIdentity.nominalFrequencyMHz) ?? 0
+        cpu.frequencyMHz = includeFrequency
+            ? (CPUFrequency.measureMHz(nominalMHz: cpuIdentity.nominalFrequencyMHz) ?? 0)
+            : 0
         next.cpu = cpu
 
         next.memory = readMemory()

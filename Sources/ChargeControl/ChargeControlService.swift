@@ -23,7 +23,7 @@ final class ChargeControlService: ObservableObject {
     // MARK: Published
 
     @Published private(set) var config = ChargeConfig()
-    @Published private(set) var battery = ChargeBatteryInfo()
+    @Published private(set) var battery = BatteryInfo()
     /// 1230 端口上有人在监听 —— 也就是守护进程活着。
     @Published private(set) var daemonRunning = false
     /// 至少成功读到过一次配置。界面靠它区分「还没读到」与「读到了，值恰好是默认」。
@@ -106,7 +106,7 @@ final class ChargeControlService: ObservableObject {
     /// 已经有人在听就 `exit(0)`。所以就算这里和它自己的启动抢上了，也只会多一个
     /// 立刻退出的进程，不会有两个服务。
     private func ensureDaemon() {
-        if sysprobe_local_port_open(Int32(ChargeBridge.port)) != 0 {
+        if sysprobe_local_port_open(Int32(DaemonBridge.port)) != 0 {
             daemonRunning = true
             return
         }
@@ -152,7 +152,7 @@ final class ChargeControlService: ObservableObject {
         inFlight = true
         defer { inFlight = false }
 
-        guard let fresh = await ChargeBridge.batteryInfo() else {
+        guard let fresh = await BatteryBridge.batteryInfo() else {
             daemonRunning = false
             return
         }

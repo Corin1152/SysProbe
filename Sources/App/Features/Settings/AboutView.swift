@@ -82,11 +82,11 @@ struct AboutView: View {
             // 守护进程托管的网页界面。App 里**不用**它（见 `ChargeControlPanels`），
             // 但它是 App 之外最后一道保险：界面出问题时，在 Safari 里打开
             // 这个地址依然能手动停充。
-            Link(destination: ChargeBridge.interfaceURL) {
+            Link(destination: DaemonBridge.interfaceURL) {
                 HStack {
                     Text("Service address")
                     Spacer()
-                    Text(ChargeBridge.interfaceURL.absoluteString)
+                    Text(DaemonBridge.interfaceURL.absoluteString)
                         .foregroundStyle(Color.mwAccent)
                 }
             }

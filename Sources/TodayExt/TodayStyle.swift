@@ -34,6 +34,18 @@ nonisolated enum TodayStyle {
     static let stroke = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.08)
     /// 轨道底色（进度条、环的未填充部分）。
     static let track = dynamic(0x0A0A0A, 0xFFFFFF).withAlphaComponent(0.10)
+    /// 主要读数（大号数字）。
+    static let primary = dynamic(0x111318, 0xF2F4F8)
+
+    // 双圆环的两条环色。
+    //
+    // **不用 `loadTint`**：那个是「占用越高越红」的三段变色，适合单条进度条；而双环
+    // 是**两个不同的量**并排显示，各用各的固定色才能一眼分清哪圈是 CPU、哪圈是 RAM。
+    // 会变色的话，某个瞬间两圈都变红，就分不出谁是谁了。
+    /// 外环：CPU。
+    static let cpuRing = dynamic(0x1F7AE0, 0x5AA9FF)
+    /// 内环：RAM。
+    static let ramRing = dynamic(0x4E9A06, 0x8BD44A)
 
     static let cardRadius: CGFloat = 16
     static let cardPadding: CGFloat = 14

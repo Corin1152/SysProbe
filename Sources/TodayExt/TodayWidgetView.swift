@@ -17,20 +17,29 @@ import UIKit
 ///
 /// ## 排版
 ///
-/// 尺寸对齐 CPU-X 的组件（约 118pt 高）。内容分四组横排，每组「标签 / 大读数 /
-/// 副标签」三层；四组下面是一条系统存储的进度条。
+/// 尺寸对齐 CPU-X 的组件（约 118pt 高）。内容分四组横排，四组下面是一条系统存储的
+/// 进度条。
 ///
-///      CPU          内存         充电器        电芯
-///      11%          88%          1.61 W       0.59 W
-///      2376 MHz     351 MB 空闲  输入功率     输入功率
+///      ╭─╮           电芯温度      充电器        电芯
+///     ╱   ╲          32.5 °C       4.91 W       87 %
+///    │ 62% │
+///     ╲RAM╱
 ///
 ///      存储              已用 12.2 GB · 剩余 51.8 GB
 ///      ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+///
+/// **2026-10-13 改版**：第 1 格从「CPU 读数」换成 CPU/RAM 双圆环（`TodayRingView`），
+/// 第 2 格从「内存读数」换成电芯温度；第 3、4 格保留，但去掉了「输入功率」脚注、
+/// 数值放大到 26pt。存储条不变。
+///
+/// 频率**不再显示**：iOS 不允许 appex 访问 IOReport（实测 `IOReportCopyAllChannels`
+/// 在扩展里返回空通道集），而主 App 被挂起时也供不了数 —— 与其显示一个常年「—」，
+/// 不如去掉这一项。
 final class TodayWidgetView: UIView {
 
-    /// 四组读数，顺序：CPU / 内存 / 充电器 / 电芯。
-    private let cpuCell = TodayCellView()
-    private let memoryCell = TodayCellView()
+    /// 四组，顺序：双圆环（CPU + RAM）/ 电芯温度 / 充电器 / 电芯。
+    private let ringView = TodayRingView()
+    private let temperatureCell = TodayCellView()
     private let chargerCell = TodayCellView()
     private let cellCell = TodayCellView()
     private let storage = TodayStorageView()
@@ -53,7 +62,7 @@ final class TodayWidgetView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func build() {
-        let row = UIStackView(arrangedSubviews: [cpuCell, memoryCell, chargerCell, cellCell])
+        let row = UIStackView(arrangedSubviews: [ringView, temperatureCell, chargerCell, cellCell])
         row.axis = .horizontal
         row.spacing = 4
         // `.fillEqually`：四组等宽，读数不会因为某组数字长就把别的挤歪。
@@ -87,47 +96,47 @@ final class TodayWidgetView: UIView {
 
     // MARK: 每秒刷新
 
-    /// 数据来自两个采样器：硬件（CPU / 内存 / 存储）与电源（充电功率）。
+    /// 数据来自三个来源：硬件（CPU / 内存 / 存储）、电源（充电功率）、电池（温度）。
     ///
     /// 未插电时 `inputWatts` / `batteryWatts` 会是 nil，这里按 **0 W** 显示而不是「—」：
     /// 四组读数里突然出现一个破折号，看上去像「这一项坏了」；而 0 W 本身是准确的读数
-    /// （确实没有功率进来）。电芯那组本来就是这个行为，两组现在一致。
+    /// （确实没有功率进来）。
     ///
     /// 数字与单位**分开**传：单位要小一号、颜色也更淡。所以这里用 `Formatting.number`
     /// 而不是 `Formatting.percent` —— 后者会把 `%` 一起吐出来，再叠一个单位就印出两个。
-    func apply(hardware: HardwareSnapshot, power: PowerSnapshot) {
-        cpuCell.apply(caption: Strings.text("CPU"),
-                      value: Formatting.number(hardware.cpu.usage * 100),
-                      unit: "%",
-                      tint: TodayStyle.loadTint(hardware.cpu.usage),
-                      footnote: hardware.cpu.frequencyMHz > 0
-                          ? "\(hardware.cpu.frequencyMHz) MHz"
-                          : "—")
+    func apply(hardware: HardwareSnapshot, power: PowerSnapshot, battery: BatteryInfo?) {
+        // 第 1 格：CPU + RAM 双圆环。
+        //
+        // 内存那两个数走 CPU-X 的口径：百分比和剩余容量都是「只有完全空闲的页才算数」
+        // （`strictUsage` + `free`）。不这么统一的话，93% 配一个 199 MB 会读不通 ——
+        // 3 GB 的机器剩 199 MB 对应 93%、剩 87 MB 对应 97%，两个数必须出自同一套算法。
+        ringView.apply(cpuFraction: hardware.cpu.usage,
+                       ramFraction: hardware.memory.strictUsage,
+                       ramDetail: "\(Strings.text("Free")) \(Formatting.bytes(hardware.memory.free))",
+                       cpuPercentText: "\(Formatting.number(hardware.cpu.usage * 100))%")
 
-        // 这一格整个走 CPU-X 的口径：百分比和下面那个容量都是「只有完全空闲的页
-        // 才算数」（`strictUsage` + `free`），也就是 CPU-X 的 `Mem Free`。
-        // 不这么统一的话，93% 配一个 199 MB 的脚注会读不通 —— 3 GB 的机器剩 199 MB
-        // 对应的是 93%，剩 87 MB 对应的是 97%，两个数必须出自同一套算法。
-        memoryCell.apply(caption: Strings.text("Memory"),
-                         value: Formatting.number(hardware.memory.strictUsage * 100),
-                         unit: "%",
-                         tint: TodayStyle.loadTint(hardware.memory.strictUsage),
-                         // 只出容量，不带「空闲」二字 —— 这一格的位置本来就说明了它是剩余。
-                         footnote: Formatting.bytes(hardware.memory.free))
+        // 第 2 格：电芯温度。
+        //
+        // 读数来自守护进程（`BatteryInfo.temperature`，也就是电源页「电池」面板里
+        // 那个 Temperature）—— 负一屏自己读不到：iOS 不允许 appex 访问 IOReport，
+        // 而电池温度那一路要的正是它。
+        let temperature = battery?.temperature
+        temperatureCell.apply(caption: Strings.text("Cell temperature"),
+                              value: temperature.map { String(format: "%.1f", $0) } ?? "—",
+                              unit: temperature == nil ? nil : "°C",
+                              tint: temperature.map { TodayStyle.temperature($0) } ?? TodayStyle.muted)
 
         chargerCell.apply(caption: Strings.text("Charger"),
                           value: Formatting.watts(power.inputWatts ?? 0),
                           unit: "W",
                           // 与电芯那组同色：两格都是功率读数，一个青一个绿会让人以为
                           // 它们在表达不同的东西。
-                          tint: TodayStyle.battery,
-                          footnote: Strings.text("Input power"))
+                          tint: TodayStyle.battery)
 
         cellCell.apply(caption: Strings.text("Cell"),
                        value: Formatting.watts(abs(power.batteryWatts ?? 0)),
                        unit: "W",
-                       tint: TodayStyle.battery,
-                       footnote: Strings.text("Input power"))
+                       tint: TodayStyle.battery)
 
         storage.apply(used: hardware.storage.used, free: hardware.storage.free)
     }
@@ -137,20 +146,28 @@ final class TodayWidgetView: UIView {
 
 /// 一组读数的三层：小标签 / 大读数 / 副标签。
 ///
-/// 三层各自固定字号，且读数用等宽数字 —— 每秒刷新时宽度不会跳动。
+/// 两层：小标签 / 大读数（+ 单位）。
+///
+/// **2026-10-13 去掉了原来的第三层「副标签」。** 它当时只为「输入功率」四个字存在 ——
+/// 而那句话说的事看标题就知道。少一层之后读数能占满整格高度，也就有空间把数值
+/// 从 12pt 放大到 26pt。
+///
+/// 两层各自固定字号，且读数用等宽数字 —— 每秒刷新时宽度不会跳动。
 final class TodayCellView: UIView {
 
     private let captionLabel = UILabel()
     private let valueLabel = UILabel()
     private let unitLabel = UILabel()
-    private let footnoteLabel = UILabel()
 
     // 字号集中在这里。`init` 里设一次，`apply` 里拼 attributedText 时还要再用一次 ——
     // 两处各写一遍迟早会写岔。
-    private static let captionFont = TodayFont.text(12, weight: .semibold)
-    private static let valueFont = TodayFont.mono(12, weight: .semibold)
-    private static let unitFont = TodayFont.text(11, weight: .medium)
-    private static let footnoteFont = TodayFont.text(12)
+    //
+    // **2026-10-13：数值从 12 放大到 26。** 原来它和标题一样大（都是 12），读数的
+    // 分量完全没出来 —— 负一屏最该被一眼看到的正是那个数。电芯温度那格用的是同一组
+    // 字号，四格因此天然一致。
+    private static let captionFont = TodayFont.text(13, weight: .semibold)
+    private static let valueFont = TodayFont.mono(26, weight: .semibold)
+    private static let unitFont = TodayFont.text(14, weight: .medium)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -167,20 +184,14 @@ final class TodayCellView: UIView {
         unitLabel.font = Self.unitFont
         unitLabel.textColor = TodayStyle.muted
 
-        footnoteLabel.font = Self.footnoteFont
-        footnoteLabel.textColor = TodayStyle.muted
-        footnoteLabel.numberOfLines = 1
-        footnoteLabel.adjustsFontSizeToFitWidth = true
-        footnoteLabel.minimumScaleFactor = 0.75
-
         let valueRow = UIStackView(arrangedSubviews: [valueLabel, unitLabel])
         valueRow.axis = .horizontal
         valueRow.spacing = 2
         valueRow.alignment = .firstBaseline
 
-        let stack = UIStackView(arrangedSubviews: [captionLabel, valueRow, footnoteLabel])
+        let stack = UIStackView(arrangedSubviews: [captionLabel, valueRow])
         stack.axis = .vertical
-        stack.spacing = 1
+        stack.spacing = 2
         stack.alignment = .leading
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -195,7 +206,7 @@ final class TodayCellView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func apply(caption: String, value: String, unit: String?, tint: UIColor, footnote: String) {
+    func apply(caption: String, value: String, unit: String?, tint: UIColor) {
         // 微标签：拉丁下转大写加字距，中文下原样（汉字没有大小写，加了只会显散）。
         let shown = TodayFont.captionUppercases ? caption.uppercased() : caption
         captionLabel.attributedText = NSAttributedString(string: shown, attributes: [
@@ -208,7 +219,6 @@ final class TodayCellView: UIView {
         valueLabel.textColor = value == "—" ? TodayStyle.muted.withAlphaComponent(0.55) : tint
         unitLabel.text = unit
         unitLabel.isHidden = unit == nil
-        footnoteLabel.text = footnote
     }
 }
 

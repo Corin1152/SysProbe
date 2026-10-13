@@ -55,7 +55,7 @@ import SwiftUI
 struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
 
-    private var battery: ChargeBatteryInfo { charge.battery }
+    private var battery: BatteryInfo { charge.battery }
 
     var body: some View {
         ScrollView {

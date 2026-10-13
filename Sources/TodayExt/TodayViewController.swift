@@ -44,6 +44,11 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     private var subscriptions: [AnyCancellable] = []
     private var didInstallContent = false
 
+    /// 电芯温度（来自守护进程的 `get_bat_info`）。首拍时还没有，界面按「—」显示。
+    private var battery: BatteryInfo?
+    /// 一次电池读取还没回来时置位，用来丢拍而不是让 Task 堆积。
+    private var batteryInFlight = false
+
     /// 收起态的高度下限。数值对齐 CPU-X 的组件（约 118pt）。
     private let minimumHeight: CGFloat = 118
 
@@ -109,7 +114,7 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
 
         enableExpandedDisplayMode()
 
-        let hardware = HardwareMonitor()
+        let hardware = HardwareMonitor(includeCPUFrequency: false)
         let power = PowerMonitor()
         let widget = TodayWidgetView()
         widget.translatesAutoresizingMaskIntoConstraints = false
@@ -148,8 +153,26 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     private func refresh() {
         guard let hardware, let power, let widget else { return }
         placeholder?.isHidden = true
-        widget.apply(hardware: hardware.snapshot, power: power.snapshot)
+        widget.apply(hardware: hardware.snapshot, power: power.snapshot, battery: battery)
         updatePreferredHeight()
+        loadBattery()
+    }
+
+    /// 读一次电芯温度（异步，来自守护进程的 `get_bat_info`）。
+    ///
+    /// **不在这里递归调用 `refresh`** —— 读到的值下一拍（1 秒后）自然就用上了。
+    /// 温度变化本来就慢，晚一拍看不出来；递归反而会让每秒多刷一次。
+    ///
+    /// 守护进程没起来时 `batteryInfo()` 返回 nil，界面按「—」显示 —— 这与原来
+    /// 「四组里突然出现破折号」的顾虑不同：温度这一项本来就可能没有读数。
+    private func loadBattery() {
+        guard !batteryInFlight else { return }
+        batteryInFlight = true
+        Task { [weak self] in
+            let info = await BatteryBridge.batteryInfo()
+            self?.battery = info
+            self?.batteryInFlight = false
+        }
     }
 
     // MARK: 点击跳转
