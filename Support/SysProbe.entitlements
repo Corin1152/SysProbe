@@ -110,7 +110,24 @@
 	<key>com.apple.security.iokit-user-client-class</key>
 	<array>
 		<string>IOUserClient</string>
+		<!--
+		  IOReport 的真实 CPU 频率（`CPUFrequencyIOReport.c`）走的是这个 user client。
+
+		  上面那段注释说的「脱沙箱后 IOKit 访问反而变紧」在这里同样适用：
+		  iOS 上 `platform-application` 会让「每一个 IOKit user client 都要显式例外」
+		  （TrollStore README 原文），缺了这一条，`IOReportCreateSubscription` 会对
+		  每个 group 都返回 NULL —— 症状是「订阅被拒」，与 entitlement 无关。
+		  Helium 那边踩过同一个坑，补上后 iPhone X / iOS 16.5.1 实测全部 subscribe=ok。
+		-->
+		<string>IOReportUserClient</string>
 	</array>
+	<!--
+	  IOReport 的真实 entitlement 名是这个（`ioreporting` 不是 `ioreport`）。
+	  Apple 的 perfpowermetricd / powerlogHelperd 用的就是它；曾经写过的
+	  `com.apple.private.ioreport.allow` 在 entitlement 库里并不存在。
+	-->
+	<key>com.apple.private.ioreporting.access</key>
+	<true/>
 
 	<!-- ── 通知：「行为」选到「通知」时由守护进程发本地推送 ───────────────── -->
 	<key>SBAppUsesLocalNotifications</key>

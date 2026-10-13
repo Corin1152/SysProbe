@@ -19,6 +19,9 @@
 //
 
 #import "CPUFrequencyProbe.h"
+// IOReport 的真实频率（CLPC per-state residency 加权）。与忙循环探针并存：
+// 它是首选，探针是回落 —— 见 CPUFrequencyIOReport.c 顶部的说明。
+#import "CPUFrequencyIOReport.h"
 // 相对路径而不是加一条 HEADER_SEARCH_PATHS：扩展那边没有 ChargeControl 这一层，
 // 为它多配一条搜索路径反而会让人以为扩展也用得到这个探针。
 #import "../Sources/ChargeControl/ChargeSpawn.h"

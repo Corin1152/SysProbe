@@ -294,13 +294,16 @@ final class HardwareMonitor: ObservableObject {
         } else {
             // 回落：没有新鲜的共享文件（HUD 没在写）。
             //
-            // **这里不再跑自己的忙循环探针。** 两个 App 各自跑探针会互抢性能核、
-            // 还会把时钟顶高发热 —— 这正是要避免的。HUD 是常驻的、唯一采集者，
-            // 正常情况下文件总是新鲜的；所以这里频率直接留 0，界面显示「—」，
-            // 不再自测。
+            // 0.0.34 起这里**可以自己量了**：SysProbe 自己也有 IOReport 那条路
+            // （`sysprobe_real_cpu_frequency_mhz`），它只读 CLPC 的驻留计数器，
+            // **不像忙循环探针那样会互抢性能核** —— 两个进程同时读没有副作用，
+            // 所以「HUD 不在时自己采一次」不再有原来的代价。
+            //
+            // 仍然不回落成标称主频：那是个常数，摆在「当前频率」的位置上会让人
+            // 以为读数有效。拿不到就留 0，界面显示「—」。
             var cpu = ownCPU
             cpu.nominalFrequencyMHz = cpuIdentity.nominalFrequencyMHz
-            cpu.frequencyMHz = 0
+            cpu.frequencyMHz = CPUFrequency.measureMHz(nominalMHz: cpuIdentity.nominalFrequencyMHz) ?? 0
             next.cpu = cpu
         }
 

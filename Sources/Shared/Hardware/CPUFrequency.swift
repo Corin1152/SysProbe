@@ -2,29 +2,45 @@ import Foundation
 
 /// 实测 CPU 当前主频。
 ///
-/// 这一层只做三件事：把 C 探针的结果**校验**一遍、给一个宽松的缓存、把
-/// 「不可信」翻译成 `nil`（调用方回落到机型表里的标称值）。
+/// 这一层只做三件事：把 C 层的结果**校验**一遍、给一个宽松的窗口、把「不可信」
+/// 翻译成 `nil`（调用方回落到机型表里的标称值）。
 ///
-/// 为什么必须校验：探针的模型是「依赖 `add` 的延迟 = 1 周期」，这条在 Apple 的
-/// ARM64 核上成立，但它终究是个模型。模型一旦不成立，读出来的会是一个离谱的数字
-/// —— 那比显示标称值还糟。所以给一个宽容的窗口（标称的 1/5 到 1.15 倍）：
-/// 落在外面的判为失效，回落到标称。窗口下界放得很低，是为了不把**真正的降频**
-/// （热限频、低电量模式）误判成失效 —— 那是这台机器此刻真实的主频。
+/// ## 两条来源，按成本排序
 ///
-/// 线程：`measure` 是 `nonisolated` 且会阻塞约 15–20 ms，**必须在主线程之外调用**。
+/// 1. **`sysprobe_real_cpu_frequency_mhz()`** —— IOReport 的真实 DVFS 加权频率
+///    （CLPC 的 per-state residency）。只是读内核里的计数器，**不抢性能核**，
+///    所以是首选，两个进程同时读也没有副作用。
+/// 2. **`sysprobe_measure_cpu_frequency_mhz()`** —— 忙循环探针，量的是「核被顶到
+///    最高时能跑多快」（峰值，与负载关系不大）。它是 2 × 62 ms 的 user-interactive
+///    忙循环，会抢前台，所以只在第 1 条失败时才用。
 ///
-/// **当前全仓没有调用点，是备用路径。** SysProbe 从 0.0.25 起只读 Statusbar 发布的
-/// 共享文件（`CPUSharedMetrics`）：两个 App 各自跑探针会互抢性能核、把彼此的读数一起
-/// 污染 —— 详见 `HardwareMonitor.sample` 里那段注释。留着这一层是为了「共享文件读不到
-/// 而确实需要自己量一次」的场合，不是为了现在就在用。
+/// 第 1 条曾经长期不可用：iOS 上 `platform-application` 会让「每一个 IOKit user
+/// client 都要显式例外」，而 IOReport 走的 `IOReportUserClient` 一直不在
+/// `com.apple.security.iokit-user-client-class` 里 —— 详见 `CPUFrequencyIOReport.c`。
+///
+/// ## 为什么要校验
+///
+/// 探针的模型是「依赖 `add` 的延迟 = 1 周期」，这条在 Apple 的 ARM64 核上成立，
+/// 但它终究是个模型。模型一旦不成立，读出来的会是一个离谱的数字 —— 那比显示标称值
+/// 还糟。所以给一个宽容的窗口（标称的 1/5 到 1.15 倍）：落在外面的判为失效。
+/// 窗口下界放得很低，是为了不把**真正的降频**（热限频、低电量模式）误判成失效
+/// —— 那是这台机器此刻真实的主频。
+///
+/// 线程：`measure` 是 `nonisolated`，IOReport 那条阻塞约 100 ms、忙循环那条约
+/// 15–20 ms，**必须在主线程之外调用**。
 nonisolated enum CPUFrequency {
 
     /// 实测主频（MHz）。测不出或结果不可信时返回 nil。
     ///
     /// - Parameter nominalMHz: 该机型芯片的标称主频。0 表示认不出机型，此时不做校验
-    ///   （没有参照物），直接采信探针的结果。
+    ///   （没有参照物），直接采信结果。
     static func measureMHz(nominalMHz: Int) -> Int? {
-        let measured = Int(sysprobe_measure_cpu_frequency_mhz())
+        // 首选 IOReport：读计数器，成本可忽略，也不会把核顶起来。
+        var measured = Int(sysprobe_real_cpu_frequency_mhz())
+        if measured <= 0 {
+            // 回落：忙循环探针（峰值频率）。贵，且会抢前台，所以放第二条。
+            measured = Int(sysprobe_measure_cpu_frequency_mhz())
+        }
         guard measured > 0 else { return nil }
         guard nominalMHz > 0 else { return measured }
 
