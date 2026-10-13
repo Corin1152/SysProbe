@@ -36,11 +36,15 @@ final class TodayRingView: UIView {
     private static let sweepDegrees: CGFloat = 300
 
     /// 外环（CPU）线宽。
-    private static let outerLineWidth: CGFloat = 6
+    private static let outerLineWidth: CGFloat = 5
     /// 内环（RAM）线宽。
-    private static let innerLineWidth: CGFloat = 5
+    private static let innerLineWidth: CGFloat = 4
     /// 两个环之间的净间隙。
-    private static let ringGap: CGFloat = 4
+    ///
+    /// 5pt 是贴着下限取的：两个切口标签（`RAM` / `CPU xx%`）就落在这圈间隙里，
+    /// 每个约 10pt 高，而两个标签中心的径向距离 = 2.5 + ringGap + 2 = 9.5pt ——
+    /// 间隙再小一点它们就会叠在一起。0.0.41 实机用的 4pt（= 8.5pt）正是这么叠的。
+    private static let ringGap: CGFloat = 5
 
     // MARK: - 图层
 
@@ -95,11 +99,11 @@ final class TodayRingView: UIView {
         centerDetailLabel.adjustsFontSizeToFitWidth = true
         centerDetailLabel.minimumScaleFactor = 0.7
 
-        ramLabel.font = TodayFont.text(10, weight: .semibold)
+        ramLabel.font = TodayFont.text(9, weight: .semibold)
         ramLabel.textColor = TodayStyle.ramRing
         ramLabel.textAlignment = .center
 
-        cpuLabel.font = TodayFont.text(10, weight: .semibold)
+        cpuLabel.font = TodayFont.text(9, weight: .semibold)
         cpuLabel.textColor = TodayStyle.cpuRing
         cpuLabel.textAlignment = .center
 
@@ -115,39 +119,30 @@ final class TodayRingView: UIView {
 
         // 圆环水平居中；竖直方向让「环顶 → 标签底」这段内容整体落在视图正中。
         //
-        // 高度是外面给的（`TodayWidgetView` 里那条正方形约束），比圆环自身需要的高，
-        // 若还按 `available` 去定位，多出来的空间会全堆在标签下方，肉眼就是整个环偏上。
-        // 推导：环顶 = c − (R + 线宽/2)，标签底 = c + (R + 线宽/2) + 6（12pt 标签框的
-        // 下半截），两者中点 = c + 3 —— 令它等于 midY，即得 c = midY − 3。
+        // 高度由 `TodayWidgetView` 给（92pt，比环自身需要的高），若还按 `available`
+        // 定位，多出来的空间会全堆在标签下方，肉眼就是整个环偏上。
+        // 推导：内容顶 = c − (R + 线宽/2)，内容底 = c + (R + 线宽/2) + 标签框高/2，
+        // 两者中点 = c + 标签框高/4 = c + 2.5 —— 令它等于 midY，即得 c = midY − 2.5。
         let lineWidths = Self.outerLineWidth + Self.innerLineWidth
         let available = min(bounds.width, bounds.height - 20)
         let outerRadius = max(12, (available - lineWidths - Self.ringGap) / 2)
         let innerRadius = max(6, outerRadius - Self.outerLineWidth / 2 - Self.ringGap - Self.innerLineWidth / 2)
 
-        let center = CGPoint(x: bounds.midX, y: bounds.midY - 3)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY - 2.5)
 
-        let start = Self.standardAngle(fromTwelveClockwise: Self.startDegrees)
-        let end = Self.standardAngle(fromTwelveClockwise: Self.startDegrees + Self.sweepDegrees)
-
-        // UIBezierPath 的角度以 3 点为 0°、逆时针为正；我们的角度以 12 点为 0°、顺时针为正。
-        // 换算之后「从 7 点顺时针扫 300°」在标准坐标系里是**逆时针**，所以 clockwise = false。
-        let outerPath = UIBezierPath(arcCenter: center, radius: outerRadius,
-                                     startAngle: start, endAngle: end, clockwise: false)
-        outerTrack.path = outerPath.cgPath
+        // 轨道：从 7 点沿**顺时针**扫满 300°，缺口自然落在正下方（起点 7 点、终点 5 点）。
+        outerTrack.path = Self.arcPath(center: center, radius: outerRadius,
+                                       from: Self.startDegrees, sweep: Self.sweepDegrees)
         outerTrack.frame = bounds
-
-        let innerPath = UIBezierPath(arcCenter: center, radius: innerRadius,
-                                     startAngle: start, endAngle: end, clockwise: false)
-        innerTrack.path = innerPath.cgPath
+        innerTrack.path = Self.arcPath(center: center, radius: innerRadius,
+                                       from: Self.startDegrees, sweep: Self.sweepDegrees)
         innerTrack.frame = bounds
 
-        let outerLength = Self.arcLength(radius: outerRadius, degrees: Self.sweepDegrees)
-        let innerLength = Self.arcLength(radius: innerRadius, degrees: Self.sweepDegrees)
-
+        // 进度弧：与轨道同一个起点，长度 = 300° × 百分比（满量程是那 300°，不是整圆）。
         applyProgress(outerProgress, center: center, radius: outerRadius,
-                      length: outerLength, fraction: cpuFraction, color: TodayStyle.cpuRing)
+                      fraction: cpuFraction, color: TodayStyle.cpuRing)
         applyProgress(innerProgress, center: center, radius: innerRadius,
-                      length: innerLength, fraction: ramFraction, color: TodayStyle.ramRing)
+                      fraction: ramFraction, color: TodayStyle.ramRing)
 
         layoutLabels(center: center, outerRadius: outerRadius, innerRadius: innerRadius)
     }
@@ -167,9 +162,13 @@ final class TodayRingView: UIView {
                                          width: innerRadius * 2,
                                          height: detailHeight)
 
-        // 切口标签：贴在各自环的断口上，水平居中。
+        // 切口标签：以各自环的断口中心为准，水平居中。
+        //
+        // 10pt 框高与 `ringGap = 5` 配对：两个标签中心相距「两条环中心线的径向差」
+        // = 2.5 + 5 + 2 = 9.5pt，框高再大一点就会叠在一起 —— 0.0.41 用 12pt 框压进
+        // 8.5pt 的间隙里，实机上 `RAM` 与 `CPU xx%` 叠成了一团。
         let labelWidth: CGFloat = 52
-        let labelHeight: CGFloat = 12
+        let labelHeight: CGFloat = 10
         let cutY = center.y + outerRadius + Self.outerLineWidth / 2 - labelHeight / 2
         let innerCutY = center.y + innerRadius + Self.innerLineWidth / 2 - labelHeight / 2
 
@@ -201,28 +200,49 @@ final class TodayRingView: UIView {
 
     // MARK: - 工具
 
-    /// 把「以 12 点为 0°、顺时针为正」的角度，换算成 `UIBezierPath` 用的标准角度
-    /// （以 3 点为 0°、逆时针为正）。
-    private static func standardAngle(fromTwelveClockwise degrees: CGFloat) -> CGFloat {
-        (degrees - 90) * .pi / 180
+    /// 「以 12 点为 0°、顺时针为正」的角度 → 视图坐标里的点。
+    ///
+    /// 整个组件只有这一个角度入口，所以很好验证：0° = 正上方、90° = 正右、
+    /// 180° = 正下、270° = 正左。
+    private static func point(center: CGPoint, radius: CGFloat,
+                              twelveClockwise degrees: CGFloat) -> CGPoint {
+        let radians = (degrees - 90) * .pi / 180
+        return CGPoint(x: center.x + cos(radians) * radius,
+                       y: center.y + sin(radians) * radius)
     }
 
-    /// 给定半径与圆心角，返回弧长。
+    /// 沿「12 点为 0°、顺时针为正」构造一段弧。
     ///
-    /// **进度必须按这个长度算**，不能拿整圆周长去乘百分比 —— 轨道只占 300°。
-    private static func arcLength(radius: CGFloat, degrees: CGFloat) -> CGFloat {
-        2 * .pi * radius * degrees / 360
+    /// **刻意不用 `UIBezierPath(arcCenter:radius:startAngle:endAngle:clockwise:)`**：
+    /// 那个 `clockwise` 参数在 UIView 的翻转坐标系里方向是反的（UIKit 文档原话
+    /// "in a flipped coordinate system, specifying a clockwise arc results in a
+    /// counterclockwise arc"），0.0.41 实机上两端位置就不对。按角度自己采样虽然笨，
+    /// 但只有一种解释 —— 每 2° 一段，300° 的弧在 63pt 直径上弦高误差约 0.01pt，
+    /// 与真圆弧肉眼无差。
+    private static func arcPath(center: CGPoint, radius: CGFloat,
+                                from startDegrees: CGFloat, sweep: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let steps = max(2, Int((abs(sweep) / 2).rounded(.up)))
+        for step in 0...steps {
+            let degrees = startDegrees + sweep * CGFloat(step) / CGFloat(steps)
+            let p = point(center: center, radius: radius, twelveClockwise: degrees)
+            if step == 0 { path.move(to: p) } else { path.addLine(to: p) }
+        }
+        return path
     }
 
     private func applyProgress(_ layer: CAShapeLayer, center: CGPoint, radius: CGFloat,
-                               length: CGFloat, fraction: Double, color: UIColor) {
-        let start = Self.standardAngle(fromTwelveClockwise: Self.startDegrees)
-        let swept = Self.sweepDegrees * CGFloat(fraction)
-        let end = Self.standardAngle(fromTwelveClockwise: Self.startDegrees + swept)
-
-        let path = UIBezierPath(arcCenter: center, radius: radius,
-                                startAngle: start, endAngle: end, clockwise: false)
-        layer.path = path.cgPath
+                               fraction: Double, color: UIColor) {
+        // 零长度路径 + 圆头线帽会画出一个小圆点（半径 = 线宽/2）。占用率极低时
+        // 直接不画，比在起点留一个点干净。
+        guard fraction > 0.001 else {
+            layer.isHidden = true
+            return
+        }
+        layer.isHidden = false
+        layer.path = Self.arcPath(center: center, radius: radius,
+                                  from: Self.startDegrees,
+                                  sweep: Self.sweepDegrees * CGFloat(fraction))
         layer.strokeColor = color.cgColor
         layer.frame = bounds
     }

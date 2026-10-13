@@ -52,6 +52,20 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
     /// 收起态的高度下限。数值对齐 CPU-X 的组件（约 118pt）。
     private let minimumHeight: CGFloat = 118
 
+    /// 组件顶部那行（App 图标 + 名称 + 展开箭头）由**系统**绘制；它占的高度既不在
+    /// `systemLayoutSizeFitting` 的结果里，也不是我们报给系统的 `preferredContentSize`
+    /// 的「内容部分」—— `preferredContentSize.height` 是**含那一行**的总高度。
+    ///
+    /// 少算这段补偿，内容就会被组件底边裁掉。**0.0.41 实机上「存储」那一条连同
+    /// 「已用 … · 剩余 …」被切掉一半，就是这么来的**：内容自然高 119pt、我们报了
+    /// 120pt，系统再扣掉头部，内容区就只剩 99pt。
+    ///
+    /// 取值依据是两次实机反推，互相印证：
+    ///   · 0.0.40：内容 92pt、报 118pt → 显示完整且略有富余，说明头部 ≤ 26pt；
+    ///   · 0.0.41：内容 119pt、报 120pt → 被裁约 20pt，说明头部 ≈ 21pt。
+    /// 取 24pt，落在两者之间偏保守一侧。
+    private static let systemHeaderHeight: CGFloat = 24
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -222,8 +236,10 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
 
     /// 按内容的自然高度定展开态的高度。
     ///
+    /// `maximumHeight` 是系统在形态切换回调里给的上限；平时不传，即不设限。
+    ///
     /// 只有变化超过半点时才会写回，否则会自己触发一轮新的布局，形成死循环。
-    private func updatePreferredHeight() {
+    private func updatePreferredHeight(maximumHeight: CGFloat = .greatestFiniteMagnitude) {
         guard let widget else { return }
         let width = view.bounds.width
         guard width > 1 else { return }
@@ -232,7 +248,9 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
             CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-        let height = max(minimumHeight, fitted.height.rounded(.up))
+        // 加上系统头部那一段，才是「组件总高」—— 少这一段内容就会被底边裁掉。
+        let wanted = max(minimumHeight, (fitted.height + Self.systemHeaderHeight).rounded(.up))
+        let height = min(wanted, maximumHeight)
         guard preferredContentSize.width != width
                 || abs(preferredContentSize.height - height) > 0.5 else { return }
         preferredContentSize = CGSize(width: width, height: height)
@@ -247,8 +265,16 @@ final class TodayViewController: UIViewController, NCWidgetProviding {
         completionHandler(.newData)
     }
 
-    /// 高度已经按内容算好（见 `updatePreferredHeight`），模式切换时无需再调整。
+    /// 高度已经按内容算好（见 `updatePreferredHeight`），但**这里仍要重设一次**：
+    /// 系统在形态切换时会把 `preferredContentSize` 归到它给的上限（收起态那条很小），
+    /// 不重设的话展开态也会被按那个高度裁掉内容。
+    ///
+    /// 回调由系统在主线程上发起，所以 `assumeIsolated` 是安全的；改成 `Task { @MainActor }`
+    /// 反而会因为捕获非 Sendable 的 `self` 而编译不过。
     nonisolated func widgetActiveDisplayModeDidChange(_ activeDisplayMode: NCWidgetDisplayMode,
                                                       withMaximumSize maxSize: CGSize) {
+        MainActor.assumeIsolated {
+            updatePreferredHeight(maximumHeight: maxSize.height)
+        }
     }
 }

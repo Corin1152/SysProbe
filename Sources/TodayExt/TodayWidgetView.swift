@@ -17,8 +17,8 @@ import UIKit
 ///
 /// ## 排版
 ///
-/// 尺寸对齐 CPU-X 的组件（约 118pt 高）。内容分四组横排，四组下面是一条系统存储的
-/// 进度条。
+/// 四组横排：第一格是 CPU/RAM 双圆环（比后三格宽、也更高），后三格等宽，最下面是
+/// 一条系统存储的进度条。组件总高约 156pt（环格 92pt + 间距 + 存储条 + 系统头部）。
 ///
 ///      ╭─╮           电芯温度      充电器        电芯
 ///     ╱   ╲          32.5 °C       4.91 W       87 %
@@ -31,9 +31,17 @@ import UIKit
 /// **2026-10-13 改版**：第 1 格从「CPU 读数」换成 CPU/RAM 双圆环（`TodayRingView`），
 /// 第 2 格从「内存读数」换成电芯温度；第 3、4 格保留，去掉「输入功率」脚注。存储条不变。
 ///
-/// **2026-10-13 实机修正（0.0.41）**：第一次实机暴露两个问题 ——
+/// **0.0.41 实机修正**：第一次实机暴露两个问题 ——
 /// ① 圆环**完全不可见**（高度塌缩，根因见 `build()` 里那段说明）；
-/// ② 数值放大到 26pt 在真机上过重（四格并排时数值比环还抢眼），已恢复 12/12/11。
+/// ② 数值放大到 26pt 在真机上过重，已恢复 12/12/11。
+///
+/// **0.0.42 实机修正**：第二次实机暴露三个问题 ——
+/// ① 环太小、中心读数被截成 "9…"、两个切口标签叠在一起：四等分时格宽只有 76pt，
+///    环最大只能到 47pt；改成「圆环格占三成宽 + 单独给 92pt 高」（见两个常量）；
+/// ② 圆环两端位置不对：`UIBezierPath` 的 `clockwise` 在翻转坐标系里方向是反的，
+///    已改成按角度自己采样（见 `TodayRingView.arcPath`）；
+/// ③ 「存储」那一条被组件底边裁掉一半：`preferredContentSize` 少算了系统绘制的那行
+///    头部，已补上（见 `TodayViewController.systemHeaderHeight`）。
 ///
 /// 频率**不再显示**：iOS 不允许 appex 访问 IOReport（实测 `IOReportCopyAllChannels`
 /// 在扩展里返回空通道集），而主 App 被挂起时也供不了数 —— 与其显示一个常年「—」，
@@ -57,6 +65,20 @@ final class TodayWidgetView: UIView {
     /// 右边也顺带留出空间，「已用 … · 剩余 …」不会再顶到组件右边缘。
     private static let horizontalInset: CGFloat = 14
 
+    /// 圆环那一格占整行宽度的比例。
+    ///
+    /// 留三成给圆环（iPhone X 上约 99pt），剩下的由后三格平分（各约 70pt）—— 它们的
+    /// 内容本来就短（"电芯温度" 约 48pt、"33.1 °C" 约 42pt），收窄后仍放得下。
+    private static let ringWidthRatio: CGFloat = 0.30
+
+    /// 圆环那一格的高度。
+    ///
+    /// 环的可用直径 = `min(格宽, 格高 − 20)`（−20 是给正下方那两个切口标签留的）。
+    /// 格宽已由上面的比例保证（约 99pt），所以真正卡住环大小的是**高度**：
+    ///   · 92pt → 可用 72pt → 外环外径约 63pt、内环直径约 39pt，中心两行放得下；
+    ///   · 低于 80pt 时内环直径掉到 33pt 以下，中心那行又开始缩、标签重新压到弧上。
+    private static let ringHeight: CGFloat = 92
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         build()
@@ -65,16 +87,24 @@ final class TodayWidgetView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func build() {
-        let row = UIStackView(arrangedSubviews: [ringView, temperatureCell, chargerCell, cellCell])
+        // 后三格等宽：它们的内容（标题 + 读数 + 单位）都短，等分就够。
+        let cells = UIStackView(arrangedSubviews: [temperatureCell, chargerCell, cellCell])
+        cells.axis = .horizontal
+        cells.spacing = 4
+        cells.distribution = .fillEqually
+
+        // 圆环那一格**不再与后三格等宽** —— 环的直径受 `min(格宽, 格高 − 20)` 双重
+        // 限制：四等分时格宽只有约 76pt，环最多到 47pt、内环直径 22pt，中心那行
+        // "96%" 根本放不下（0.0.41 实机被截成了 "9…"）。按用户提的方案把这一格加宽，
+        // 后三格相应收窄 —— 它们的内容本来就短，收窄后仍然放得下。
+        let row = UIStackView(arrangedSubviews: [ringView, cells])
         row.axis = .horizontal
-        row.spacing = 4
-        // `.fillEqually`：四组等宽，读数不会因为某组数字长就把别的挤歪。
-        row.distribution = .fillEqually
-        // `.center` 而不是 `.top`：行高由圆环那一格定（见下面的正方形约束），
-        // 三格文字若顶对齐会显得整排往上飘，居中才和圆环配得平。
+        row.spacing = 6
+        row.distribution = .fill
+        // 行高由圆环那一格定（它比三格文字高得多），三格文字垂直居中才配得平。
         row.alignment = .center
 
-        // **圆环必须自己给出高度** —— 这是 0.0.40 实机「一个环都看不到」的根因。
+        // **圆环必须自己有确定的尺寸** —— 这是 0.0.40 实机「一个环都看不到」的根因。
         //
         // `TodayRingView` 是纯自绘视图：4 个 `CAShapeLayer` + 4 个 `UILabel` 全靠
         // frame 摆放，既没有 `intrinsicContentSize`、内部也没有一条约束。而横向
@@ -86,16 +116,18 @@ final class TodayWidgetView: UIView {
         //     实机上就是「一个环都没有，只剩几个重叠的小字」。
         //
         // 同文件里 `TodayCellView` / `TodayStorageView` 都靠内部约束链把自己的高度
-        // 撑起来，所以这个坑只有新加的圆环会踩。
-        //
-        // 取正方形：宽度由 `.fillEqually` 分（约 76pt），高度跟着宽度走，圆环才
-        // 不会被压扁。行高随之变成约 76pt —— 但 118pt 本来就是组件高度的**下限**、
-        // 原来内容只有约 92pt，所以组件总高实际只从 118 变成约 119pt。
+        // 撑起来，所以这个坑只有圆环会踩。
         ringView.translatesAutoresizingMaskIntoConstraints = false
-        ringView.heightAnchor.constraint(equalTo: ringView.widthAnchor).isActive = true
+        let ringWidth = ringView.widthAnchor.constraint(equalTo: row.widthAnchor,
+                                                        multiplier: Self.ringWidthRatio)
+        // 750 而不是 required：窄屏或英文界面下后三格的文字会更宽，让 stack 有余地
+        // 稍微压缩圆环那一格（环跟着小一点），总好过把文字挤掉。
+        ringWidth.priority = .defaultHigh
+        ringWidth.isActive = true
+        ringView.heightAnchor.constraint(equalToConstant: Self.ringHeight).isActive = true
 
         root.axis = .vertical
-        root.spacing = 18
+        root.spacing = 14
         root.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(row)
         root.addArrangedSubview(storage)
@@ -103,10 +135,9 @@ final class TodayWidgetView: UIView {
 
         // 内容**垂直居中**，而不是贴上下边缘。
         //
-        // 组件的实际高度由 `preferredContentSize` 定（对齐 CPU-X，约 118pt），比内容的
-        // 自然高度高出一截。原来上下贴边、中间只留一个 spacing，多出来的那截就全堆在
-        // 四组与存储条之间，看着空。改成居中后，多余空间平均分到上下两端，
-        // 中间只剩固定间距。
+        // 组件的实际高度由 `preferredContentSize` 定（内容自然高 + 系统头部），比内容
+        // 的自然高度略高一点。原来上下贴边、中间只留一个 spacing，多出来的那截就全堆在
+        // 四组与存储条之间，看着空。改成居中后，多余空间平均分到上下两端。
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: leadingAnchor,
                                           constant: Self.horizontalInset),
