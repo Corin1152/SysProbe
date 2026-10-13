@@ -432,7 +432,13 @@ uint64_t sysprobe_real_cpu_frequency_mhz(void)
 {
     uint64_t result = 0;
 
-    if (getuid() != 0) return 0;              // 订阅需要 root（HUD/root 工具满足）
+    // **刻意不检查 getuid。** IOReport 的访问门槛是沙箱的 IOKit user client 例外
+    // （`IOReportUserClient`，见 entitlements），**不是 uid** —— SysProbe 的主 App 与
+    // 负一屏都以 mobile 身份运行，一样能订阅。
+    //
+    // 0.0.34 第一版在这里写了 `if (getuid() != 0) return 0;`（从「powermetrics 要 root」
+    // 想当然抄来的），结果主 App 与负一屏永远拿到 0、频率那一格只显示「—」——
+    // 而占用率是 host_processor_info 采的、不受影响，症状正好是「只有占用没有频率」。
     if (!ensure_symbols()) return 0;
     if (!ensure_subscription()) return 0;
 

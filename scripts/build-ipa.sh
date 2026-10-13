@@ -41,6 +41,12 @@ APP="$DERIVED/Build/Products/Release-iphoneos/$SCHEME.app"
 # 名字与内容对不上，而**没有任何一处会报错**（这一轮就是被它坑掉的）。
 #
 # 现在 project.yml 是唯一的真值来源，tag 只是发布时的显式覆盖。
+#
+# **构建号也一样。** 这里原来在 project.yml 没给值时回退到
+# `git rev-list --count HEAD`（提交总数），于是 project.yml 里的
+# CURRENT_PROJECT_VERSION 永远是个死值 —— 0.0.34 声明了 `"34"`，产物里却是 71，
+# 两处对不上而没有任何一处会报错。现在与 MARKETING_VERSION 走同一条路：
+# 只认 project.yml（两个 target 必须一致），tag/env 仍是显式覆盖。
 if [ -z "${MARKETING_VERSION:-}" ]; then
   versions=$(sed -n 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' project.yml | sort -u)
   count=$(printf '%s\n' "$versions" | grep -c . || true)
@@ -51,7 +57,13 @@ if [ -z "${MARKETING_VERSION:-}" ]; then
   MARKETING_VERSION="$versions"
 fi
 if [ -z "${CURRENT_PROJECT_VERSION:-}" ]; then
-  CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD 2>/dev/null || true)
+  builds=$(sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' project.yml | sort -u)
+  count=$(printf '%s\n' "$builds" | grep -c . || true)
+  if [ "$count" -ne 1 ]; then
+    echo "::error::project.yml declares $count different CURRENT_PROJECT_VERSION values (${builds:-none}). They must agree — the two targets' Info.plist both read from it." >&2
+    exit 1
+  fi
+  CURRENT_PROJECT_VERSION="$builds"
 fi
 
 overrides=()
