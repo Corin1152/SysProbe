@@ -32,6 +32,38 @@ nonisolated struct PowerReadings: @unchecked Sendable {
     let chargeStatus: [String: Any]?
 }
 
+/// 页面外壳需要的那几个**低频**状态：降频 / 无线 / 插电。
+///
+/// ── 为什么单开一个对象 ──────────────────────────────────────────────────────
+///
+/// `PowerHubView` 的整页光晕要按「降频 / 无线 / 插电 / 电池供电」变色，而这几件事
+/// **都是插拔级或分钟级的事件**。可它原来读的是 `PowerMonitor.snapshot` —— 那个对象
+/// 每秒发布一次，于是整个分页外壳（分段控件 + 当前分段的内容）跟着每秒重算一遍：
+/// 用户明明停在硬件页，电源页也在每秒重算，而它显示的东西一秒都没变过。
+///
+/// 把这几个量单独放一个对象、**只在真的变了才发布**，外壳就只在插拔或降频时重算。
+/// 分页内容（`DashboardPanels` 那六个面板）该实时还是实时 —— 它们读的是
+/// `PowerMonitor` 本身，与本对象无关。
+///
+/// 注入在 `SysProbeApp`（与 `PowerMonitor` 并列），由 `PowerMonitor` 每拍更新。
+final class PowerContext: ObservableObject {
+
+    /// 系统热状态在降频档。
+    @Published private(set) var throttling = false
+    /// 正在无线充电。
+    @Published private(set) var wireless = false
+    /// 插着外部电源。
+    @Published private(set) var externalConnected = false
+
+    /// 由 `PowerMonitor` 每拍调用。**值没变就一次都不发布** —— 这个对象存在的
+    /// 全部意义就在这里，少了这三道守卫它就退化成另一个每秒通知。
+    func update(throttling: Bool, wireless: Bool, externalConnected: Bool) {
+        if self.throttling != throttling { self.throttling = throttling }
+        if self.wireless != wireless { self.wireless = wireless }
+        if self.externalConnected != externalConnected { self.externalConnected = externalConnected }
+    }
+}
+
 /// Drives every probe on a one-second tick and merges the results into one
 /// observable object the whole UI reads from.
 ///
@@ -40,6 +72,10 @@ nonisolated struct PowerReadings: @unchecked Sendable {
 /// UI reads is `@Published` so invalidation granularity is unchanged.
 final class PowerMonitor: ObservableObject {
     // MARK: Published state
+
+    /// 页面外壳用的低频状态。**不是 `@Published`** —— 它自己的变化由自己发布，
+    /// 挂在这里只是为了让它跟着 monitor 一起活。见 `PowerContext`。
+    let context = PowerContext()
 
     @Published private(set) var snapshot = PowerSnapshot()
     @Published private(set) var live: [LiveSample] = []
@@ -337,6 +373,11 @@ final class PowerMonitor: ObservableObject {
         if pathResistance != resistance.estimate { pathResistance = resistance.estimate }
         updateSession(current)
         lastExternalConnected = current.externalConnected
+        // 页面外壳用的那几个低频量。**值没变就一次都不发布**（见 `PowerContext`）——
+        // 外壳（分段控件 + 光晕）只该在插拔或降频时重算。
+        context.update(throttling: thermal.state.isThrottling,
+                       wireless: current.isWirelessInput,
+                       externalConnected: current.externalConnected)
         onTick?(current)
     }
 

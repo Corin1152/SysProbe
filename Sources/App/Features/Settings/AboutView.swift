@@ -19,8 +19,6 @@ import SwiftUI
 /// 只该剩「动手改系统」的东西，而诊断是**信息** —— 它归属关于页，与版本号
 /// 同属「这一版装了什么、什么能用」的范畴。
 struct AboutView: View {
-    @EnvironmentObject private var monitor: PowerMonitor
-    @EnvironmentObject private var charge: ChargeControlService
     /// 作为弹层出现时的关闭动作。
     ///
     /// 它**不在**分页栏里时才有意义 —— 两种情况共用一个视图，多这一个按钮在分页
@@ -35,7 +33,8 @@ struct AboutView: View {
         NavigationStack {
             ZStack {
                 Color.mwCanvas
-                Backdrop(glow: .mwAccent)
+                // `.equatable()`：整屏 `Canvas`，父 body 重算时不重画。见 `Backdrop`。
+                Backdrop(glow: .mwAccent).equatable()
                 Form {
                     Section {
                         // 排查问题时第一步就是确认装的是哪一版。
@@ -47,7 +46,9 @@ struct AboutView: View {
                         Text("Version")
                     }
 
-                    diagnosticsSection
+                    // 诊断区单独成视图：它观察的两个对象每秒都发布，而这一页显示的
+                    // 是它们身上几乎不变的字段。见 `DiagnosticsSection`。
+                    DiagnosticsSection(toolReady: toolReady)
                 }
                 .scrollContentBackground(.hidden)
             }
@@ -66,10 +67,29 @@ struct AboutView: View {
             toolReady = await Task.detached { DeviceActions.probe() }.value
         }
     }
+}
 
-    /// 诊断区。逐行原样从「维护」页迁来，内容没有变 —— 变的只是归宿：
-    /// 每一行回答的都是「这一版装了什么、什么能用」，不是「维护操作的结果」。
-    private var diagnosticsSection: some View {
+/// 诊断区。逐行原样从「维护」页迁来，内容没有变 —— 变的只是归宿：
+/// 每一行回答的都是「这一版装了什么、什么能用」，不是「维护操作的结果」。
+///
+/// ── 为什么单独成类型 ────────────────────────────────────────────────────────
+///
+/// 它观察 `PowerMonitor` 与 `ChargeControlService`，而这两个对象**每秒都发布**
+/// （一个采样、一个轮询电池读数）。可这一页读的是它们身上几乎不变的那几个字段：
+/// 机型、传感器有没有、守护进程在不在、诊断行。留在 `AboutView` 里的话，打开关于页
+/// 就会每秒把整个 `Form` 重算一遍 —— 而用户是来看版本号的。
+///
+/// 收进这一块之后，重算范围缩到这几行。
+private struct DiagnosticsSection: View {
+
+    @EnvironmentObject private var monitor: PowerMonitor
+    @EnvironmentObject private var charge: ChargeControlService
+
+    /// 维护工具自检的结果。由 `AboutView` 在 `.task` 里跑 —— 那件事要起子进程，
+    /// 属于页面的生命周期，不属于这一块。
+    let toolReady: Bool?
+
+    var body: some View {
         Section {
             LabeledContent("Device", value: monitor.deviceModelIdentifier)
             LabeledContent("Sensors",

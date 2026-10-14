@@ -19,19 +19,31 @@ import SwiftUI
 /// 等于几个页面同时跑每秒采样。
 struct PowerHubView: View {
 
-    @EnvironmentObject private var monitor: PowerMonitor
+    /// **只观察低频上下文，不观察 `PowerMonitor`。**
+    ///
+    /// 这一层需要 `PowerMonitor` 的只有一件事：光晕按「降频 / 无线 / 插电」变色。
+    /// 而这三件事都是插拔级或分钟级的事件 —— 观察 `PowerMonitor` 的话，它每秒
+    /// 发布一次，于是**整个分页外壳（分段控件 + 当前分段的内容）每秒重算一遍**，
+    /// 即使这一页根本没在看。那正是「切分段偶尔顿一下、极小概率点了没反应」的来源：
+    /// 用户点分段的那一帧，正好撞上每秒一次的重算。
+    ///
+    /// 分页内容该实时还是实时 —— `DashboardPanels` 那些面板自己读 `PowerMonitor`。
+    @EnvironmentObject private var context: PowerContext
 
     /// 右上角齿轮的回调，由 `RootView` 给。
     let openSettings: @MainActor () -> Void
 
-    @State private var page: PowerSegment = .draw
+    /// 这一页是不是当前选中的分页。见 `PageScaffold.isActive` —— 非当前分页会
+    /// 停止求值内容，不然它会跟着每秒一次的采样一直重算（`DeferredContent`）。
+    let isActive: Bool
 
-    private var snapshot: PowerSnapshot { monitor.snapshot }
+    @State private var page: PowerSegment = .draw
 
     var body: some View {
         PageHubScaffold(
             title: page.title,
             glow: glow,
+            isActive: isActive,
             openSettings: openSettings,
             header: {
                 Picker("Power", selection: $page) {
@@ -54,11 +66,13 @@ struct PowerHubView: View {
 
     /// 背景光晕。规则住在 `PowerSegment.glow` —— 功率环的 tint 用的是同一个函数，
     /// 两处对不上时看起来像坏了。
+    ///
+    /// 输入取自 `context`（低频），不是 `monitor.snapshot`（每秒）。见上面那段说明。
     private var glow: Color {
         PowerSegment.glow(for: page,
-                          throttling: monitor.thermalState.isThrottling,
-                          wirelessInput: snapshot.isWirelessInput,
-                          externalConnected: snapshot.externalConnected)
+                          throttling: context.throttling,
+                          wirelessInput: context.wireless,
+                          externalConnected: context.externalConnected)
     }
 }
 

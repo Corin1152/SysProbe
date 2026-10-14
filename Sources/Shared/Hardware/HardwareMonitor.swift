@@ -292,6 +292,28 @@ final class HardwareMonitor: ObservableObject {
         }
     }
 
+    // MARK: 设备摘要（给不观察本对象的页面用）
+
+    /// `iPhone10,3 · 64 GB · iOS 16.5.1`。
+    ///
+    /// **给「只想显示一行设备信息、不想每秒跟着采样重算」的页面用**（现在只有频段页）。
+    /// 三个值都是出厂或十秒级才变的量，但只要在 `body` 里读一次 `snapshot`，就建立了
+    /// 对 `HardwareMonitor` 的观察依赖 —— 那一页于是跟着每秒重算一遍（频段页有 40 多个
+    /// 频段格子 + 四个动作按钮），而它显示的东西一秒都没变过。
+    ///
+    /// 所以单开一个入口：调用方在 `.task` 里取一次、存进 `@State`，观察面就干净了。
+    /// 与 `HardwareView.deviceSummary` 是同一套口径（同一份静态表 + 同一次容量读取），
+    /// 两处显示同一个串。
+    static func deviceSummary() -> String {
+        let system = systemIdentity
+        var parts: [String] = []
+        if system.modelIdentifier != "—" { parts.append(system.modelIdentifier) }
+        let storage = readStorage()
+        if storage.total > 0 { parts.append(Formatting.bytes(storage.total)) }
+        if system.systemVersion != "—" { parts.append("iOS \(system.systemVersion)") }
+        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+    }
+
     // MARK: 采样（后台）
 
     /// 一次完整采样。**不碰 UI、不碰 `UIDevice`**，所以整块跑在 `samplingQueue` 上。

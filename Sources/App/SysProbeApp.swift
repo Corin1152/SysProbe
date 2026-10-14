@@ -28,6 +28,9 @@ struct SysProbeApp: App {
             RootView()
                 .environmentObject(app)
                 .environmentObject(monitor)
+                // 页面外壳专用的低频状态（降频 / 无线 / 插电）。与 `monitor` 分开注入：
+                // 外壳只该观察它，观察 `monitor` 等于每秒重算一次整页外壳。见 `PowerContext`。
+                .environmentObject(monitor.context)
                 .environmentObject(hardware)
                 .environmentObject(optimizer)
                 .environmentObject(charge)

@@ -3,11 +3,15 @@ import SwiftUI
 /// 第一屏：设备硬件信息。
 struct HardwareView: View {
     @EnvironmentObject private var hardware: HardwareMonitor
-    @EnvironmentObject private var optimizer: MemoryOptimizer
 
     /// 右上角齿轮的回调，由 `RootView` 给 —— 见 `PageScaffold` 上那条注释：
     /// 传动作，不传 `AppState`。
     let openSettings: @MainActor () -> Void
+
+    /// 这一页是不是当前选中的分页。由 `RootView` 按 `selectedTab` 给。
+    /// 非当前分页会**停止求值内容** —— 否则它会跟着每秒一次的采样一直重算，
+    /// 见 `DeferredContent`。
+    let isActive: Bool
 
     private var snapshot: HardwareSnapshot { hardware.snapshot }
 
@@ -19,25 +23,22 @@ struct HardwareView: View {
     ///
     /// 标签（`mwCaption`，11 pt）、芯片型号那一行（13 pt）与内存优化那两行等宽日志
     /// （`mwMono`，11 pt）是另一个层级，不在此列。
-    private static let valueSize: CGFloat = 18
+    ///
+    /// `fileprivate` 而不是 `private`：内存优化那一块现在单独成类型
+    /// （`OptimizeSection`，同文件），它也要用同一档字号 —— 两处不一致的话，
+    /// 同一张卡片里会出现两种大小的读数。
+    fileprivate static let valueSize: CGFloat = 18
 
     var body: some View {
-        PageScaffold("Hardware", glow: .mwAccent, openSettings: openSettings) {
+        PageScaffold("Hardware", glow: .mwAccent, isActive: isActive, openSettings: openSettings) {
             devicePanel
             cpuPanel
             memoryPanel
             storagePanel
         }
-        // 优化一结束就立刻重读一次内存。
-        //
-        // 面板本身是一秒一采的，而「可用」的峰值窗口只有那几秒 —— 等下一个整秒采样的
-        // 时候，数值已经开始落回去了，看起来就像什么都没发生。
-        .onChange(of: optimizer.phase) { phase in
-            switch phase {
-            case .finished, .failed: hardware.refresh()
-            default: break
-            }
-        }
+        // **`optimizer` 的观察不在这里** —— 它整块搬进了 `OptimizeSection`。
+        // 本视图只观察 `hardware`（一秒一次，本来就要显示实时读数），
+        // 而优化进度一轮要变几十次：留在这里的话，那几十次会各自把整页重算一遍。
     }
 
     // MARK: 设备与系统
@@ -148,75 +149,11 @@ struct HardwareView: View {
                 }
 
                 Divider().overlay(Color.mwCardStroke)
-                optimizeSection
+                // 优化那一块**单独成视图**：它观察 `MemoryOptimizer`，而进度一轮要变
+                // 几十次。挂在 `HardwareView` 里的时候，每变一次整页都要重算一遍 ——
+                // 而那几十次正好落在用户盯着进度条的那几秒里。详见 `OptimizeSection`。
+                OptimizeSection { hardware.refresh() }
             }
-        }
-    }
-
-    private var optimizeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("Memory optimisation").mwCaption()
-                Spacer(minLength: 8)
-                switch optimizer.phase {
-                case .running(let progress, let allocated):
-                    Text(verbatim: "\(Formatting.percent(progress * 100))  ·  \(Formatting.bytes(allocated))")
-                        .mwMono(size: 11)
-                        .foregroundStyle(Color.mwAccent)
-                case .finished(_, _, let allocated):
-                    // 这一轮**实际**分配出去的量。和下面 Before / After 的差值分开摆：
-                    // 前者是「顶了多大的压力」，后者是「真的逼出来多少」——
-                    // 两个都摆出来，才不会把「尽力了但系统没吐」读成「什么都没干」。
-                    HStack(spacing: 4) {
-                        Text("Allocated")
-                        Text(verbatim: Formatting.bytes(allocated))
-                    }
-                    .mwMono(size: 11)
-                    .foregroundStyle(Color.mwBattery)
-                default:
-                    EmptyView()
-                }
-            }
-
-            switch optimizer.phase {
-            case .running(let progress, _):
-                ProgressView(value: progress)
-                    .tint(.mwAccent)
-            case .finished(let before, let after, _):
-                let delta = Int64(after) - Int64(before)
-                HStack(spacing: 14) {
-                    Metric(caption: "Before", value: Formatting.bytes(before), size: Self.valueSize)
-                    Metric(caption: "After", value: Formatting.bytes(after), size: Self.valueSize)
-                    Metric(caption: delta >= 0 ? "Released" : "Change",
-                           value: Formatting.bytes(UInt64(abs(delta))),
-                           tint: delta >= 0 ? .mwBattery : .mwMuted,
-                           size: Self.valueSize)
-                }
-            case .failed(let reason):
-                // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
-                // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
-                EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
-            case .idle:
-                // 那段说明文字按用户要求去掉了：它把这块区域撑得很高，想说的其实只有
-                // 一句「这是一次推动，不是保证」。按钮标题加上下方的
-                // Before / After / Released，已经把做了什么、结果如何说清楚了。
-                EmptyView()
-            }
-
-            Button {
-                optimizer.run()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "wand.and.stars")
-                    Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
-                }
-                .font(AppFont.text(14, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.mwAccent)
-            .disabled(optimizer.phase.isRunning)
         }
     }
 
@@ -248,4 +185,101 @@ struct HardwareView: View {
     // `ipv4Addresses`）在 0.0.27 一并删掉了 —— 视图没了之后它就没有消费方，
     // 每秒一次 `sysctl(NET_RT_IFLIST2)` 加一次 `getifaddrs` 纯属浪费。
     // 要恢复看 git 历史；`NetworkKind` 仍在（WakeService 依赖它）。
+}
+
+/// 「内存优化」那一块：进度、结果、按钮。
+///
+/// ── 为什么单独成类型 ────────────────────────────────────────────────────────
+///
+/// 它观察 `MemoryOptimizer`，而一轮优化的进度要变**几十次**（每分配一块就报一次）。
+/// 挂在 `HardwareView` 里的时候，每变一次整页都要重算 —— 而那几十次正好落在用户
+/// 盯着进度条的那几秒里，看起来就是「进度条一格一格地卡」。
+///
+/// 独立出来之后，重算范围缩到这一块：进度条、两行文字、一个按钮。
+/// 页面上那四个面板（含 8 条每核占用条）一次都不再跟着动。
+///
+/// ── 为什么它自己不知道「优化结束要刷新内存读数」──────────────────────────────
+///
+/// 那件事属于页面：优化一结束要立刻重读一次内存（面板本身一秒一采，而「可用」的
+/// 峰值窗口只有那几秒，等下一个整秒采样时数值已经落回去了）。所以这里只把「结束了」
+/// 这件事用回调抛出去，由 `HardwareView` 决定做什么。
+private struct OptimizeSection: View {
+
+    @EnvironmentObject private var optimizer: MemoryOptimizer
+
+    /// 一轮优化结束（成功或失败）时调用。
+    let onFinished: @MainActor () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Memory optimisation").mwCaption()
+                Spacer(minLength: 8)
+                switch optimizer.phase {
+                case .running(let progress, let allocated):
+                    Text(verbatim: "\(Formatting.percent(progress * 100))  ·  \(Formatting.bytes(allocated))")
+                        .mwMono(size: 11)
+                        .foregroundStyle(Color.mwAccent)
+                case .finished(_, _, let allocated):
+                    // 这一轮**实际**分配出去的量。和下面 Before / After 的差值分开摆：
+                    // 前者是「顶了多大的压力」，后者是「真的逼出来多少」——
+                    // 两个都摆出来，才不会把「尽力了但系统没吐」读成「什么都没干」。
+                    HStack(spacing: 4) {
+                        Text("Allocated")
+                        Text(verbatim: Formatting.bytes(allocated))
+                    }
+                    .mwMono(size: 11)
+                    .foregroundStyle(Color.mwBattery)
+                default:
+                    EmptyView()
+                }
+            }
+
+            switch optimizer.phase {
+            case .running(let progress, _):
+                ProgressView(value: progress)
+                    .tint(.mwAccent)
+            case .finished(let before, let after, _):
+                let delta = Int64(after) - Int64(before)
+                HStack(spacing: 14) {
+                    Metric(caption: "Before", value: Formatting.bytes(before), size: HardwareView.valueSize)
+                    Metric(caption: "After", value: Formatting.bytes(after), size: HardwareView.valueSize)
+                    Metric(caption: delta >= 0 ? "Released" : "Change",
+                           value: Formatting.bytes(UInt64(abs(delta))),
+                           tint: delta >= 0 ? .mwBattery : .mwMuted,
+                           size: HardwareView.valueSize)
+                }
+            case .failed(let reason):
+                // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
+                // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
+                EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
+            case .idle:
+                // 那段说明文字按用户要求去掉了：它把这块区域撑得很高，想说的其实只有
+                // 一句「这是一次推动，不是保证」。按钮标题加上下方的
+                // Before / After / Released，已经把做了什么、结果如何说清楚了。
+                EmptyView()
+            }
+
+            Button {
+                optimizer.run()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars")
+                    Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
+                }
+                .font(AppFont.text(14, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.mwAccent)
+            .disabled(optimizer.phase.isRunning)
+        }
+        .onChange(of: optimizer.phase) { phase in
+            switch phase {
+            case .finished, .failed: onFinished()
+            default: break
+            }
+        }
+    }
 }

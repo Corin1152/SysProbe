@@ -40,38 +40,18 @@ struct PowerRing: View {
 
     var body: some View {
         ZStack {
-            ticks
+            RingTicks(startAngle: startAngle, count: 57).equatable()
             arc(width: 14, inset: 0, fraction: inputFraction, color: tint)
             arc(width: 8, inset: 26, fraction: batteryFraction, color: .mwBattery)
             centre
         }
         .frame(width: size, height: size)
-        .animation(.easeOut(duration: 0.45), value: inputFraction)
-        .animation(.easeOut(duration: 0.45), value: batteryFraction)
-    }
-
-    private var ticks: some View {
-        Canvas { context, canvasSize in
-            let centre = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-            let radius = min(canvasSize.width, canvasSize.height) / 2 - 1
-            let count = 57
-            for index in 0...count {
-                let progress = Double(index) / Double(count)
-                let angle = Angle.degrees(startAngle + progress * 280).radians
-                let major = index % 7 == 0
-                let length: CGFloat = major ? 9 : 5
-                let start = CGPoint(x: centre.x + cos(angle) * (radius - length),
-                                    y: centre.y + sin(angle) * (radius - length))
-                let end = CGPoint(x: centre.x + cos(angle) * radius,
-                                  y: centre.y + sin(angle) * radius)
-                var path = Path()
-                path.move(to: start)
-                path.addLine(to: end)
-                context.stroke(path,
-                               with: .color(.mwMuted.opacity(major ? 0.45 : 0.2)),
-                               lineWidth: major ? 1.5 : 1)
-            }
-        }
+        // 0.45 → 0.22 秒（2026-10-14）。两条弧的动画由读数驱动，而读数一秒一变 ——
+        // 0.45 秒意味着**每秒有将近一半的时间这个环在动画中**，每一帧都要重画两条
+        // 渐变描边加两次发光合成。0.22 秒把这段时间砍掉一半，视觉上仍然是从容的
+        // 过渡，而不是跳变。
+        .animation(.easeOut(duration: 0.22), value: inputFraction)
+        .animation(.easeOut(duration: 0.22), value: batteryFraction)
     }
 
     private func arc(width: CGFloat, inset: CGFloat, fraction: CGFloat, color: Color) -> some View {
@@ -82,7 +62,11 @@ struct PowerRing: View {
             Circle()
                 .trim(from: 0, to: sweep * fraction)
                 .stroke(Theme.gradient(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
-                .shadow(color: color.opacity(fraction > 0.01 ? 0.55 : 0), radius: 10)
+                // 发光半径 10 → 5（2026-10-14）。`.shadow` 底下是 Core Graphics 的
+                // 模糊，每帧一次离屏渲染，成本随半径增长 —— 而这条弧带着上面那个
+                // 隐式动画、读数每秒都在动，等于每秒有十几帧在做这件事。
+                // 半径减半后光晕仍然在，视觉上几乎分不出，成本大约降到四分之一。
+                .shadow(color: color.opacity(fraction > 0.01 ? 0.55 : 0), radius: 5)
         }
         .rotationEffect(.degrees(startAngle))
         .padding(width / 2 + inset)
@@ -120,5 +104,45 @@ struct PowerRing: View {
             }
         }
         .padding(.horizontal, 34)
+    }
+}
+
+/// 表盘刻度。
+///
+/// **独立成类型并标 `Equatable`（2026-10-14）。** 它没有会变的参数 —— 起始角与条数
+/// 都是常量，一旦画好就不该再重绘。原来它是 `PowerRing` 的一个计算属性，于是读数
+/// 每秒变一次就让父 body 重算，而 SwiftUI 比较不了 `Canvas` 的闭包（闭包不是
+/// `Equatable` 的）—— 结果就是 57 条刻度线每秒重画一遍，纯属白费。
+///
+/// 标上 `Equatable` 并在调用处接 `.equatable()` 之后，SwiftUI 发现值没变就整块跳过。
+private struct RingTicks: View, Equatable {
+
+    let startAngle: Double
+    let count: Int
+
+    /// 与 `PowerRing.sweep` 对应的角度。两处必须一致，否则刻度与弧的起止对不上。
+    private let degrees: Double = 280
+
+    var body: some View {
+        Canvas { context, canvasSize in
+            let centre = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+            let radius = min(canvasSize.width, canvasSize.height) / 2 - 1
+            for index in 0...count {
+                let progress = Double(index) / Double(count)
+                let angle = Angle.degrees(startAngle + progress * degrees).radians
+                let major = index % 7 == 0
+                let length: CGFloat = major ? 9 : 5
+                let start = CGPoint(x: centre.x + cos(angle) * (radius - length),
+                                    y: centre.y + sin(angle) * (radius - length))
+                let end = CGPoint(x: centre.x + cos(angle) * radius,
+                                  y: centre.y + sin(angle) * radius)
+                var path = Path()
+                path.move(to: start)
+                path.addLine(to: end)
+                context.stroke(path,
+                               with: .color(.mwMuted.opacity(major ? 0.45 : 0.2)),
+                               lineWidth: major ? 1.5 : 1)
+            }
+        }
     }
 }

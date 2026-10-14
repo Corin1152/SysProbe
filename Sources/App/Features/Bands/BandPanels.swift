@@ -44,12 +44,18 @@ import SwiftUI
 /// 现在与「清理」只隔一次点击。分段标签上那个盾牌图标（见 `MaintenanceSegment.icon`）
 /// 是配合它一起加的第二道提示。
 struct BandPanels: View {
-    @EnvironmentObject private var hardware: HardwareMonitor
 
     /// 基带取数与写入。**由 `BandHubView` 注入**，不再是这里的 `@StateObject` ——
     /// 分段之间来回切会重建本视图，服务挂在视图上的话每次都重读一遍基带、
     /// 整屏盖一次转圈。详见 `BandHubView` 类型头上那段说明。
     @ObservedObject var service: BandService
+
+    /// 设备摘要（机型 · 总容量 · iOS 版本）。
+    ///
+    /// **刻意不观察 `HardwareMonitor`。** 这一页原来为了显示这一行而 `@EnvironmentObject`
+    /// 了它，代价是**每秒重算整页**（40 多个频段格子 + 四个动作按钮）—— 而这三个值
+    /// 出厂就定死、容量十秒才变一次。改成进页面时取一次（`HardwareMonitor.deviceSummary()`）。
+    @State private var deviceSummary = "—"
 
     /// 界面上的勾选状态：制式 → 启用的频段号。
     ///
@@ -141,6 +147,9 @@ struct BandPanels: View {
         .task {
             // 首次进入先给整屏警告。它挡在加载之前 —— 让人先看懂风险，再看数据。
             if !entryTipsDone { showEntryTips = true }
+            // 设备摘要取一次就够（出厂就定死的机型 / 系统版本，加十秒才变一次的容量）。
+            // 它是一次文件系统往返，几十微秒，放在主 actor 上无所谓。
+            if deviceSummary == "—" { deviceSummary = HardwareMonitor.deviceSummary() }
             // 读 / 探卡槽都在服务里（已经读过就是静默刷新，见 `BandService.ensureLoaded`）。
             await service.ensureLoaded()
         }
@@ -266,21 +275,6 @@ struct BandPanels: View {
         }
     }
 
-    /// `iPhone10,3 · 64 GB · iOS 16.5.1`。
-    ///
-    /// 用的是 SysProbe 已经采到的系统信息，不额外查私有接口。原版显示的是机型营销名
-    /// （iPhone X），那需要一张标识符→营销名的表；这里用标识符本身，信息量一样。
-    private var deviceSummary: String {
-        let system = hardware.snapshot.system
-        var parts: [String] = []
-        if system.modelIdentifier != "—" { parts.append(system.modelIdentifier) }
-        if hardware.snapshot.storage.total > 0 {
-            parts.append(Formatting.bytes(hardware.snapshot.storage.total))
-        }
-        if system.systemVersion != "—" { parts.append("iOS \(system.systemVersion)") }
-        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
-    }
-
     /// 服务小区频段号转成通行写法。
     ///
     /// **频段号本身不含制式信息** —— 同一个数字在 LTE 下是 `B8`、在 NR 下是 `n8`。
@@ -293,6 +287,7 @@ struct BandPanels: View {
         return String(band)
     }
 
+    /// 一行「标签 —— 值」。读数走 `Text(verbatim:)`：它是测量值，不是文案。
     private func infoRow(_ title: LocalizedStringKey, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)

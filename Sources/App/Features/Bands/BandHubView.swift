@@ -38,6 +38,10 @@ struct BandHubView: View {
     /// 右上角齿轮的回调，由 `RootView` 给。
     let openSettings: @MainActor () -> Void
 
+    /// 这一页是不是当前选中的分页。见 `PageScaffold.isActive` —— 非当前分页会
+    /// 停止求值内容，不然它会跟着每秒一次的采样一直重算（`DeferredContent`）。
+    let isActive: Bool
+
     @State private var page: BandSegment = .lock
 
     /// 频段会话：基带读回来的数据 + 当前卡槽。见类型头上的说明。
@@ -47,6 +51,7 @@ struct BandHubView: View {
         PageHubScaffold(
             title: page.title,
             glow: .mwAccent,
+            isActive: isActive,
             openSettings: openSettings,
             header: {
                 Picker("Bands", selection: $page) {

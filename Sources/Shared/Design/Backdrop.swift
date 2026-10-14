@@ -3,7 +3,19 @@ import SwiftUI
 /// The page background: a cool vertical wash with a faint measurement grid and a
 /// single soft glow behind the content. Drawn once, cheap, and it is what makes
 /// the screens read as instrument panels instead of settings pages.
-struct Backdrop: View {
+///
+/// ── 为什么是 `Equatable`（2026-10-14）────────────────────────────────────────
+///
+/// 「Drawn once」原来只是意图，不是事实。这一层是整屏 `Canvas`：一次绘制要铺两遍
+/// 渐变、画约 400 条网格线、再叠一层 `plusLighter` 的径向发光。而它挂在每个分页的
+/// `ZStack` 里，**父视图 body 一重算它就跟着重新求值** —— 读数每秒一次、分段切换、
+/// 弹层开合，全都算。SwiftUI 对 `Canvas` 的闭包做不了比较，于是每次都当它变了、
+/// 每次都重画一遍整屏。
+///
+/// 它的参数只有两个（`glow` / `glowIntensity`），而且都是 `Equatable` 的静态常量 ——
+/// 所以标上 `Equatable`、在调用处接 `.equatable()` 就能让 SwiftUI 在值没变时
+/// **跳过整个 body**。切分页、切分段、每秒刷新都不再重画背景。
+struct Backdrop: View, Equatable {
     var glow: Color = .mwAccent
     var glowIntensity: Double = 1
 

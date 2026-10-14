@@ -86,17 +86,17 @@ struct RootView: View {
     /// 把开关关掉之后整个分页消失（原来它是消失一个分段）。
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
-            HardwareView(openSettings: openSettings)
+            HardwareView(openSettings: openSettings, isActive: app.selectedTab == 0)
                 .tabItem { Label("Hardware", systemImage: "cpu") }
                 .tag(0)
-            PowerHubView(openSettings: openSettings)
+            PowerHubView(openSettings: openSettings, isActive: app.selectedTab == 1)
                 .tabItem { Label("Power", systemImage: "bolt.fill") }
                 .tag(1)
-            MaintenanceHubView(openSettings: openSettings)
+            MaintenanceHubView(openSettings: openSettings, isActive: app.selectedTab == 2)
                 .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
                 .tag(2)
             if showBandEditor {
-                BandHubView(openSettings: openSettings)
+                BandHubView(openSettings: openSettings, isActive: app.selectedTab == 3)
                     .tabItem { Label("Bands", systemImage: "antenna.radiowaves.left.and.right") }
                     .tag(3)
             }
@@ -156,6 +156,55 @@ struct MonitorLifecycle: View {
     }
 }
 
+/// 只在「这一页真的在屏幕上」时才求值它的内容。
+///
+/// ── 为什么需要它 ────────────────────────────────────────────────────────────
+///
+/// `TabView` 会把切走的分页留在视图树里 —— 那正是它保留滚动位置与状态的方式，
+/// 也是「切回来还在原处」的原因。代价是：分页里的视图**照旧每秒重算**，因为它们
+/// 观察着 `PowerMonitor` / `HardwareMonitor` / `ChargeControlService` 这些每秒发布
+/// 一次的对象。
+///
+/// 于是用户停在硬件页时，电源页（六个面板 + 圆环）、频段页（40 多个频段格子）、
+/// 充电页仍在各自每秒把 body 跑一遍 —— 三页加起来十几毫秒，正好是一帧的时间。
+/// 表现就是「不管在哪一页，滑动和切分段都偶尔顿一下」。
+///
+/// ── 为什么是等高占位，而不是干脆不渲染 ──────────────────────────────────────
+///
+/// 直接不渲染，滚动容器的内容高度会塌成 0，切回来时 `ScrollView` 会把偏移量钳回
+/// 顶部 —— 那是用户看得见的行为变化。记住上一次的高度、用等高占位顶住，切回来时
+/// 布局与滚动位置都不动。
+///
+/// 高度只在**可见期间**记录（`onAppear` 记首次、`onChange` 跟变化）—— 切走之后
+/// 内容不再求值，那时没有更好的时机。它是近似值，而它只影响「切走期间占位多高」，
+/// 不影响切回来之后的内容。
+struct DeferredContent<Content: View>: View {
+
+    /// 这一页现在在不在屏幕上。
+    let isVisible: Bool
+
+    @ViewBuilder var content: () -> Content
+
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        if isVisible {
+            content()
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { height = proxy.size.height }
+                            // 只在高度真的变了才写：读数每秒在变，但高度几秒都不动一下，
+                            // 所以这一句平时一次都不触发。
+                            .onChange(of: proxy.size.height) { newValue in height = newValue }
+                    }
+                )
+        } else {
+            Color.clear.frame(height: height)
+        }
+    }
+}
+
 /// Shared page chrome: the instrument backdrop behind a scrolling column of panels.
 ///
 /// 2026-10-14：**齿轮回来了**，它装的是「关于」（版本 / 发布日期 / 诊断）。
@@ -164,6 +213,13 @@ struct MonitorLifecycle: View {
 struct PageScaffold<Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color
+    /// 这一页现在是不是选中的那个分页。
+    ///
+    /// 由 `RootView` 按 `selectedTab` 给。**不用 `onAppear` / `onDisappear` 判**：
+    /// 那一对回调的触发时机取决于 `TabView` 什么时候创建分页的视图，而这里要的是
+    /// 确定的答案 —— 非当前分页必须**停止求值内容**，否则它会跟着每秒一次的采样
+    /// 一直重算（详见 `DeferredContent`）。
+    var isActive: Bool = true
     /// 标题样式。默认大标题；**带分段控件的分页要用 `.inline`** ——
     /// 大标题会占掉整整一行半的高度，而分段控件就压在它下面，两者叠起来第一屏
     /// 几乎看不到内容。见 `PageHubScaffold`。
@@ -176,11 +232,13 @@ struct PageScaffold<Content: View>: View {
 
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
+         isActive: Bool = true,
          titleDisplayMode: NavigationBarItem.TitleDisplayMode = .large,
          openSettings: @escaping @MainActor () -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
+        self.isActive = isActive
         self.titleDisplayMode = titleDisplayMode
         self.openSettings = openSettings
         self.content = content
@@ -190,10 +248,12 @@ struct PageScaffold<Content: View>: View {
         NavigationStack {
             ZStack {
                 Color.mwCanvas
-                Backdrop(glow: glow)
+                // `.equatable()` 不是装饰：这一层是整屏 `Canvas`，父 body 每次重算
+                // 都会重新求值它，而 SwiftUI 比不了闭包、只能重画。详见 `Backdrop`。
+                Backdrop(glow: glow).equatable()
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        content()
+                        DeferredContent(isVisible: isActive) { content() }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
@@ -239,6 +299,8 @@ struct PageScaffold<Content: View>: View {
 struct PageHubScaffold<Header: View, Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color
+    /// 这一页现在是不是选中的那个分页。见 `PageScaffold.isActive`。
+    var isActive: Bool = true
     /// 打开“关于”弹层。与 `PageScaffold` 同一个齿轮，同一条理由：
     /// 传动作，不传 `AppState`。
     var openSettings: @MainActor () -> Void
@@ -247,11 +309,13 @@ struct PageHubScaffold<Header: View, Content: View>: View {
 
     init(title: LocalizedStringKey,
          glow: Color = .mwAccent,
+         isActive: Bool = true,
          openSettings: @escaping @MainActor () -> Void,
          @ViewBuilder header: @escaping () -> Header,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
+        self.isActive = isActive
         self.openSettings = openSettings
         self.header = header
         self.content = content
@@ -261,13 +325,15 @@ struct PageHubScaffold<Header: View, Content: View>: View {
         NavigationStack {
             ZStack {
                 Color.mwCanvas
-                Backdrop(glow: glow)
+                // 与 `PageScaffold` 同一条理由：整屏 `Canvas` 要能被跳过。
+                Backdrop(glow: glow).equatable()
                 VStack(spacing: 0) {
                     header()
                         .padding(.horizontal, 16)
                         .padding(.top, 2)
                         .padding(.bottom, 8)
-                    content()
+                    // 只有选中的分页才求值分段内容 —— 见 `DeferredContent`。
+                    DeferredContent(isVisible: isActive) { content() }
                 }
             }
             .navigationTitle(title)

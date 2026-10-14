@@ -67,7 +67,17 @@ final class MemoryOptimizer: ObservableObject {
         // 分配与逐页写入要占住 CPU，不能放在主 actor 上 —— 否则界面会僵住一秒多。
         // 这个闭包是 `@Sendable` 的，所以它只能碰 `MemoryReclaimer`（非隔离）里的
         // 东西；回主线程更新状态走 `Task { @MainActor in }`。
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        //
+        // ── QoS 是 `.utility`，不是 `.userInitiated`（2026-10-14）────────────────
+        //
+        // 下面那段逐页写入是**纯 CPU 死循环**。`.userInitiated` 会把它排到**性能核**
+        // 上，而 iPhone X 一共只有两个性能核 —— 一个被它占满，主线程（UI）就只剩一个，
+        // 于是「优化内存」那几秒里，进度条动画、滚动、点按全都明显发顿。
+        //
+        // 降到 `.utility` 之后它退到能效核：总时长会拉长一些（能效核慢，实测大约
+        // 1.5–2 倍），但界面不再被它挤着走。这一轮要修的是「进度条本身卡」，
+        // 而卡的原因就是它把 UI 的 CPU 抢走了 —— 拿一点时长换流畅，这个交换是值的。
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             // 与界面同一个口径（`MemoryStats.available`）：free + purgeable + speculative。
             let before = MemoryReclaimer.availableBytes()
             let target = MemoryReclaimer.targetBytes()
@@ -75,6 +85,8 @@ final class MemoryOptimizer: ObservableObject {
             var allocated: UInt64 = 0
             // target 为 0 说明连一次都分配不了，同样算「提前停下」。
             var stoppedEarly = target == 0
+            // 上一次报出去的进度。见下面那处节流。
+            var reported = -1.0
 
             while allocated < target {
                 // 安全闸门：进程在触发 jetsam 前还能分配多少。低于安全垫就停。
@@ -96,12 +108,22 @@ final class MemoryOptimizer: ObservableObject {
                 allocated &+= chunk
 
                 let progress = target == 0 ? 1 : min(1, Double(allocated) / Double(target))
+                // ── 进度按 5% 一档发布 ──
+                //
+                // 一轮 512 MB 要分配 64 块，原来每块都回主线程发一次 —— 64 次发布，
+                // 每次让进度那一块重算一遍，而那几十次正好落在用户盯着进度条的那几秒里。
+                // 5% 一档是 20 次，而进度条宽度只有三百点上下，5% 已经是十几个像素，
+                // 肉眼看不出跳。
+                //
                 // 必须先把 `allocated` 拷成不可变的再送进 Task：直接捕获这个 `var`
                 // 会被 Swift 6 判成 "sending 'allocated' risks causing data races"，
                 // 因为外层循环还在改它。值类型拷贝是 Sendable，没问题。
-                let soFar = allocated
-                Task { @MainActor in
-                    self?.phase = .running(progress: progress, allocated: soFar)
+                if progress - reported >= 0.05 {
+                    reported = progress
+                    let soFar = allocated
+                    Task { @MainActor in
+                        self?.phase = .running(progress: progress, allocated: soFar)
+                    }
                 }
             }
 
