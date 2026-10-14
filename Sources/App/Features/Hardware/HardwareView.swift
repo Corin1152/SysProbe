@@ -1,9 +1,11 @@
 import SwiftUI
 
 /// 第一屏：设备硬件信息。
+///
+/// **这个视图本身不观察任何采样对象。** 四张卡片各自观察 `HardwareMonitor` 里自己
+/// 那一块（见 `HardwareCard`），优化按钮自己观察 `MemoryOptimizer`。原因见 `body`
+/// 上那段说明：`HardwareMonitor` 每秒发布一次，观察它的视图整棵重算。
 struct HardwareView: View {
-    @EnvironmentObject private var hardware: HardwareMonitor
-
     /// 右上角齿轮的回调，由 `RootView` 给 —— 见 `PageScaffold` 上那条注释：
     /// 传动作，不传 `AppState`。
     let openSettings: @MainActor () -> Void
@@ -12,8 +14,6 @@ struct HardwareView: View {
     /// 非当前分页会**停止求值内容** —— 否则它会跟着每秒一次的采样一直重算，
     /// 见 `DeferredContent`。
     let isActive: Bool
-
-    private var snapshot: HardwareSnapshot { hardware.snapshot }
 
     /// 第一屏所有**读数**的字号。
     ///
@@ -31,46 +31,105 @@ struct HardwareView: View {
 
     var body: some View {
         PageScaffold("Hardware", glow: .mwAccent, isActive: isActive, openSettings: openSettings) {
-            devicePanel
-            cpuPanel
-            memoryPanel
-            storagePanel
+            DeviceCard()
+            CPUCard()
+            MemoryCard()
+            StorageCard()
         }
-        // **`optimizer` 的观察不在这里** —— 它整块搬进了 `OptimizeSection`。
-        // 本视图只观察 `hardware`（一秒一次，本来就要显示实时读数），
-        // 而优化进度一轮要变几十次：留在这里的话，那几十次会各自把整页重算一遍。
+        // **这个视图不再观察 `hardware`，也不再观察 `optimizer`。**
+        //
+        // `hardware` 每秒发布一次，而本视图原来是它的观察者，于是**整页每秒重算
+        // 一遍** —— 包括 `PageScaffold` 那层导航栈与滚动容器、四张卡片的全部结构，
+        // 而真正在变的只有 CPU 那 8 条占用条和几行读数。用户报的「CPU 频率条
+        // 不跟手」「页面动画变肉」正来自这里：整页重建摊在滚动与切换的同一批帧里。
+        //
+        // 现在把观察面拆到四张卡片里（各看自己那一块），本视图只剩「把五块拼起来」，
+        // 每秒采样不再让它重算。`OptimizeSection` 同理（0.0.61 起就不在这里）。
     }
 
-    // MARK: 设备与系统
+    // MARK: - 四张卡片（各自观察自己那一块）
 
-    private var devicePanel: some View {
-        Panel("Device", systemImage: "iphone") {
+    // 注意：这里开始到 `StorageCard` 结束为止都**仍然在 `HardwareView` 内部** ——
+    // 它们是嵌套类型，不是文件顶层类型。`HardwareView` 的闭合括号在 StorageCard
+    // 之后；`OptimizeSection` 则刻意留在 `HardwareView` 外面（同文件顶层私有类型）。
+
+    /// 一张卡片 = 标题 + 内容。标题由 `HardwareCard` 统一渲染。
+    ///
+    /// 存在的唯一理由是**让每张卡片只观察自己需要的量** —— SwiftUI 的
+    /// `@EnvironmentObject` 粒度是整个对象，`HardwareMonitor` 每秒发一次通知，
+    /// 观察它的视图就得跟着重算。四张卡片分开观察之后，设备 / 存储那两张
+    /// 几乎不变，CPU 那一张每秒动，互不影响。
+    private protocol HardwareCard: View {
+        associatedtype Body: View
+        /// 卡片内容（标题行之外的部分）。
+        @ViewBuilder var content: Self.Body { get }
+    }
+
+    extension HardwareCard {
+        /// 卡片的公共外壳：标题行 + 内容。
+        ///
+        /// `trailing` 默认空 —— 只有 CPU（核心数）与内存（总容量）两张卡有右上角
+        /// 读数，另两张没有。用 `EmptyView` 而不是让整个协议泛型化：那会让每个
+        /// 卡片类型多一个泛型参数，而这里只是「有个可选的」。
+        var body: some View {
+            Panel(title, systemImage: icon, trailing: trailing) {
+                content
+            }
+        }
+
+        var title: LocalizedStringKey { "Device" }
+        var icon: String { "iphone" }
+        var trailing: Text? { nil }
+    }
+
+    /// 设备卡片：机型 / 系统 / 内核 / 运行时长 / 物理内存。
+    ///
+    /// 这一组里**只有「运行时长」是每秒变的**，其余四项出厂就定死。
+    private struct DeviceCard: HardwareCard {
+        @EnvironmentObject private var hardware: HardwareMonitor
+        var title: LocalizedStringKey { "Device" }
+        var icon: String { "iphone" }
+
+        // 整个 content 只用一次 `hardware.snapshot`：EnvironmentObject 的
+        // wrappedValue 每解一次都要走一遍环境查找，散着写会重复付这个钱。
+        var content: some View {
+            let snap = hardware.snapshot
             VStack(alignment: .leading, spacing: 12) {
                 Metric(caption: "Model",
-                       value: snapshot.system.modelIdentifier,
+                       value: snap.system.modelIdentifier,
                        size: Self.valueSize)
                 HStack(spacing: 14) {
-                    Metric(caption: "System", value: snapshot.system.systemVersion, size: Self.valueSize)
-                    Metric(caption: "Kernel", value: snapshot.system.kernelVersion, size: Self.valueSize)
+                    Metric(caption: "System", value: snap.system.systemVersion, size: Self.valueSize)
+                    Metric(caption: "Kernel", value: snap.system.kernelVersion, size: Self.valueSize)
                 }
                 HStack(spacing: 14) {
                     Metric(caption: "Uptime",
-                           value: Formatting.duration(snapshot.system.uptime),
+                           value: Formatting.duration(snap.system.uptime),
                            size: Self.valueSize)
                     Metric(caption: "Physical memory",
-                           value: Formatting.bytes(snapshot.system.physicalMemory),
+                           value: Formatting.bytes(snap.system.physicalMemory),
                            size: Self.valueSize)
                 }
             }
         }
     }
 
-    // MARK: CPU
+    /// CPU 卡片：占用、物理核数、当前频率、每核占用条。
+    ///
+    /// **这是最贵的一张**：8 条每核占用条加一条频率读数，全都每秒变。
+    private struct CPUCard: HardwareCard {
+        @EnvironmentObject private var hardware: HardwareMonitor
+        var title: LocalizedStringKey { "CPU" }
+        var icon: String { "cpu" }
 
-    private var cpuPanel: some View {
-        // 计数是文案的一部分（"8 cores" / "8 核"），所以走本地化插值而不是 verbatim；
-        // 芯片型号是硬件名，照原样显示。
-        Panel("CPU", systemImage: "cpu", trailing: Text("\(snapshot.cpu.logicalCores) cores")) {
+        private var snapshot: HardwareSnapshot { hardware.snapshot }
+
+        /// 计数是文案的一部分（"8 cores" / "8 核"），所以走本地化插值而不是 verbatim。
+        var trailing: Text? {
+            Text("\(snapshot.cpu.logicalCores) cores")
+        }
+
+        var content: some View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(verbatim: snapshot.cpu.model)
                     .font(AppFont.text(13, weight: .medium))
@@ -113,11 +172,18 @@ struct HardwareView: View {
         }
     }
 
-    // MARK: 内存
+    /// 内存卡片。优化按钮也在这里（它在内存面板里，见 0.0.59 起的布局）。
+    private struct MemoryCard: HardwareCard {
+        @EnvironmentObject private var hardware: HardwareMonitor
+        var title: LocalizedStringKey { "Memory" }
+        var icon: String { "memorychip" }
 
-    private var memoryPanel: some View {
-        Panel("Memory", systemImage: "memorychip",
-              trailing: Text(verbatim: Formatting.bytes(snapshot.memory.total))) {
+        private var snapshot: HardwareSnapshot { hardware.snapshot }
+        var trailing: Text? {
+            Text(verbatim: Formatting.bytes(snapshot.memory.total))
+        }
+
+        var content: some View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
                     Metric(caption: "Used",
@@ -149,19 +215,23 @@ struct HardwareView: View {
                 }
 
                 Divider().overlay(Color.mwCardStroke)
-                // 优化那一块**单独成视图**：它观察 `MemoryOptimizer`，而进度一轮要变
-                // 几十次。挂在 `HardwareView` 里的时候，每变一次整页都要重算一遍 ——
-                // 而那几十次正好落在用户盯着进度条的那几秒里。详见 `OptimizeSection`。
                 OptimizeSection { hardware.refresh() }
             }
         }
     }
 
-    // MARK: 存储
+    /// 存储卡片。
+    private struct StorageCard: HardwareCard {
+        @EnvironmentObject private var hardware: HardwareMonitor
+        var title: LocalizedStringKey { "Storage" }
+        var icon: String { "internaldrive" }
 
-    private var storagePanel: some View {
-        Panel("Storage", systemImage: "internaldrive",
-              trailing: Text(verbatim: Formatting.bytes(snapshot.storage.total))) {
+        private var snapshot: HardwareSnapshot { hardware.snapshot }
+        var trailing: Text? {
+            Text(verbatim: Formatting.bytes(snapshot.storage.total))
+        }
+
+        var content: some View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
                     Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: Self.valueSize)
@@ -174,116 +244,53 @@ struct HardwareView: View {
             }
         }
     }
-
-    // MARK: 网络
-    //
-    // 这一页原来最下方还有一张 Network 卡片（接口地址、实时上下行、累计流量）。
-    // 按用户要求去掉了：这一页的定位是「设备硬件」，而网络是链路状态、不是硬件；
-    // 何况实时上下行只有盯着看才有意义，放在第一屏既占高度又要一秒一刷。
-    //
-    // `HardwareMonitor` 里对应的网络采样（`readNetwork` / `interfaceCounters` /
-    // `ipv4Addresses`）在 0.0.27 一并删掉了 —— 视图没了之后它就没有消费方，
-    // 每秒一次 `sysctl(NET_RT_IFLIST2)` 加一次 `getifaddrs` 纯属浪费。
-    // 要恢复看 git 历史；`NetworkKind` 仍在（WakeService 依赖它）。
 }
 
-/// 「内存优化」那一块：进度、结果、按钮。
+
+/// 「内存优化」那一个按钮。
 ///
-/// ── 为什么单独成类型 ────────────────────────────────────────────────────────
+/// ── 为什么只剩一个按钮（2026-10-14 按要求精简）────────────────────────────────
 ///
-/// 它观察 `MemoryOptimizer`，而一轮优化的进度要变**几十次**（每分配一块就报一次）。
-/// 挂在 `HardwareView` 里的时候，每变一次整页都要重算 —— 而那几十次正好落在用户
-/// 盯着进度条的那几秒里，看起来就是「进度条一格一格地卡」。
+/// 原来这里是三段：标题 + 百分比与已分配量、结果三档读数（Before / After /
+/// Released）、按钮。按用户要求全部去掉，只留按钮本身。理由不只是「少几行字」：
 ///
-/// 独立出来之后，重算范围缩到这一块：百分比与已分配量的那一行、结果三档读数、
-/// 一个按钮。页面上那四个面板（含 8 条每核占用条）一次都不再跟着动。
-///
-/// ── 为什么没有进度条（2026-10-14）───────────────────────────────────────────
-///
-/// 按用户要求去掉了 `ProgressView`，只保留百分比数字与已分配量。理由是它把这一块
-/// **从「几十行里变一行」拖成「一直在动」**：`ProgressView.value` 每收一次进度就会
-/// 走一遍自己的动画与轨迹重绘，而进度一轮要发 20 次（5% 一档）；百分比数字是文本，
-/// 一转就过，成本低一个量级。
+///   · **结论归内存面板管** —— 优化一结束就会重读一次，「可用」涨了多少在 Memory
+///     卡片上当场能看到，这里再摆一遍是重复；
+///   · `MemoryOptimizer` 每 5% 发布一次进度，而它原来就挂在本页里 —— 那二十次发布
+///     会把四张卡片一起拖着重算。现在受影响的只有这一个按钮。
 ///
 /// ── 为什么它自己不知道「优化结束要刷新内存读数」──────────────────────────────
 ///
 /// 那件事属于页面：优化一结束要立刻重读一次内存（面板本身一秒一采，而「可用」的
 /// 峰值窗口只有那几秒，等下一个整秒采样时数值已经落回去了）。所以这里只把「结束了」
-/// 这件事用回调抛出去，由 `HardwareView` 决定做什么。
+/// 这件事用回调抛出去，由 `MemoryCard` 决定做什么。
 private struct OptimizeSection: View {
 
-    @EnvironmentObject private var optimizer: MemoryOptimizer
+@EnvironmentObject private var optimizer: MemoryOptimizer
 
-    /// 一轮优化结束（成功或失败）时调用。
-    let onFinished: @MainActor () -> Void
+/// 一轮优化结束（成功或失败）时调用。
+let onFinished: @MainActor () -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("Memory optimisation").mwCaption()
-                Spacer(minLength: 8)
-                switch optimizer.phase {
-                case .running(let progress, let allocated):
-                    Text(verbatim: "\(Formatting.percent(progress * 100))  ·  \(Formatting.bytes(allocated))")
-                        .mwMono(size: 11)
-                        .foregroundStyle(Color.mwAccent)
-                case .finished(_, _, let allocated):
-                    // 这一轮**实际**分配出去的量。和下面 Before / After 的差值分开摆：
-                    // 前者是「顶了多大的压力」，后者是「真的逼出来多少」——
-                    // 两个都摆出来，才不会把「尽力了但系统没吐」读成「什么都没干」。
-                    HStack(spacing: 4) {
-                        Text("Allocated")
-                        Text(verbatim: Formatting.bytes(allocated))
-                    }
-                    .mwMono(size: 11)
-                    .foregroundStyle(Color.mwBattery)
-                default:
-                    EmptyView()
-                }
-            }
-
-            switch optimizer.phase {
-            case .finished(let before, let after, _):
-                let delta = Int64(after) - Int64(before)
-                HStack(spacing: 14) {
-                    Metric(caption: "Before", value: Formatting.bytes(before), size: HardwareView.valueSize)
-                    Metric(caption: "After", value: Formatting.bytes(after), size: HardwareView.valueSize)
-                    Metric(caption: delta >= 0 ? "Released" : "Change",
-                           value: Formatting.bytes(UInt64(abs(delta))),
-                           tint: delta >= 0 ? .mwBattery : .mwMuted,
-                           size: HardwareView.valueSize)
-                }
-            case .failed(let reason):
-                // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
-                // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
-                EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
-            default:
-                // `.running`（进度百分比与已分配量已经在上面那一行显示）与 `.idle`
-                // 都留空。原来这里 `.running` 会画一条 `ProgressView`，
-                // 2026-10-14 按用户要求去掉，理由见类型头。
-                EmptyView()
-            }
-
-            Button {
-                optimizer.run()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "wand.and.stars")
-                    Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
-                }
-                .font(AppFont.text(14, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.mwAccent)
-            .disabled(optimizer.phase.isRunning)
+var body: some View {
+    Button {
+        optimizer.run()
+    } label: {
+        HStack(spacing: 6) {
+            Image(systemName: "wand.and.stars")
+            Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
         }
-        .onChange(of: optimizer.phase) { phase in
-            switch phase {
-            case .finished, .failed: onFinished()
-            default: break
-            }
+        .font(AppFont.text(14, weight: .semibold))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+    }
+    .buttonStyle(.borderedProminent)
+    .tint(.mwAccent)
+    .disabled(optimizer.phase.isRunning)
+    .onChange(of: optimizer.phase) { phase in
+        switch phase {
+        case .finished, .failed: onFinished()
+        default: break
         }
     }
+}
 }

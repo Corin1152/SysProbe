@@ -42,16 +42,33 @@ struct MaintenancePanels: View {
     /// `disabled.plist` 里 `com.apple.thermalmonitord` 的状态。`true` = 已配置为禁用。
     ///
     /// 注意这是**配置**状态，不是运行状态：改完要重启才真的生效。
-    @State private var thermalDisabled = false
+    ///
+    /// ── 为什么是 `@AppStorage`（2026-10-14）──────────────────────────────────
+    ///
+    /// 它原来是 `@State`，于是**每次进这一页都从默认值 `false` 重新开始** —— 而分段
+    /// 之间来回切（0.0.62 起内容会重建）、以及从别的分页切回来，都会让本视图重建一次。
+    /// 用户看到的症状是「每次进入，开关都先从关跳到开」：真实状态是「开」（已禁用），
+    /// 而 `@State` 给它的是 `false`，等 `.task` 把 plist 读回来才纠正 —— 中间那一下
+    /// 闪动加上 Toggle 自身的滑块动画，就是用户说的「不要有动画」。
+    ///
+    /// 改成 `@AppStorage` 之后，上一次读到的真实值會一直留着：进页面第一帧就是对的，
+    /// 读回来看见没变就什么都不做。键名带 `sysprobe.` 前缀，与这一组其它开关一致。
+    @AppStorage("sysprobe.thermalDisabled") private var thermalDisabled = false
+
+    /// 已经改过配置、还没重启。用来把「重启后生效」那一行显示出来。
+    ///
+    /// 与 `thermalDisabled` 同理：它也是「跨视图重建必须留住」的状态 ——
+    /// 切走再回来就看不到「重启以生效」的提示，等于把用户刚做的改动说丢了。
+    @AppStorage("sysprobe.thermalNeedsRestart") private var thermalNeedsRestart = false
 
     /// 配置读不出来（工具不在包里 / 拿不到 root）。此时整行禁用。
     ///
     /// 与 `thermalDisabled == false` 分开存是必需的：合并的话，一个坏掉的工具
     /// 会显示成一个看起来正常、拨了却没反应的开关。
+    ///
+    /// 它**不**跨重建保留（`@State`）：读不出来是这一次的结果，与「读出来是什么值」
+    /// 不是一回事。留着上一次的失败会让一个已经好了的工具继续显示不可用。
     @State private var thermalUnavailable = false
-
-    /// 已经改过配置、还没重启。用来把「重启后生效」那一行显示出来。
-    @State private var thermalNeedsRestart = false
 
     /// 正在写配置（起子进程并等它结束）。
     @State private var thermalBusy = false
@@ -166,6 +183,12 @@ struct MaintenancePanels: View {
                 Text("Disable thermal throttling")
             }
             .disabled(toolReady != true || thermalUnavailable || thermalBusy)
+            // 去掉 Toggle 的滑块动画（2026-10-14 用户要求）。
+            //
+            // 这个开关的两个状态来源不同：用户点它、以及 `.task` 读回 plist 后纠正。
+            // 前者是用户动作，动画是合理的反馈；后者是**纠错**，动画只会让人看到
+            // 「它自己动了一下」。把动画整个关掉，两种情形都是干脆地切换。
+            .animation(nil, value: thermalDisabled)
             // 挂在 `Toggle` 上而不是外层 `ZStack`：外层已经挂了一个
             // `confirmationDialog`（重启 / 注销），同一个视图上叠两个会互相抢呈现。
             .confirmationDialog(

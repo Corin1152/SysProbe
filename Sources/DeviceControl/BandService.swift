@@ -145,6 +145,61 @@ final class BandService: ObservableObject {
     /// 「该选哪张卡」探过没有。见 `ensureLoaded` —— 与「读过基带没有」是两件事。
     private var didProbeSlot = false
 
+    /// 「当前网络」那一组的每秒刷新定时器（`sysprobe_slot_info`）。
+    ///
+    /// **只有页面停留在频段锁定分段时才跑。** 方法见 `startSlotPolling` 上的说明。
+    private var slotPoller: Timer?
+
+    // MARK: - 「当前网络」每秒刷新
+
+    /// 开始每秒刷新 `slotInfo`（运营商 / 信号格 / RSRP / 小区标识那一组）。
+    ///
+    /// ── 为什么需要它 ────────────────────────────────────────────────────────
+    ///
+    /// 「当前网络」这一组是**实时量**：RSRP 每秒都在变，小区标识在移动中也会变。
+    /// 而它原来只在进页面 / 换卡槽 / 保存后各读一次 —— 用户停在页面上盯着看时
+    /// 它是不动的，得手动点「刷新」。用户要求「前台打开查看时 1s 自动刷新一次」。
+    ///
+    /// ── 为什么是 1 Hz，及为什么不动 `bandInfo` ───────────────────────────────
+    ///
+    /// 每秒一次对齐硬件页 / 电源页的节奏（同 App 一致的一秒一拍）。只刷 `slotInfo`，
+    /// **不重读频段配置**：那份东西是上千毫秒级的 XPC（`copyCellInfo` 最坏等 1 秒），
+    /// 而且它本来就不该每秒动 —— 用户正在打勾的界面更不该被它搅。
+    ///
+    /// ── 为什么不在主线程上读 ────────────────────────────────────────────────
+    ///
+    /// `sysprobe_slot_info` 是同步 XPC（内部等回调，最坏 1 秒）。留在主线程会把
+    /// 主线程按住最多一秒 —— 那正是「点什么都卡一下」的来源。
+    func startSlotPolling() {
+        guard slotPoller == nil else { return }
+        // 先立刻读一次，别等下一个整秒。
+        pollSlotInfo()
+        // 挂在 `.default` 模式：滚动期间自动让路，松手接上。与两个 Monitor 同一取向。
+        slotPoller = Timer.publish(every: 1, on: .main, in: .default)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.pollSlotInfo()
+            }
+    }
+
+    func stopSlotPolling() {
+        slotPoller?.cancel()
+        slotPoller = nil
+    }
+
+    /// 一次刷新：后台读，回主 actor 发布。读不到就保持上一次的值不变。
+    private func pollSlotInfo() {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            let info = BandService.readInfoSync(slot: self.slot)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard info != self.slotInfo else { return }
+                self.slotInfo = info
+            }
+        }
+    }
+
     // MARK: - 读
 
     /// 进页面时调一次。

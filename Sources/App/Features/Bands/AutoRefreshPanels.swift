@@ -42,6 +42,10 @@ struct AutoRefreshPanels: View {
             let preferred = await Task.detached { BandService.preferredSlot() }.value
             slot = preferred
             syncExecutor()
+            // 倒计时的每秒显示现在就开始，与「功能开没开」无关 —— 关着时它不显示
+            // 倒计时（`refreshDisplay` 里那两个分支都只在 armed / cooling 才动），
+            // 开了立刻就是 1 秒一刷新。见 `BandAutoRefreshController.startDisplayTicking`。
+            controller.startDisplayTicking()
             // 幂等：它已经在跑就什么都不做。放在这里而不是只靠 RootView，
             // 是为了让「刚装完第一次进这一页」也能立刻知道守护进程在不在。
             BandRefreshDaemonBridge.shared.startWatchdog()
@@ -60,7 +64,12 @@ struct AutoRefreshPanels: View {
         .onChange(of: config.enabled) { _ in syncExecutor() }
         // 切走分段就停表。后台模式关着时 App 退后台本来也会被挂起；
         // 这里补的是「还在 App 里但不在这一页」那一段。
-        .onDisappear { controller.stop() }
+        .onDisappear {
+            controller.stop()
+            // 倒计时的每秒显示也一起停：它跟着这一页的生命周期走，
+            // 不跟着功能开关走 —— 用户要的是「在这一页看着它每秒在走」。
+            controller.stopDisplayTicking()
+        }
     }
 
     /// 前台定时器与后台守护进程**二选一**。

@@ -157,7 +157,14 @@ struct BandPanels: View {
         //
         // 需要这一句是因为 `.onChange(of: service.bandInfo)` 只在**值真的变了**时才触发，
         // 而分段切回来时数据是缓存的、值没变 —— 少了它，第二次进来所有勾都是空的。
-        .onAppear { syncSelectionFromModem() }
+        .onAppear {
+            syncSelectionFromModem()
+            // 「当前网络」这一组是实时量，进页面就开始每秒刷新（见 `startSlotPolling`）。
+            service.startSlotPolling()
+        }
+        // 离开就停表：切分段、切分页都会走到这里。定时器挂在 `.default` 模式上，
+        // 滚动期间本来就会让路，这一句管的是「人已经不在这页了」那种情况。
+        .onDisappear { service.stopSlotPolling() }
         // 右上角只有齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 这一层
         // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
         // `.toolbar` 排在导航栏右侧，现在这四个动作全部搬到页面顶部（见 `actionRow`）。

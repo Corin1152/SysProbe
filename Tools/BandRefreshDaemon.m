@@ -294,6 +294,20 @@ int main(int argc, const char *argv[]) {
 
         NSTimeInterval interval = 2;
 
+        // 睡眠粒度固定 1 秒，采样间隔由计数器决定。
+        //
+        // ── 为什么 sleep 与采样间隔要分开（2026-10-14）────────────────────────
+        //
+        // 以前 `sleep(interval)` 一睡到底，而 `interval` 是用户设的采样间隔
+        // （1–30 秒，真机上常见 10 秒）。副作用是**状态文件与心跳也是 10 秒才写
+        // 一次** —— 于是界面上那条倒计时（`armed` / `cooling` 的剩余秒数）10 秒
+        // 才动一下，用户盯着看以为它卡死了。
+        //
+        // 拆开之后：**每秒醒一次**，写状态、刷心跳、更新倒计时；只有到采样点才
+        // 做那一次 XPC 读数。用户可调的「采样间隔」管的是"多久读一次 RSRP"，
+        // 与"界面多久刷新一次"从此无关。
+        NSTimeInterval nextSampleAt = [[NSDate date] timeIntervalSince1970];
+
         for (;;) {
             @autoreleasepool {
                 BandRefreshConfig c = readConfig();
@@ -305,10 +319,27 @@ int main(int argc, const char *argv[]) {
                     return 0;
                 }
 
-                NSDictionary *sig = sysprobe_signal_sync(c.slot);
-                id rsrpObj = [sig isKindOfClass:[NSDictionary class]] ? sig[@"rsrp"] : nil;
-                int rsrp = [rsrpObj respondsToSelector:@selector(intValue)] ? [rsrpObj intValue] : 0;
-                gLastRsrp = (rsrp < 0) ? @(rsrp) : nil;
+                NSTimeInterval nowEpoch = [[NSDate date] timeIntervalSince1970];
+                BOOL dueToSample = nowEpoch >= nextSampleAt;
+                if (dueToSample) {
+                    nextSampleAt = nowEpoch + c.sampleIntervalSec;
+                }
+
+                // 欠采样点的那几轮**不做 XPC 读数**：读数是每轮唯一有成本的动作
+                // （毫秒级，但它是同步 XPC）。那几轮只做一件事 —— 把状态写一遍，
+                // 让心跳与倒计时按秒走。`gLastRsrp` 沿用上一次的值。
+                int rsrp = 0;
+                BOOL rsrpValid = NO;
+                if (dueToSample) {
+                    NSDictionary *sig = sysprobe_signal_sync(c.slot);
+                    id rsrpObj = [sig isKindOfClass:[NSDictionary class]] ? sig[@"rsrp"] : nil;
+                    rsrp = [rsrpObj respondsToSelector:@selector(intValue)] ? [rsrpObj intValue] : 0;
+                    rsrpValid = (rsrp < 0);
+                    gLastRsrp = rsrpValid ? @(rsrp) : nil;
+                } else {
+                    rsrp = gLastRsrp != nil ? [gLastRsrp intValue] : 0;
+                    rsrpValid = (rsrp < 0);
+                }
 
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
 
@@ -332,21 +363,22 @@ int main(int argc, const char *argv[]) {
                 if (pausedForWiFi) {
                     gArmedSince = 0;
                     writeState(@"paused", 0, interval);
-                    sleep((unsigned int)interval);
                     continue;
                 }
 
                 // 读不到就跳过这一拍，但**状态照写** —— 心跳是 App 判活的唯一依据，
                 // 少了它 App 会以为进程死了并再拉一个。
-                if (rsrp >= 0) {
+                //
+                // 判据用 `rsrpValid` 而不是直接看 `rsrp >= 0`：非采样轮的值是**沿用
+                // 上一次**的，语义上「这一轮没读、但知道上次读到了什么」。两者表达的是
+                // 同一件事（有没有一个有效读数），用同一个标志更直白。
+                if (!rsrpValid) {
                     writeState(@"idle", 0, interval);
-                    sleep((unsigned int)interval);
                     continue;
                 }
 
                 if (gCooldownUntil > 0 && now < gCooldownUntil) {
                     writeState(@"cooling", gCooldownUntil - now, interval);
-                    sleep((unsigned int)interval);
                     continue;
                 }
                 gCooldownUntil = 0;
@@ -354,7 +386,6 @@ int main(int argc, const char *argv[]) {
                 if (!matches(rsrp, c)) {
                     gArmedSince = 0;
                     writeState(@"idle", 0, interval);
-                    sleep((unsigned int)interval);
                     continue;
                 }
 
@@ -363,7 +394,6 @@ int main(int argc, const char *argv[]) {
 
                 if (elapsed < c.dwellSec) {
                     writeState(@"armed", c.dwellSec - elapsed, interval);
-                    sleep((unsigned int)interval);
                     continue;
                 }
 
@@ -385,7 +415,9 @@ int main(int argc, const char *argv[]) {
                 writeState(@"cooling", c.cooldownSec, interval);
             }
 
-            sleep((unsigned int)interval);
+            // 固定睡 1 秒 —— 状态、心跳与倒计时都是这个节奏。采样间隔由循环内的
+            // `nextSampleAt` 计数器决定，不在这里。见上面那段说明。
+            sleep(1);
         }
     }
 }

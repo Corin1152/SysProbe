@@ -322,11 +322,11 @@ struct CleanPanels: View {
         return bytesLabel(cleanableBytes(scan))
     }
 
-    /// 工具状态一行 + 页脚说明。扫完之前显示工具状态，扫完之后并进页脚。
+    /// 页脚说明。**没有工具状态那一行**（2026-10-14 去掉）——
+    /// 「Root tool 能不能用」在关于页已经有一行，同一处信息在两页各写一遍，
+    /// 这边多出来的只有「这一页也会坏」的暗示。
     private var toolRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
-                .font(AppFont.text(13))
             Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
                 .font(AppFont.text(11))
                 .foregroundStyle(Color.mwMuted)
@@ -346,10 +346,10 @@ struct CleanPanels: View {
         )
     }
 
-    /// 扫完之后的页脚：释放量 + 工具状态 + 两条说明。
+    /// 扫完之后的页脚：释放量 + 两条说明。
     ///
-    /// 不接 `scan` 参数 —— 它要的东西（`lastFreed` / `toolReady`）都在 `self` 上，
-    /// 传进来反而让读者以为用了扫描结果。
+    /// 不接 `scan` 参数 —— 它要的东西（`lastFreed`）都在 `self` 上，传进来反而让
+    /// 读者以为用了扫描结果。
     private func footerNotes() -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let freed = lastFreed, freed > 0 {
@@ -357,8 +357,6 @@ struct CleanPanels: View {
                     .font(AppFont.text(13, weight: .semibold))
                     .foregroundStyle(Color.mwAccent)
             }
-            LabeledContent("Root tool", value: DeviceActions.toolSummary(ready: toolReady))
-                .font(AppFont.text(12))
             Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
                 .font(AppFont.text(11))
                 .foregroundStyle(Color.mwMuted)
