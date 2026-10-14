@@ -175,9 +175,18 @@ struct MonitorLifecycle: View {
 /// 顶部 —— 那是用户看得见的行为变化。记住上一次的高度、用等高占位顶住，切回来时
 /// 布局与滚动位置都不动。
 ///
-/// 高度只在**可见期间**记录（`onAppear` 记首次、`onChange` 跟变化）—— 切走之后
-/// 内容不再求值，那时没有更好的时机。它是近似值，而它只影响「切走期间占位多高」，
-/// 不影响切回来之后的内容。
+/// 高度只在**可见期间**记录一次（`onAppear`）：切走之后内容不再求值，那时没有更好
+/// 的时机。它是近似值，而它只影响「切走期间占位多高」，不影响切回来之后的内容。
+///
+/// ── 为什么不用 `onChange` 跟着高度变 ──────────────────────────────────────────
+///
+/// 0.0.61 第一版是跟着写的， motivo 是「占位高度更准」。但它把一次 `@State` 写入
+/// 放在了分段切换的路径上：分段一切换内容高度就变 → 写 `height` → `DeferredContent`
+/// 连同整个外壳重算一次。那正是用户报的「滑块闪一下就弹回」的诱因之一 —— 点击之后
+/// 紧跟着一次计划外的重算。
+///
+/// 高度准一点只是切走期间那几秒的事（用户根本看不见），而它换来的是切换路径上一处
+/// 稳定的竞争源。所以只记一次，宁近似。
 struct DeferredContent<Content: View>: View {
 
     /// 这一页现在在不在屏幕上。
@@ -188,20 +197,26 @@ struct DeferredContent<Content: View>: View {
     @State private var height: CGFloat = 0
 
     var body: some View {
-        if isVisible {
-            content()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear
-                            .onAppear { height = proxy.size.height }
-                            // 只在高度真的变了才写：读数每秒在变，但高度几秒都不动一下，
-                            // 所以这一句平时一次都不触发。
-                            .onChange(of: proxy.size.height) { newValue in height = newValue }
-                    }
-                )
-        } else {
-            Color.clear.frame(height: height)
+        Group {
+            if isVisible {
+                content()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.onAppear { height = proxy.size.height }
+                        }
+                    )
+            } else {
+                Color.clear.frame(height: height)
+            }
         }
+        // 切回来时淡入，而不是「啪」地跳出来。
+        //
+        // 这一步是 0.0.61 引入「不可见就停止求值」之后补的代价：切回分页时内容要
+        // 整页重建，重建落在一帧里就是一次跳变（用户报过的「页面切换动画生硬」）。
+        // 120ms 的淡入把它摊开：既好看，也让那一次重建不再与 TabView 的切换帧
+        // 抢时间 —— 而且它是**淡入**，不需要先有一帧完整的新内容。
+        .transition(.opacity)
+        .animation(.easeOut(duration: 0.12), value: isVisible)
     }
 }
 

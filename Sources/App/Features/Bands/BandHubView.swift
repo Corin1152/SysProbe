@@ -54,13 +54,9 @@ struct BandHubView: View {
             isActive: isActive,
             openSettings: openSettings,
             header: {
-                Picker("Bands", selection: $page) {
-                    ForEach(BandSegment.allCases) { segment in
-                        Text(segment.title).tag(segment)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // 自绘分段控件 —— 命中高度显式给定，切换不经过第二步同步。
+                // 理由见 `SegmentedTabs` 类型头。
+                SegmentedTabs(items: BandSegment.allCases, selection: $page, title: { $0.title })
             },
             content: {
                 // `.id(page)`：给内容一个显式 identity，分段一切换就丢弃旧子树、

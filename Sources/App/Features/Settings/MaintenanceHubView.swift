@@ -36,13 +36,9 @@ struct MaintenanceHubView: View {
             isActive: isActive,
             openSettings: openSettings,
             header: {
-                Picker("Maintenance", selection: $page) {
-                    ForEach(MaintenanceSegment.allCases) { segment in
-                        segmentLabel(segment).tag(segment)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // 自绘分段控件 —— 命中高度显式给定，切换不经过第二步同步。
+                // 理由见 `SegmentedTabs` 类型头。
+                SegmentedTabs(items: MaintenanceSegment.allCases, selection: $page, title: { $0.title })
             },
             content: {
                 // `.id(page)`：给内容一个显式 identity，分段一切换就丢弃旧子树、
@@ -58,21 +54,6 @@ struct MaintenanceHubView: View {
                 .id(page)
             }
         )
-    }
-
-    /// 分段标签。「频段」那一项多带一个盾牌图标 —— 它和「清理」只隔一次点击，
-    /// 而它是唯一能把手机写进无服务状态的一页，值得在标签上就有个记号。
-    ///
-    /// 用 `Label` 而不是在文字里塞符号：`Label` 在分段控件里**可能只渲染文字**
-    /// （iOS 对分段项图标的支持并不稳定），退化了就是纯文字，不会出问题；
-    /// 而在文字里塞「⚠︎」是写死的，改不掉，还会跟着导航栏标题一起走。
-    @ViewBuilder
-    private func segmentLabel(_ segment: MaintenanceSegment) -> some View {
-        if let icon = segment.icon {
-            Label(segment.title, systemImage: icon)
-        } else {
-            Text(segment.title)
-        }
     }
 }
 
@@ -90,17 +71,6 @@ enum MaintenanceSegment: Int, CaseIterable, Identifiable {
         switch self {
         case .maintenance: return "Maintenance"
         case .clean: return "Clean"
-        }
-    }
-
-    /// 分段标签上的图标。现在两个都没有 —— 带记号的那一个是「频段」，
-    /// 它已经搬到自己的分页上去了。
-    ///
-    /// 这个字段留着是因为 `segmentLabel` 的写法：用 `Label` 而不是把符号塞进文字里
-    /// （`Label` 在分段控件里可能只渲染文字，退化了就是纯文字，不会出问题）。
-    var icon: String? {
-        switch self {
-        case .maintenance, .clean: return nil
         }
     }
 }

@@ -46,13 +46,10 @@ struct PowerHubView: View {
             isActive: isActive,
             openSettings: openSettings,
             header: {
-                Picker("Power", selection: $page) {
-                    ForEach(PowerSegment.allCases) { segment in
-                        Text(segment.title).tag(segment)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // 自绘分段控件（2026-10-14 换掉系统 `Picker`）—— 命中高度显式给定，
+                // 切换是「命中哪格写哪个值」，不再经过 SwiftUI ↔ UIKit 的第二步同步。
+                // 理由见 `SegmentedTabs` 类型头。
+                SegmentedTabs(items: PowerSegment.allCases, selection: $page, title: { $0.title })
             },
             content: {
                 // `.id(page)`：给内容一个显式 identity —— 分段一切换，SwiftUI 就
