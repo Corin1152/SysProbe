@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// 桥接层是所有卡槽共用的一条队列。
@@ -148,7 +149,7 @@ final class BandService: ObservableObject {
     /// 「当前网络」那一组的每秒刷新定时器（`sysprobe_slot_info`）。
     ///
     /// **只有页面停留在频段锁定分段时才跑。** 方法见 `startSlotPolling` 上的说明。
-    private var slotPoller: Timer?
+    private var slotPoller: AnyCancellable?
 
     // MARK: - 「当前网络」每秒刷新
 
@@ -189,9 +190,11 @@ final class BandService: ObservableObject {
 
     /// 一次刷新：后台读，回主 actor 发布。读不到就保持上一次的值不变。
     private func pollSlotInfo() {
+        // `slot` 是主 actor 隔离的属性，而本类是 `@MainActor` 的 —— 进 detached 之前
+        // 先在本层把它取出来。`slotInfo` 的比较也要在主 actor 上做（它同样是隔离的）。
+        let slot = self.slot
         Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            let info = BandService.readInfoSync(slot: self.slot)
+            let info = BandService.readInfoSync(slot: slot)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard info != self.slotInfo else { return }

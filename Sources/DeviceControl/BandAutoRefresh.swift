@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// 「信号弱到某个程度就自动刷新蜂窝信号」的配置。

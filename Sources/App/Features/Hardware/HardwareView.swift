@@ -98,18 +98,18 @@ struct HardwareView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Metric(caption: "Model",
                        value: snap.system.modelIdentifier,
-                       size: Self.valueSize)
+                       size: HardwareView.valueSize)
                 HStack(spacing: 14) {
-                    Metric(caption: "System", value: snap.system.systemVersion, size: Self.valueSize)
-                    Metric(caption: "Kernel", value: snap.system.kernelVersion, size: Self.valueSize)
+                    Metric(caption: "System", value: snap.system.systemVersion, size: HardwareView.valueSize)
+                    Metric(caption: "Kernel", value: snap.system.kernelVersion, size: HardwareView.valueSize)
                 }
                 HStack(spacing: 14) {
                     Metric(caption: "Uptime",
                            value: Formatting.duration(snap.system.uptime),
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                     Metric(caption: "Physical memory",
                            value: Formatting.bytes(snap.system.physicalMemory),
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                 }
             }
         }
@@ -142,14 +142,14 @@ struct HardwareView: View {
                            value: Formatting.number(snapshot.cpu.usage * 100),
                            unit: "%",
                            tint: .mwPower(snapshot.cpu.usage * 100),
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                     Metric(caption: "Physical cores",
                            value: "\(snapshot.cpu.physicalCores)",
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                     Metric(caption: "Frequency",
                            value: snapshot.cpu.frequencyMHz > 0 ? "\(snapshot.cpu.frequencyMHz)" : "—",
                            unit: snapshot.cpu.frequencyMHz > 0 ? "MHz" : nil,
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                 }
 
                 if !snapshot.cpu.perCore.isEmpty {
@@ -190,18 +190,18 @@ struct HardwareView: View {
                     Metric(caption: "Used",
                            value: Formatting.bytes(snapshot.memory.used),
                            tint: .mwAccent,
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                     Metric(caption: "Available",
                            value: Formatting.bytes(snapshot.memory.available),
                            tint: .mwBattery,
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                     // 与 CPU-X 的 `Mem Free` 同一个口径（纯 `free_count`），
                     // 拿它去跟 CPU-X 对才对得上；「Available」比它多算了
                     // purgeable + speculative，所以天生更大。见 `MemoryStats`。
                     Metric(caption: "Free",
                            value: Formatting.bytes(snapshot.memory.free),
                            tint: .mwMuted,
-                           size: Self.valueSize)
+                           size: HardwareView.valueSize)
                 }
 
                 BarRow(title: Text("Memory usage"),
@@ -210,9 +210,9 @@ struct HardwareView: View {
                        tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwAccent)
 
                 HStack(spacing: 14) {
-                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: Self.valueSize)
-                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: Self.valueSize)
-                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: Self.valueSize)
+                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: HardwareView.valueSize)
+                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: HardwareView.valueSize)
+                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: HardwareView.valueSize)
                 }
 
                 Divider().overlay(Color.mwCardStroke)
@@ -235,8 +235,8 @@ struct HardwareView: View {
         var content: some View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
-                    Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: Self.valueSize)
-                    Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: Self.valueSize)
+                    Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: HardwareView.valueSize)
+                    Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: HardwareView.valueSize)
                 }
                 BarRow(title: Text("Capacity"),
                        detail: Formatting.percent(snapshot.storage.usage * 100),
