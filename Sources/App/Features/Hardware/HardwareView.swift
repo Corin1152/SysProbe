@@ -1,5 +1,35 @@
 import SwiftUI
 
+/// 一张卡片 = 标题 + 内容。标题由 `HardwareCard` 统一渲染。
+///
+/// 存在的唯一理由是**让每张卡片只观察自己需要的量** —— SwiftUI 的
+/// `@EnvironmentObject` 粒度是整个对象，`HardwareMonitor` 每秒发一次通知，
+/// 观察它的视图就得跟着重算。四张卡片分开观察之后，设备 / 存储那两张
+/// 几乎不变，CPU 那一张每秒动，互不影响。
+private protocol HardwareCard: View {
+    associatedtype Body: View
+    /// 卡片内容（标题行之外的部分）。
+    @ViewBuilder var content: Self.Body { get }
+}
+
+extension HardwareCard {
+    /// 卡片的公共外壳：标题行 + 内容。
+    ///
+    /// `trailing` 默认空 —— 只有 CPU（核心数）与内存（总容量）两张卡有右上角
+    /// 读数，另两张没有。用 `EmptyView` 而不是让整个协议泛型化：那会让每个
+    /// 卡片类型多一个泛型参数，而这里只是「有个可选的」。
+    var body: some View {
+        Panel(title, systemImage: icon, trailing: trailing) {
+            content
+        }
+    }
+
+    var title: LocalizedStringKey { "Device" }
+    var icon: String { "iphone" }
+    var trailing: Text? { nil }
+}
+
+
 /// 第一屏：设备硬件信息。
 ///
 /// **这个视图本身不观察任何采样对象。** 四张卡片各自观察 `HardwareMonitor` 里自己
@@ -52,35 +82,6 @@ struct HardwareView: View {
     // 注意：这里开始到 `StorageCard` 结束为止都**仍然在 `HardwareView` 内部** ——
     // 它们是嵌套类型，不是文件顶层类型。`HardwareView` 的闭合括号在 StorageCard
     // 之后；`OptimizeSection` 则刻意留在 `HardwareView` 外面（同文件顶层私有类型）。
-
-    /// 一张卡片 = 标题 + 内容。标题由 `HardwareCard` 统一渲染。
-    ///
-    /// 存在的唯一理由是**让每张卡片只观察自己需要的量** —— SwiftUI 的
-    /// `@EnvironmentObject` 粒度是整个对象，`HardwareMonitor` 每秒发一次通知，
-    /// 观察它的视图就得跟着重算。四张卡片分开观察之后，设备 / 存储那两张
-    /// 几乎不变，CPU 那一张每秒动，互不影响。
-    private protocol HardwareCard: View {
-        associatedtype Body: View
-        /// 卡片内容（标题行之外的部分）。
-        @ViewBuilder var content: Self.Body { get }
-    }
-
-    extension HardwareCard {
-        /// 卡片的公共外壳：标题行 + 内容。
-        ///
-        /// `trailing` 默认空 —— 只有 CPU（核心数）与内存（总容量）两张卡有右上角
-        /// 读数，另两张没有。用 `EmptyView` 而不是让整个协议泛型化：那会让每个
-        /// 卡片类型多一个泛型参数，而这里只是「有个可选的」。
-        var body: some View {
-            Panel(title, systemImage: icon, trailing: trailing) {
-                content
-            }
-        }
-
-        var title: LocalizedStringKey { "Device" }
-        var icon: String { "iphone" }
-        var trailing: Text? { nil }
-    }
 
     /// 设备卡片：机型 / 系统 / 内核 / 运行时长 / 物理内存。
     ///
