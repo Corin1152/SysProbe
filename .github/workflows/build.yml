@@ -17,7 +17,14 @@ permissions:
 jobs:
   ipa:
     name: Unsigned ipa
-    runs-on: macos-latest
+    # 显式写 macos-15 而不是 macos-latest（2026-10-14）。
+    #
+    # macos-latest 现在指向最新的 macos-26 镜像，那个池子小：同一份配置在 13:17
+    # 只排了 7 秒就拿到 runner，到 15:00 之后同一标签排了 25 分钟仍未被分配、
+    # 最终被 GitHub 侧取消（job 的 runner_name 为空 = 从来没分到机器）。
+    # macos-15 是长期 GA 的镜像，池子大得多，而且同样带 Xcode 26（本仓库要
+    # Swift 6.2，见下面 `Check toolchain` 一步）。
+    runs-on: macos-15
     permissions:
       contents: write
 
