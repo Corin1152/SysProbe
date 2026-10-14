@@ -1,35 +1,5 @@
 import SwiftUI
 
-/// 一张卡片 = 标题 + 内容。标题由 `HardwareCard` 统一渲染。
-///
-/// 存在的唯一理由是**让每张卡片只观察自己需要的量** —— SwiftUI 的
-/// `@EnvironmentObject` 粒度是整个对象，`HardwareMonitor` 每秒发一次通知，
-/// 观察它的视图就得跟着重算。四张卡片分开观察之后，设备 / 存储那两张
-/// 几乎不变，CPU 那一张每秒动，互不影响。
-private protocol HardwareCard: View {
-    associatedtype Body: View
-    /// 卡片内容（标题行之外的部分）。
-    @ViewBuilder var content: Self.Body { get }
-}
-
-extension HardwareCard {
-    /// 卡片的公共外壳：标题行 + 内容。
-    ///
-    /// `trailing` 默认空 —— 只有 CPU（核心数）与内存（总容量）两张卡有右上角
-    /// 读数，另两张没有。用 `EmptyView` 而不是让整个协议泛型化：那会让每个
-    /// 卡片类型多一个泛型参数，而这里只是「有个可选的」。
-    var body: some View {
-        Panel(title, systemImage: icon, trailing: trailing) {
-            content
-        }
-    }
-
-    var title: LocalizedStringKey { "Device" }
-    var icon: String { "iphone" }
-    var trailing: Text? { nil }
-}
-
-
 /// 第一屏：设备硬件信息。
 ///
 /// **这个视图本身不观察任何采样对象。** 四张卡片各自观察 `HardwareMonitor` 里自己
@@ -86,30 +56,30 @@ struct HardwareView: View {
     /// 设备卡片：机型 / 系统 / 内核 / 运行时长 / 物理内存。
     ///
     /// 这一组里**只有「运行时长」是每秒变的**，其余四项出厂就定死。
-    private struct DeviceCard: HardwareCard {
+    private struct DeviceCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
-        var title: LocalizedStringKey { "Device" }
-        var icon: String { "iphone" }
 
         // 整个 content 只用一次 `hardware.snapshot`：EnvironmentObject 的
         // wrappedValue 每解一次都要走一遍环境查找，散着写会重复付这个钱。
-        var content: some View {
+        var body: some View {
             let snap = hardware.snapshot
-            VStack(alignment: .leading, spacing: 12) {
-                Metric(caption: "Model",
-                       value: snap.system.modelIdentifier,
-                       size: HardwareView.valueSize)
-                HStack(spacing: 14) {
-                    Metric(caption: "System", value: snap.system.systemVersion, size: HardwareView.valueSize)
-                    Metric(caption: "Kernel", value: snap.system.kernelVersion, size: HardwareView.valueSize)
-                }
-                HStack(spacing: 14) {
-                    Metric(caption: "Uptime",
-                           value: Formatting.duration(snap.system.uptime),
+            Panel("Device", systemImage: "iphone") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Metric(caption: "Model",
+                           value: snap.system.modelIdentifier,
                            size: HardwareView.valueSize)
-                    Metric(caption: "Physical memory",
-                           value: Formatting.bytes(snap.system.physicalMemory),
-                           size: HardwareView.valueSize)
+                    HStack(spacing: 14) {
+                        Metric(caption: "System", value: snap.system.systemVersion, size: HardwareView.valueSize)
+                        Metric(caption: "Kernel", value: snap.system.kernelVersion, size: HardwareView.valueSize)
+                    }
+                    HStack(spacing: 14) {
+                        Metric(caption: "Uptime",
+                               value: Formatting.duration(snap.system.uptime),
+                               size: HardwareView.valueSize)
+                        Metric(caption: "Physical memory",
+                               value: Formatting.bytes(snap.system.physicalMemory),
+                               size: HardwareView.valueSize)
+                    }
                 }
             }
         }
@@ -118,10 +88,8 @@ struct HardwareView: View {
     /// CPU 卡片：占用、物理核数、当前频率、每核占用条。
     ///
     /// **这是最贵的一张**：8 条每核占用条加一条频率读数，全都每秒变。
-    private struct CPUCard: HardwareCard {
+    private struct CPUCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
-        var title: LocalizedStringKey { "CPU" }
-        var icon: String { "cpu" }
 
         private var snapshot: HardwareSnapshot { hardware.snapshot }
 
@@ -130,9 +98,10 @@ struct HardwareView: View {
             Text("\(snapshot.cpu.logicalCores) cores")
         }
 
-        var content: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(verbatim: snapshot.cpu.model)
+        var body: some View {
+            Panel("CPU", systemImage: "cpu", trailing: trailing) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(verbatim: snapshot.cpu.model)
                     .font(AppFont.text(13, weight: .medium))
                     .foregroundStyle(Color.mwMuted)
                     .lineLimit(2)
@@ -170,24 +139,24 @@ struct HardwareView: View {
                     }
                 }
             }
+            }
         }
     }
 
     /// 内存卡片。优化按钮也在这里（它在内存面板里，见 0.0.59 起的布局）。
-    private struct MemoryCard: HardwareCard {
+    private struct MemoryCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
-        var title: LocalizedStringKey { "Memory" }
-        var icon: String { "memorychip" }
 
         private var snapshot: HardwareSnapshot { hardware.snapshot }
         var trailing: Text? {
             Text(verbatim: Formatting.bytes(snapshot.memory.total))
         }
 
-        var content: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 14) {
-                    Metric(caption: "Used",
+        var body: some View {
+            Panel("Memory", systemImage: "memorychip", trailing: trailing) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 14) {
+                        Metric(caption: "Used",
                            value: Formatting.bytes(snapshot.memory.used),
                            tint: .mwAccent,
                            size: HardwareView.valueSize)
@@ -218,30 +187,31 @@ struct HardwareView: View {
                 Divider().overlay(Color.mwCardStroke)
                 OptimizeSection { hardware.refresh() }
             }
+            }
         }
     }
 
     /// 存储卡片。
-    private struct StorageCard: HardwareCard {
+    private struct StorageCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
-        var title: LocalizedStringKey { "Storage" }
-        var icon: String { "internaldrive" }
 
         private var snapshot: HardwareSnapshot { hardware.snapshot }
         var trailing: Text? {
             Text(verbatim: Formatting.bytes(snapshot.storage.total))
         }
 
-        var content: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 14) {
-                    Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: HardwareView.valueSize)
+        var body: some View {
+            Panel("Storage", systemImage: "internaldrive", trailing: trailing) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 14) {
+                        Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: HardwareView.valueSize)
                     Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: HardwareView.valueSize)
                 }
                 BarRow(title: Text("Capacity"),
                        detail: Formatting.percent(snapshot.storage.usage * 100),
                        fraction: snapshot.storage.usage,
                        tint: .mwLoss)
+            }
             }
         }
     }
