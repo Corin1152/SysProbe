@@ -42,7 +42,6 @@
 "Free" = "Free";
 "Capacity" = "Capacity";
 "Network" = "Network";
-"Wi-Fi" = "Wi-Fi";
 "Cellular" = "Cellular";
 "IPv4 address" = "IPv4 address";
 "Download" = "Download";
@@ -119,7 +118,6 @@
 "Camera" = "Camera";
 "Chassis" = "Chassis";
 "Other sensors" = "Other sensors";
-"Not connected" = "Not connected";
 "Plug in a charger to read its handshake. USB-PD adapters advertise a menu of voltage/current profiles; the phone picks one and this page shows which, alongside what is actually flowing." = "Plug in a charger to read its handshake. USB-PD adapters advertise a menu of voltage/current profiles; the phone picks one and this page shows which, alongside what is actually flowing.";
 "Draw vs rating" = "Draw vs rating";
 "of" = "of";
@@ -406,3 +404,15 @@
 "Sustained for" = "Sustained for";
 "Cooldown" = "Cooldown";
 "Sample every" = "Sample every";
+
+/* Front switch: pause auto refresh while on Wi-Fi (2026-10-14) */
+"Pause on Wi-Fi" = "Pause on Wi-Fi";
+"Paused" = "Paused";
+"Paused · Wi-Fi connected" = "Paused · Wi-Fi connected";
+"Wi-Fi" = "Wi-Fi";
+"Connected" = "Connected";
+"Not connected" = "Not connected";
+"paused while Wi-Fi is connected" = "paused while Wi-Fi is connected";
+"paused · Wi-Fi connected" = "paused · Wi-Fi connected";
+"resumed · Wi-Fi disconnected" = "resumed · Wi-Fi disconnected";
+"While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well." = "While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well.";

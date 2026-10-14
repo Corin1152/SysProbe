@@ -47,9 +47,15 @@
 #import "CommCenterBridge.h"
 
 #import <CoreFoundation/CoreFoundation.h>
+#import <arpa/inet.h>
 #import <dlfcn.h>
+#import <ifaddrs.h>
+#import <net/if.h>
+#import <netinet/in.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <string.h>
+#import <sys/socket.h>
 
 static SysProbeBandStatus gStatus = SysProbeBandStatusUnknown;
 
@@ -748,4 +754,53 @@ BOOL sysprobe_refresh_modem(void)
 SysProbeBandStatus sysprobe_band_status(void)
 {
     return gStatus;
+}
+
+#pragma mark - Wi-Fi 判据
+
+/// Wi-Fi 接口名。
+///
+/// iOS 上只有一个 `en0`。蜂窝是 `pdp_ip0`，虚拟隧道是 `utun*`，AirDrop 的 `awdl0`
+/// 也不能算 —— 而它们的地址同样是「up 且有地址」，所以必须按名字筛，不能只看有没有地址。
+/// （`NetworkKind` 那边用的是同一条规则，见 `Sources/Shared/Hardware/HardwareMonitor.swift`。）
+static const char *const kWiFiInterfaceName = "en0";
+
+BOOL sysprobe_wifi_connected(void)
+{
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0) {
+        return NO;
+    }
+
+    BOOL connected = NO;
+    for (struct ifaddrs *ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) { continue; }
+        if ((ifa->ifa_flags & IFF_UP) == 0) { continue; }
+        if (strcmp(ifa->ifa_name, kWiFiInterfaceName) != 0) { continue; }
+
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            const struct sockaddr_in *v4 = (const struct sockaddr_in *)ifa->ifa_addr;
+            uint32_t address = ntohl(v4->sin_addr.s_addr);
+            // 169.254.0.0/16 是 APIPA：连上了 AP 但没拿到 DHCP 租约。那种状态下
+            // 「连着 Wi-Fi」只是名义上的，蜂窝仍然是唯一出路 —— 与系统自己那句
+            // 「Wi-Fi 无互联网连接」同向，所以这里不算连接。
+            if (address != 0 && (address & 0xFFFF0000u) != 0xA9FE0000u) {
+                connected = YES;
+                break;
+            }
+        } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+            const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)ifa->ifa_addr;
+            // 链路本地（fe80::/10）必须排除：**Wi-Fi 开着但没连上任何 AP 时，
+            // `en0` 上恰好就只剩这一条地址** —— 少了这一句，判据会恒为真，
+            // 于是「连着 Wi-Fi 就暂停」这个开关会把自动刷新永久停掉。
+            if (!IN6_IS_ADDR_LINKLOCAL(&v6->sin6_addr) &&
+                !IN6_IS_ADDR_LOOPBACK(&v6->sin6_addr)) {
+                connected = YES;
+                break;
+            }
+        }
+    }
+
+    freeifaddrs(interfaces);
+    return connected;
 }

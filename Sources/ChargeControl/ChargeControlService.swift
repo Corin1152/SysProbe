@@ -106,11 +106,11 @@ final class ChargeControlService: ObservableObject {
     /// 已经有人在听就 `exit(0)`。所以就算这里和它自己的启动抢上了，也只会多一个
     /// 立刻退出的进程，不会有两个服务。
     private func ensureDaemon() {
-        if sysprobe_local_port_open(Int32(DaemonBridge.port)) != 0 {
-            daemonRunning = true
-            return
-        }
-        daemonRunning = false
+        let running = sysprobe_local_port_open(Int32(DaemonBridge.port)) != 0
+        // 只在真的变了才发布：这是一个 `@Published`，而它每 10 秒被赋一次值，
+        // 状态却几乎永远不变 —— 无条件赋值等于每 10 秒让观察它的那一页白重算一次。
+        if daemonRunning != running { daemonRunning = running }
+        guard !running else { return }
 
         guard let path = daemonPath else { return }
         // 返回 0 只说明进程起来了，端口还没绑上（要几百毫秒）。这里**不**改
@@ -123,12 +123,14 @@ final class ChargeControlService: ObservableObject {
 
     private func pollConfig() async {
         guard let fresh = await ChargeBridge.config() else {
-            daemonRunning = false
+            if daemonRunning { daemonRunning = false }
             return
         }
-        config = fresh
-        loaded = true
-        daemonRunning = true
+        // 配置只可能被「快捷指令」这类外部途径改，绝大多数轮次读回来与上一轮一字不差 ——
+        // 同样只在这一项真的变了才发布（`ChargeConfig` 是 `Equatable`）。
+        if config != fresh { config = fresh }
+        if !loaded { loaded = true }
+        if !daemonRunning { daemonRunning = true }
         await reconcileTemperatureControl()
     }
 
@@ -153,11 +155,20 @@ final class ChargeControlService: ObservableObject {
         defer { inFlight = false }
 
         guard let fresh = await BatteryBridge.batteryInfo() else {
-            daemonRunning = false
+            if daemonRunning { daemonRunning = false }
             return
         }
+        // ── 正在滚动就让路 ──
+        //
+        // 这个请求是异步回来的，**不受 run loop 模式约束**：定时器已经因为 `.default`
+        // 在滚动期间让路了，但这一贴照样能落进滚动的某几帧里，而它会让「充电控制」
+        // 那一页整个重算一遍。详见 `MainThreadPacing`。
+        //
+        // 这里只丢「贴回界面」这一步，不丢读取本身 —— 读数本身就是每秒一份，
+        // 下一秒的会覆盖它。
+        guard !MainThreadPacing.isScrolling else { return }
         battery = fresh
-        daemonRunning = true
+        if !daemonRunning { daemonRunning = true }
     }
 
     // MARK: 写

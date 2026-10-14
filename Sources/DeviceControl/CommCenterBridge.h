@@ -111,4 +111,24 @@ int sysprobe_preferred_data_slot(void);
 /// 上一次读写的状态。
 SysProbeBandStatus sysprobe_band_status(void);
 
+/// 现在是不是连着一个能用的 Wi-Fi 网络。
+///
+/// 判据是 `getifaddrs` 里 **`en0`（iOS 上唯一的 Wi-Fi 接口）拿到了一个可用地址**：
+///
+///   · IPv4，且不是 `169.254.0.0/16`（APIPA —— 「连上了 AP 但没拿到 DHCP 租约」）；
+///   · 或 IPv6，且不是链路本地（`fe80::/10`）也不是回环。
+///
+/// 后一条不能少：Wi-Fi 开着但没连上任何 AP 时，`en0` 上正好只有一条链路本地地址。
+///
+/// 刻意**不用** `CNCopyCurrentNetworkInfo`（要定位权限）与 `SCNetworkReachability`
+/// （要链 SystemConfiguration）—— 这里只需要「有没有连上」，两个都不划算。
+///
+/// **为什么放在这个文件里**：它是唯一同时被主 App 与 `BandRefreshDaemon` 编进去的
+/// 实现文件（见 `scripts/build-ipa.sh` 里那条 clang 命令），而这条判据两边都要用、
+/// 且两边必须逐条一致 —— 抄两份迟早走偏（与 `matches` 同一条理由）。
+///
+/// 用途：自动刷新信号的「连着 Wi-Fi 时暂停」前置开关。连着 Wi-Fi 时蜂窝不是唯一
+/// 出路，这时重载 modem 只会白掉几秒网，还可能打断正在进行的 VoLTE 通话。
+BOOL sysprobe_wifi_connected(void);
+
 NS_ASSUME_NONNULL_END

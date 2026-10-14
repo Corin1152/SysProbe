@@ -406,3 +406,13 @@
 "Sustained for" = "持续低于";
 "Cooldown" = "冷却时间";
 "Sample every" = "采样间隔";
+
+/* 前置开关：连着 Wi-Fi 时暂停自动刷新（2026-10-14） */
+"Pause on Wi-Fi" = "连接 Wi-Fi 时暂停";
+"Paused" = "已暂停";
+"Paused · Wi-Fi connected" = "已暂停 · Wi-Fi 已连接";
+"Connected" = "已连接";
+"paused while Wi-Fi is connected" = "连接 Wi-Fi 时暂停";
+"paused · Wi-Fi connected" = "已暂停 · 已连接 Wi-Fi";
+"resumed · Wi-Fi disconnected" = "已恢复 · Wi-Fi 已断开";
+"While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well." = "手机连着 Wi-Fi 时，计时与刷新都会暂停；Wi-Fi 断开后自动恢复。后台模式下同样生效。";

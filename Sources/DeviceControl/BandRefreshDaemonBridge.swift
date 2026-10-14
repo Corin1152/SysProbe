@@ -48,6 +48,11 @@ final class BandRefreshDaemonBridge: ObservableObject {
         var remaining: Double = 0
         var lastRsrp: Int?
         var lastRefreshAt: Date?
+        /// 守护进程那一侧看到的 Wi-Fi 状态。
+        ///
+        /// 界面在**后台模式**下显示的就是它：那时 App 内那条定时器是停着的，
+        /// 自己不会去查 `sysprobe_wifi_connected()`。
+        var wifiConnected = false
         var log: [String] = []
 
         static let empty = State()
@@ -88,6 +93,9 @@ final class BandRefreshDaemonBridge: ObservableObject {
             "dwellSec": config.dwellSec,
             "cooldownSec": config.cooldownSec,
             "sampleIntervalSec": config.sampleIntervalSec,
+            // 前置开关也要下发：守护进程是独立进程，它读的是这份 plist，
+            // 少了这一项它那边就永远是默认值（YES），与界面上显示的相反。
+            "pauseOnWiFi": config.pauseOnWiFi,
         ]
         // 原子写：守护进程每一轮开头都读它，写一半的 plist 会让它读成 nil，
         // 于是它按「关闭」处理并退出 —— 表现是「开了后台，过一会儿自己停了」。
@@ -173,6 +181,7 @@ final class BandRefreshDaemonBridge: ObservableObject {
         s.phase = (raw["phase"] as? String) ?? "stopped"
         s.remaining = (raw["remaining"] as? NSNumber)?.doubleValue ?? 0
         s.lastRsrp = (raw["lastRsrp"] as? NSNumber)?.intValue
+        s.wifiConnected = (raw["wifi"] as? NSNumber)?.boolValue ?? false
         if let t = (raw["lastRefreshAt"] as? NSNumber)?.doubleValue, t > 0 {
             s.lastRefreshAt = Date(timeIntervalSince1970: t)
         }

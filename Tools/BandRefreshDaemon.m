@@ -109,6 +109,9 @@ typedef struct {
     NSTimeInterval dwellSec;
     NSTimeInterval cooldownSec;
     NSTimeInterval sampleIntervalSec;
+    /// 连着 Wi-Fi 时暂停。**默认 YES** —— 与 App 侧同一个默认值，
+    /// 见 `BandAutoRefreshConfig.pauseOnWiFi` 的说明。
+    BOOL pauseOnWiFi;
 } BandRefreshConfig;
 
 /// 读配置文件。**读不到或任何一项缺失就返回 enabled = NO** ——
@@ -125,6 +128,7 @@ static BandRefreshConfig readConfig(void) {
     c.dwellSec = 20;
     c.cooldownSec = 300;
     c.sampleIntervalSec = 2;
+    c.pauseOnWiFi = YES;
 
     NSDictionary *raw = [NSDictionary dictionaryWithContentsOfFile:kConfigPath];
     if (![raw isKindOfClass:[NSDictionary class]]) {
@@ -143,6 +147,7 @@ static BandRefreshConfig readConfig(void) {
     if ((v = raw[@"dwellSec"])) c.dwellSec = [v respondsToSelector:@selector(doubleValue)] ? [v doubleValue] : 20;
     if ((v = raw[@"cooldownSec"])) c.cooldownSec = [v respondsToSelector:@selector(doubleValue)] ? [v doubleValue] : 300;
     if ((v = raw[@"sampleIntervalSec"])) c.sampleIntervalSec = [v respondsToSelector:@selector(doubleValue)] ? [v doubleValue] : 2;
+    if ((v = raw[@"pauseOnWiFi"])) c.pauseOnWiFi = [v respondsToSelector:@selector(boolValue)] ? [v boolValue] : YES;
 
     // 采样间隔是本循环的周期，不能太小（忙等）也不能是 0。上下界与 App 侧一致。
     if (c.sampleIntervalSec < 0.5) { c.sampleIntervalSec = 0.5; }
@@ -176,6 +181,10 @@ static NSTimeInterval gArmedSince = 0;
 static NSTimeInterval gCooldownUntil = 0;
 static NSDate *gLastRefreshAt = nil;
 static NSMutableArray<NSString *> *gLog = nil;
+/// 最近一轮里 Wi-Fi 是不是连着。写进状态文件供 App 显示。
+static BOOL gWifiConnected = NO;
+/// 上一轮是不是处于「连 Wi-Fi 暂停」—— 只为了在**切换**那一刻写一条日志。
+static BOOL gPausedForWiFi = NO;
 
 static NSDateFormatter *timeFormatter(void) {
     static NSDateFormatter *f;
@@ -213,6 +222,10 @@ static void writeState(NSString *phase,
     s[@"heartbeatValidity"] = @(heartbeatValidity(interval));
     s[@"phase"] = phase ?: @"idle";
     s[@"remaining"] = @(remaining);
+    // Wi-Fi 状态由本进程判定（与 App 侧同一个 `sysprobe_wifi_connected()`）。
+    // 回传给 App 是为了「后台模式」下界面也能显示真实状态 —— 那时 App 内那条
+    // 定时器是停着的，它自己不会去查。
+    s[@"wifi"] = @(gWifiConnected);
     if (gLastRsrp != nil) { s[@"lastRsrp"] = gLastRsrp; }
     if (gLastRefreshAt != nil) {
         s[@"lastRefreshAt"] = @([gLastRefreshAt timeIntervalSince1970]);
@@ -298,6 +311,30 @@ int main(int argc, const char *argv[]) {
                 gLastRsrp = (rsrp < 0) ? @(rsrp) : nil;
 
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+
+                // ── 前置开关：连着 Wi-Fi 就暂停 ──
+                //
+                // 与 App 内那条路（`BandAutoRefreshController.tick`）逐条对齐：
+                // 位置在读数之后、冷却与阈值之前（暂停时状态要显示成 paused，
+                // 而不是一条更早的冷却倒计时），暂停时把已计的时长清零
+                // （否则 Wi-Fi 一断就会拿一段与蜂窝无关的时间去凑 dwell）。
+                //
+                // 暂停的是「计时与动手」，不是读数：RSRP 照采，状态照写 ——
+                // 心跳是 App 判活的唯一依据，少写一轮 App 会以为进程死了。
+                gWifiConnected = sysprobe_wifi_connected();
+                BOOL pausedForWiFi = (c.pauseOnWiFi && gWifiConnected);
+                if (pausedForWiFi != gPausedForWiFi) {
+                    gPausedForWiFi = pausedForWiFi;
+                    appendLog(pausedForWiFi
+                              ? @"paused · Wi-Fi connected"
+                              : @"resumed · Wi-Fi disconnected");
+                }
+                if (pausedForWiFi) {
+                    gArmedSince = 0;
+                    writeState(@"paused", 0, interval);
+                    sleep((unsigned int)interval);
+                    continue;
+                }
 
                 // 读不到就跳过这一拍，但**状态照写** —— 心跳是 App 判活的唯一依据，
                 // 少了它 App 会以为进程死了并再拉一个。

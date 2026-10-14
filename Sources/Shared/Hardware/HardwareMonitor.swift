@@ -240,6 +240,9 @@ final class HardwareMonitor: ObservableObject {
 
         // 与 `PowerMonitor.start` 同样的理由：挂在 `.default` 模式上的 `Timer` 会在
         // 滚动期间自动让路，`Task.sleep` 不会。详见那边的注释。
+        //
+        // **注意这只挡住「排下一拍」**，挡不住「结果异步回贴」—— 那一步在 `refresh()`
+        // 里另外让路一次（见那里的说明与 `MainThreadPacing`）。
         ticker = Timer.publish(every: 1, on: .main, in: .default)
             .autoconnect()
             .sink { [weak self] _ in
@@ -267,6 +270,18 @@ final class HardwareMonitor: ObservableObject {
             guard let self else { return }
             let sampled = Self.sample(state: &self.samplingState, includeFrequency: self.includeCPUFrequency)
             Task { @MainActor in
+                // ── 正在滚动就让路 ──
+                //
+                // 定时器只挂 `.default`，滚动时确实不排下一拍；但**这一贴**是异步回来的，
+                // 不受 run loop 模式约束，正好落在滚动的某几帧里 —— 而它会把整页 body
+                // 重算一遍（这一页在 `TabView` 里一直活着）。详见 `MainThreadPacing`。
+                //
+                // 丢掉这一拍而不是延后：下一拍一秒后就到，延后只会让队列越滚越长。
+                // `samplingInFlight` 必须在这里复位，否则采样从此不再派发。
+                guard !MainThreadPacing.isScrolling else {
+                    self.samplingInFlight = false
+                    return
+                }
                 var next = sampled
                 // `UIDevice.current` 是主 actor 隔离的，只能在这里读。剩下的是静态
                 // 快照加一次 `systemUptime`，留在主线程不构成开销。

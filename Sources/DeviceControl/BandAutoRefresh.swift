@@ -41,6 +41,19 @@ struct BandAutoRefreshConfig: Equatable {
     /// 采样间隔，秒。
     var sampleIntervalSec: Double = 2
 
+    /// **前置开关**：连着 Wi-Fi 时暂停自动刷新。
+    ///
+    /// 默认**开**。这个功能的存在理由是「信号弱到快脱网、而蜂窝是唯一出路时，
+    /// 把 modem 拉回来重注册」；连着 Wi-Fi 时蜂窝本来就不是出路 —— 这时候去重载
+    /// modem 只会白掉几秒网，还可能把正在进行的 VoLTE 通话打断。
+    ///
+    /// **断开 Wi-Fi 后自动恢复**，不需要用户回来重新打开：判定每一拍都重读这一项与
+    /// 实时的 Wi-Fi 状态（`sysprobe_wifi_connected()`）。暂停时只停「计时与动手」，
+    /// RSRP 照采 —— 界面上仍然看得到当前信号，只是不会累积 `dwell`。
+    ///
+    /// 后台守护进程 `BandRefreshDaemon.m` 里有一份同样的判定 —— 改这里时改那边。
+    var pauseOnWiFi = true
+
     // MARK: - 存取
 
     private enum Key {
@@ -51,6 +64,7 @@ struct BandAutoRefreshConfig: Equatable {
         static let cooldown = "sysprobe.bandAutoRefresh.cooldownSec"
         static let interval = "sysprobe.bandAutoRefresh.sampleIntervalSec"
         static let background = "sysprobe.bandAutoRefresh.backgroundDaemon"
+        static let pauseOnWiFi = "sysprobe.bandAutoRefresh.pauseOnWiFi"
     }
 
     static func load() -> BandAutoRefreshConfig {
@@ -60,6 +74,7 @@ struct BandAutoRefreshConfig: Equatable {
         // 与「用户显式关掉了」无法区分 —— 那会让默认值反过来覆盖用户的设置。
         if d.object(forKey: Key.enabled) != nil { c.enabled = d.bool(forKey: Key.enabled) }
         if d.object(forKey: Key.background) != nil { c.backgroundDaemon = d.bool(forKey: Key.background) }
+        if d.object(forKey: Key.pauseOnWiFi) != nil { c.pauseOnWiFi = d.bool(forKey: Key.pauseOnWiFi) }
         if d.object(forKey: Key.dryRun) != nil { c.dryRun = d.bool(forKey: Key.dryRun) }
         if d.object(forKey: Key.threshold) != nil { c.thresholdDbm = d.integer(forKey: Key.threshold) }
         if d.object(forKey: Key.dwell) != nil { c.dwellSec = d.double(forKey: Key.dwell) }
@@ -75,6 +90,7 @@ struct BandAutoRefreshConfig: Equatable {
         let d = UserDefaults.standard
         d.set(enabled, forKey: Key.enabled)
         d.set(backgroundDaemon, forKey: Key.background)
+        d.set(pauseOnWiFi, forKey: Key.pauseOnWiFi)
         d.set(dryRun, forKey: Key.dryRun)
         d.set(thresholdDbm, forKey: Key.threshold)
         d.set(dwellSec, forKey: Key.dwell)
@@ -118,6 +134,8 @@ final class BandAutoRefreshController: ObservableObject {
     enum Phase: Equatable {
         /// 没在计时、也没在冷却。
         case idle
+        /// 连着 Wi-Fi，被前置开关按住了 —— 既不计时也不动手。
+        case paused
         /// 条件已满足，正在累计持续时间。
         case armed(remaining: Double)
         /// 刚刷新过，冷却中。
@@ -126,6 +144,7 @@ final class BandAutoRefreshController: ObservableObject {
         var title: String {
             switch self {
             case .idle: return Strings.text("Idle")
+            case .paused: return Strings.text("Paused")
             case .armed: return Strings.text("Armed")
             case .cooling: return Strings.text("Cooling down")
             }
@@ -138,12 +157,20 @@ final class BandAutoRefreshController: ObservableObject {
     /// 最新的在前。
     @Published private(set) var log: [String] = []
     @Published private(set) var lastRefreshAt: Date?
+    /// 最近一拍里 Wi-Fi 是不是连着。
+    ///
+    /// 由采样那一拍顺带更新，不在视图里现查 —— `getifaddrs` 虽然只要几十微秒，
+    /// 但那是每次 body 重算都要跑一次的量级，而 body 一秒重算一次。
+    @Published private(set) var wifiConnected = false
 
     private var timer: Timer?
     private var queue = DispatchQueue(label: "com.corin.sysprobe.bandAutoRefresh")
     private var slot = 1
     private var armedSince: Date?
     private var cooldownUntil: Date?
+    /// 上一拍是不是处于「连 Wi-Fi 暂停」—— 只为了在**切换**那一刻写一条日志，
+    /// 而不是每拍刷屏。
+    private var pausedForWiFi = false
 
     // MARK: - 生命周期
 
@@ -170,6 +197,9 @@ final class BandAutoRefreshController: ObservableObject {
         timer = nil
         armedSince = nil
         cooldownUntil = nil
+        // 连同「暂停中」的记忆一起清掉：下次 `start` 重新开表时，若仍连着 Wi-Fi，
+        // 会在日志里重新记一条「paused」—— 那是新一轮观察的开始，不是重复。
+        pausedForWiFi = false
         DispatchQueue.main.async { [weak self] in
             self?.phase = .idle
         }
@@ -222,6 +252,40 @@ final class BandAutoRefreshController: ObservableObject {
 
         update { s in
             s.lastRsrp = rsrp
+        }
+
+        // ── 前置开关：连着 Wi-Fi 就暂停 ──
+        //
+        // 位置刻意放在「读数之后、冷却与阈值之前」：暂停时界面上要显示
+        // 「Wi-Fi 已连接 · 已暂停」，而不是一条更早的冷却倒计时 —— 后者会让人
+        // 以为它还在正常工作。
+        //
+        // 暂停的是**计时与动手**，不是读数：RSRP 照采，界面上仍看得到当前信号。
+        // 判据本身在 `CommCenterBridge.m` 里，与守护进程共用同一份实现。
+        let wifi = sysprobe_wifi_connected()
+        update { s in
+            s.wifiConnected = wifi
+        }
+
+        let paused = config.pauseOnWiFi && wifi
+        if paused != pausedForWiFi {
+            // 只在**切换**那一刻写日志，不然每拍一条会把 30 条日志刷满。
+            pausedForWiFi = paused
+            update { s in
+                s.appendLog(paused
+                            ? Strings.text("paused · Wi-Fi connected")
+                            : Strings.text("resumed · Wi-Fi disconnected"))
+            }
+        }
+        if paused {
+            // 已计的时长清零：否则「Wi-Fi 断开」那一瞬间会拿一段与蜂窝无关的时间
+            // 去凑 `dwell`，于是刚恢复就立刻刷一次。
+            armedSince = nil
+            update { s in
+                s.armedSince = nil
+                s.phase = .paused
+            }
+            return
         }
 
         // 读不到就什么都不做 —— 这一拍不能当成「信号变了」。

@@ -246,9 +246,13 @@ final class PowerMonitor: ObservableObject {
         thermal.update()
         // Mirror the nested monitor into published state (see the properties above):
         // `ObservableObject` does not invalidate views through a nested object.
-        thermalState = thermal.state
-        thermalStateSince = thermal.stateSince
-        lowPowerMode = thermal.lowPowerMode
+        //
+        // **只在真的变了才赋值。** `@Published` 不看新旧值，赋一次就发一次
+        // `objectWillChange`，而这一页的每一个观察者都会把整棵 body 重算一遍。
+        // 热状态与低电量模式一分钟也未必变一次，无条件赋值等于每秒白送三次重算。
+        if thermalState != thermal.state { thermalState = thermal.state }
+        if thermalStateSince != thermal.stateSince { thermalStateSince = thermal.stateSince }
+        if lowPowerMode != thermal.lowPowerMode { lowPowerMode = thermal.lowPowerMode }
 
         // 上一次的读取还没回来就丢这一拍 —— 理由同 `HardwareMonitor.refresh`。
         guard !samplingInFlight else { return }
@@ -258,6 +262,19 @@ final class PowerMonitor: ObservableObject {
             guard let self else { return }
             let readings = Self.readSensors(battery: self.battery, sensors: self.sensors)
             Task { @MainActor in
+                // ── 正在滚动就让路 ──
+                //
+                // 定时器挂 `.default`，滚动时不排下一拍；但这一贴是异步回来的，
+                // **不受 run loop 模式约束** —— 主队列的 source 在 tracking 期间照跑。
+                // 而它会发布 `snapshot` 等一串属性，把电源页（在 `TabView` 里活着，
+                // 还带一张图）整个重算一遍。详见 `MainThreadPacing`。
+                //
+                // 丢掉这一拍：读取本身只是 IOKit 快照，下一秒会再读一次，
+                // 会话状态机按时间戳算，少一拍不影响账目。
+                guard !MainThreadPacing.isScrolling else {
+                    self.samplingInFlight = false
+                    return
+                }
                 self.apply(readings)
                 self.samplingInFlight = false
             }
@@ -283,11 +300,18 @@ final class PowerMonitor: ObservableObject {
         // Only Raw data reads this. It used to be assigned under `#if DEBUG`, when that
         // screen was Debug-only; now that the page ships, the guard made its "powerd
         // power sources" panel report none in every release build — a false statement
-        // on the one page whose job is to show what the probes actually returned. The
-        // write costs nothing while that page is closed: `@Observable` invalidates only
-        // views that read the property, and no other view does.
-        powerSources = sources
-        sensorsAvailable = readings.sensorServiceCount > 0
+        // on the one page whose job is to show what the probes actually returned.
+        //
+        // ── 2026-10-14：加上「变了才发」的守卫 ──
+        //
+        // 这一条原来写着「写它不要钱，因为 `@Observable` 只失效读它的视图」。**那是错的**
+        // —— 本类是 `ObservableObject`，`@Published` 只要赋值就发 `objectWillChange`，
+        // 与谁在读无关。于是它每秒白送一次「电源页整页重算」，而这个数组现在**没有任何
+        // 界面在读**（Raw 页已经不在了，全仓核实过）。深比较一份只有几项的字典数组是
+        // 微秒级，比一次整页重算便宜得多。
+        if !Self.samePowerSources(powerSources, sources) { powerSources = sources }
+        let hasSensors = readings.sensorServiceCount > 0
+        if sensorsAvailable != hasSensors { sensorsAvailable = hasSensors }
         let internalBattery = sources.first { ($0["Type"] as? String) == "InternalBattery" } ?? sources.first
 
         let current = PowerSnapshot(date: .now,
@@ -309,10 +333,21 @@ final class PowerMonitor: ObservableObject {
         appendLive(current)
         updateRateEstimate(current)
         resistance.add(current)
-        pathResistance = resistance.estimate
+        // 拟合值在电流没动过的时候是逐字相同的 —— 同样只在这一项真的变了才发布。
+        if pathResistance != resistance.estimate { pathResistance = resistance.estimate }
         updateSession(current)
         lastExternalConnected = current.externalConnected
         onTick?(current)
+    }
+
+    /// 两份 powerd 电源列表是不是同一份内容。
+    ///
+    /// 用 `NSArray` 的深比较而不是 `==`：元素是 `[String: Any]`，Swift 的 `==` 对
+    /// `Any` 没有可用的实现。`isEqual(to:)` 走的正是 NSDictionary 的逐键比较，
+    /// 对「每秒重建一遍、内容基本不变」的这种小数组足够便宜。
+    private static func samePowerSources(_ lhs: [[String: Any]],
+                                         _ rhs: [[String: Any]]) -> Bool {
+        (lhs as NSArray).isEqual(to: rhs)
     }
 
     private func appendLive(_ snapshot: PowerSnapshot) {

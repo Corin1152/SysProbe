@@ -132,7 +132,58 @@ final class BandService: ObservableObject {
     /// 正在读。
     @Published private(set) var isLoading = false
 
+    /// 当前卡槽。
+    ///
+    /// **由这里记住，不再是视图的 `@State`。** 分段之间来回切会重建分段视图，而
+    /// 「用户选的是哪张卡」不该跟着丢 —— 它同时决定这一页画哪张卡的频段，以及
+    /// 自动刷新往守护进程下发哪个卡槽。默认 1；单卡设备上恒为 1。
+    ///
+    /// 是可写的：卡槽选择器直接绑它（`$service.slot`），换卡槽由调用方的
+    /// `.onChange` 去重读 —— 与它原来在视图里当 `@State` 时是同一套写法。
+    @Published var slot = 1
+
+    /// 「该选哪张卡」探过没有。见 `ensureLoaded` —— 与「读过基带没有」是两件事。
+    private var didProbeSlot = false
+
     // MARK: - 读
+
+    /// 进页面时调一次。
+    ///
+    /// **已经有数据就不重新探卡槽。** `preferredSlot()` 是几次**同步 XPC**，而
+    /// 「一进这一页整页刷一次」正是要修掉的那个现象：分段切回来会重建分段视图，
+    /// 每次都重探卡槽、重读基带、再把整屏盖成转圈的话，用户看到的就是一次强制刷新
+    /// （滚动位置也一并归零）。
+    ///
+    /// 已经有数据时走的是**静默刷新**：界面照旧显示上一次读回来的值 ——
+    /// 转圈只在首读出现（见 `BandPanels.isInitialLoad`），刷新结果回来再替换。
+    ///
+    /// 判据用 `availability != .unknown` 而不是 `bandInfo != nil`：读失败
+    /// （没权限 / 无卡）之后 `availability` 是 `.unavailable`，那也是一种「已经问过
+    /// 基带了」的状态，不该每次进来都重问一遍。
+    func ensureLoaded() async {
+        guard availability == .unknown else {
+            load(slot: slot)
+            return
+        }
+        // 探卡槽这件事**只做一次**（`didProbeSlot`），与「读过没有」分开记：
+        // 两个分段的视图各自会调本方法，而第一次探出来的卡槽若与默认值不同，
+        // 是靠调用方的 `.onChange(of: slot)` 去重读的 —— 那一侧可能还没挂上，
+        // 于是这次调用不读、下一次调用（分段挂上来之后）才读。少了这个标记，
+        // 中间那次会把同一件事再探一遍。
+        if !didProbeSlot {
+            didProbeSlot = true
+            // **必须丢到 detached 里跑**：这个探测是几次同步 XPC，而本类是
+            // `@MainActor` 的 —— 留在主线程会卡住进这一页的第一帧。
+            let preferred = await Task.detached { BandService.preferredSlot() }.value
+            if preferred != slot {
+                // 换卡槽由调用方的 `.onChange(of: slot)` 去重读 —— 与它原来在视图里
+                // 当 `@State` 时是同一条路，那条路还会顺带清掉界面上的勾选与横幅。
+                slot = preferred
+                return
+            }
+        }
+        load(slot: slot)
+    }
 
     /// 读 `slot`，并顺带探测一次卡槽数量（只探一次）。
     ///

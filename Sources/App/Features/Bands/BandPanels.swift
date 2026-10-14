@@ -46,15 +46,18 @@ import SwiftUI
 struct BandPanels: View {
     @EnvironmentObject private var hardware: HardwareMonitor
 
-    @StateObject private var service = BandService()
-
-    /// 当前卡槽。单卡设备上恒为 1，而且界面上不会出现卡槽选择器。
-    @State private var slot = 1
+    /// 基带取数与写入。**由 `BandHubView` 注入**，不再是这里的 `@StateObject` ——
+    /// 分段之间来回切会重建本视图，服务挂在视图上的话每次都重读一遍基带、
+    /// 整屏盖一次转圈。详见 `BandHubView` 类型头上那段说明。
+    @ObservedObject var service: BandService
 
     /// 界面上的勾选状态：制式 → 启用的频段号。
     ///
     /// 与 `service.bandInfo.active` 分开存：前者是用户正在编辑的意图，后者是刚从
     /// Modem 读回来的事实。两者不一致就是「有未保存的修改」。
+    ///
+    /// **卡槽（`slot`）不在这里** —— 它跟着服务走（`service.slot`），因为「用户选的是
+    /// 哪张卡」不该在切分段时丢掉。
     @State private var selection: [RadioAccessTechnology: Set<Int>] = [:]
     @State private var hasUnsavedChanges = false
 
@@ -83,6 +86,18 @@ struct BandPanels: View {
     /// 频段网格：4 列。和原版一样 —— 一屏能扫完一个制式，不用滚。
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
+    /// 基带一次都还没问过 —— 也就是**首读**。
+    ///
+    /// 只有这一种情况才盖整屏转圈、才禁用交互。第二次进来（含分段切回来）时
+    /// `availability` 已经有值，走的是静默刷新：界面照旧显示上一次的数据。
+    ///
+    /// 不带 `&& service.isLoading`：`.task` 跑起来之前 `isLoading` 还是 false，
+    /// 带上它会在第一帧先画一屏空面板再盖上转圈 —— 那正是要修掉的「闪一下」。
+    /// 判据只看「问过基带没有」，首读的整个过程（含等待开始的那一帧）都被盖住。
+    private var isInitialLoad: Bool {
+        service.availability == .unknown
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 14) {
@@ -108,38 +123,39 @@ struct BandPanels: View {
             .padding(.bottom, 24)
             .mwContainerWidth()
         }
-        .disabled(service.isLoading)
+        .disabled(isInitialLoad)
         .overlay {
-            if service.isLoading {
+            if isInitialLoad {
                 ProgressView().controlSize(.large)
             }
         }
+        // 只在**第一次**读回来之前盖转圈、并且只在第一次禁用交互。
+        //
+        // 原来这两个条件都是 `service.isLoading`，于是「静默刷新」也会把整页盖住 ——
+        // 用户看到的就是「一进这一页整屏刷一次」。判据改成 `availability == .unknown`
+        // （基带一次都还没问过）：第二次进来时它已经有值，刷新在后台进行，
+        // 界面照旧显示上一次读回来的数据，直到新数据替换上来。
+        //
+        // 顺带解决另一个问题：基带慢的时候（`copyCellInfo` 最坏等 1 秒）整页会
+        // 卡在不可交互状态，而现在只有真正的首读才这样。
         .task {
             // 首次进入先给整屏警告。它挡在加载之前 —— 让人先看懂风险，再看数据。
             if !entryTipsDone { showEntryTips = true }
-            // 一进来选哪张卡：上游的规则是「卡 1 未启用而卡 2 启用就选卡 2，否则选首选
-            // 数据卡」，这里落到 `BandService.preferredSlot()`（首选数据卡，且它必须
-            // 确实插着卡）。换卡槽会触发 `.onChange(of: slot)` 去重读，所以那条路不再
-            // 重复 load 一次。
-            //
-            // **必须丢到 detached 里跑**：这个探测是几次**同步 XPC**
-            // （`sysprobe_slot_has_sim` 每次两下、`sysprobe_preferred_data_slot` 一下，
-            // 单卡机上卡槽 2 那次还必然失败），而 `.task` 是在主 actor 上执行的 ——
-            // 留在主线程会卡住进页面的第一帧。与 `load` 同一个理由。
-            let initial = await Task.detached { BandService.preferredSlot() }.value
-            if initial != slot {
-                slot = initial
-            } else {
-                service.load(slot: slot)
-            }
+            // 读 / 探卡槽都在服务里（已经读过就是静默刷新，见 `BandService.ensureLoaded`）。
+            await service.ensureLoaded()
         }
+        // 勾选状态从「已经读回来的那份数据」铺一次。
+        //
+        // 需要这一句是因为 `.onChange(of: service.bandInfo)` 只在**值真的变了**时才触发，
+        // 而分段切回来时数据是缓存的、值没变 —— 少了它，第二次进来所有勾都是空的。
+        .onAppear { syncSelectionFromModem() }
         // 右上角只有齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 这一层
         // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
         // `.toolbar` 排在导航栏右侧，现在这四个动作全部搬到页面顶部（见 `actionRow`）。
         .onChange(of: service.bandInfo) { _ in
             syncSelectionFromModem()
         }
-        .onChange(of: slot) { newSlot in
+        .onChange(of: service.slot) { newSlot in
             // 换卡槽必须重新读 —— 每张卡的频段配置是独立的。桥接层手里留的是
             // 上一张卡的对象，不重读就没得写。
             selection = [:]
@@ -291,7 +307,7 @@ struct BandPanels: View {
 
     private var slotPanel: some View {
         Panel("SIM Slot", systemImage: "simcard") {
-            Picker("SIM Slot", selection: $slot) {
+            Picker("SIM Slot", selection: $service.slot) {
                 ForEach(service.slots, id: \.self) { index in
                     Text(verbatim: Strings.text("Slot %d", index)).tag(index)
                 }
@@ -427,26 +443,33 @@ struct BandPanels: View {
                 actionButton(title: "Restore",
                              systemImage: "arrow.counterclockwise",
                              accessibilityLabel: "Restore Default",
-                             tint: .mwAccent,
+                             // **灰色**，不是主题青（2026-10-14 要求）。
+                             //
+                             // 它是这一排里唯一的「逃生通道」：按下就把 active 整个换回
+                             // supported，是一次不可逆的覆盖。与另外三个日常动作同色的话，
+                             // 手指落在这一排上分不出哪个是「会改回去」的那个 ——
+                             // 灰下来之后，它与「重启 / 刷新 / 保存」在视觉上就是两类。
+                             // 只是配色降级，**不是禁用**：真出事时它必须还能按。
+                             tint: .mwMuted,
                              // 读不到的时候「恢复」一样写不进去（桥接层拿不到那个对象
                              // 就直接失败），所以跟「刷新」一起禁掉 —— 不给一个按了
                              // 没反应的按钮。
-                             disabled: service.isLoading || service.availability == .unavailable) {
+                             disabled: isInitialLoad || service.availability == .unavailable) {
                     showRestoreConfirm = true
                 }
                 actionButton(title: "Restart",
                              systemImage: "antenna.radiowaves.left.and.right.slash",
                              accessibilityLabel: "Restart Cellular Service",
                              tint: .mwDanger,
-                             disabled: service.isLoading) {
+                             disabled: isInitialLoad) {
                     showRestartConfirm = true
                 }
                 actionButton(title: "Refresh",
                              systemImage: "arrow.clockwise",
                              accessibilityLabel: "Refresh",
                              tint: .mwAccent,
-                             disabled: service.isLoading || service.availability == .unavailable) {
-                    service.load(slot: slot)
+                             disabled: isInitialLoad || service.availability == .unavailable) {
+                    service.load(slot: service.slot)
                 }
                 actionButton(title: "Save",
                              systemImage: "checkmark",
@@ -578,7 +601,7 @@ struct BandPanels: View {
     private func save() {
         // 只提交界面上画出来的制式（现在就是 4G）。没画出来的 3G / 2G 由桥接层
         // 从原对象里原样带回去 —— 不展示不等于禁用。
-        let ok = service.write(selection: selection, only: visibleRats, slot: slot)
+        let ok = service.write(selection: selection, only: visibleRats, slot: service.slot)
         banner = ok
             ? Strings.text("Band settings saved.")
             : Strings.text("Could not write the band settings. Nothing was changed.")
@@ -586,17 +609,17 @@ struct BandPanels: View {
         // 无论成没成都重读一次：失败时界面回到 Modem 的真实状态，
         // 而不是停在一个「看起来改了、其实没改」的勾选上。
         hasUnsavedChanges = false
-        service.load(slot: slot)
+        service.load(slot: service.slot)
     }
 
     private func restoreDefault() {
-        let ok = service.restoreDefault(slot: slot)
+        let ok = service.restoreDefault(slot: service.slot)
         banner = ok
             ? Strings.text("Default band settings restored.")
             : Strings.text("Could not restore the default band settings.")
         bannerIsError = !ok
         hasUnsavedChanges = false
-        service.load(slot: slot)
+        service.load(slot: service.slot)
     }
 
     private func restartCellular() {
