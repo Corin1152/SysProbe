@@ -22,28 +22,13 @@ struct BandAutoRefreshConfig: Equatable {
     /// 前台那条路就在调用方停掉（见 `AutoRefreshPanels`）。
     var backgroundDaemon = false
 
-    /// 比较方向。RSRP 是负值（-60 好、-115 坏），所以「弱于」与「强于」必须显式区分，
-    /// 不能靠一个 `>` 蒙混。
-    enum Direction: Int, CaseIterable, Identifiable {
-        /// RSRP ≤ 阈值（信号**弱于**阈值）时触发。
-        case weaker = 0
-        /// RSRP ≥ 阈值（信号**强于**阈值）时触发。
-        case stronger = 1
-
-        var id: Int { rawValue }
-
-        var menuTitle: String {
-            switch self {
-            case .weaker: return Strings.text("RSRP at or below")
-            case .stronger: return Strings.text("RSRP at or above")
-            }
-        }
-    }
-
+    /// 比较方向（2026-10-14 定稿）：只有「RSRP **低于**阈值」一种，而且不带等于。
+    /// 这个功能的存在理由就是信号变弱时重载 modem，反向（信号好才刷新）没有场景；
+    /// 等于也去掉了 —— RSRP 恰好落在阈值上的那一拍多等一秒没有意义，
+    /// 少一个分支就少一处两套执行体（前台 / 守护进程）走偏的机会。
     var enabled = false
     /// 只写日志、不真的刷新。默认开着 —— 见类型头上的说明。
     var dryRun = true
-    var direction: Direction = .weaker
     /// 触发阈值，dBm。默认 -100：LTE 在这个点上通常还能正常通话，
     /// 再往下（-110 之后）就接近脱网了。
     var thresholdDbm = -100
@@ -61,7 +46,6 @@ struct BandAutoRefreshConfig: Equatable {
     private enum Key {
         static let enabled = "sysprobe.bandAutoRefresh.enabled"
         static let dryRun = "sysprobe.bandAutoRefresh.dryRun"
-        static let direction = "sysprobe.bandAutoRefresh.direction"
         static let threshold = "sysprobe.bandAutoRefresh.thresholdDbm"
         static let dwell = "sysprobe.bandAutoRefresh.dwellSec"
         static let cooldown = "sysprobe.bandAutoRefresh.cooldownSec"
@@ -77,10 +61,6 @@ struct BandAutoRefreshConfig: Equatable {
         if d.object(forKey: Key.enabled) != nil { c.enabled = d.bool(forKey: Key.enabled) }
         if d.object(forKey: Key.background) != nil { c.backgroundDaemon = d.bool(forKey: Key.background) }
         if d.object(forKey: Key.dryRun) != nil { c.dryRun = d.bool(forKey: Key.dryRun) }
-        if let raw = d.object(forKey: Key.direction) as? Int,
-           let dir = Direction(rawValue: raw) {
-            c.direction = dir
-        }
         if d.object(forKey: Key.threshold) != nil { c.thresholdDbm = d.integer(forKey: Key.threshold) }
         if d.object(forKey: Key.dwell) != nil { c.dwellSec = d.double(forKey: Key.dwell) }
         if d.object(forKey: Key.cooldown) != nil { c.cooldownSec = d.double(forKey: Key.cooldown) }
@@ -96,24 +76,22 @@ struct BandAutoRefreshConfig: Equatable {
         d.set(enabled, forKey: Key.enabled)
         d.set(backgroundDaemon, forKey: Key.background)
         d.set(dryRun, forKey: Key.dryRun)
-        d.set(direction.rawValue, forKey: Key.direction)
         d.set(thresholdDbm, forKey: Key.threshold)
         d.set(dwellSec, forKey: Key.dwell)
         d.set(cooldownSec, forKey: Key.cooldown)
         d.set(sampleIntervalSec, forKey: Key.interval)
     }
 
-    /// 当前值是否满足条件。
+    /// 当前值是否满足条件：RSRP **低于**阈值（严格小于，等于不算）。
     ///
     /// RSRP **必须小于 0** 才参与判断：0 是「没读到」的哨兵值（见
     /// `CommCenterBridge.m` 里那条注释），少了这一句它会变成「信号极好」，
     /// 判定逻辑整个反过来。
+    ///
+    /// 守护进程 `BandRefreshDaemon.m` 里有一份同样的判定 —— 改这里时改那边。
     func matches(_ rsrp: Int) -> Bool {
         guard rsrp < 0 else { return false }
-        switch direction {
-        case .weaker: return rsrp <= thresholdDbm
-        case .stronger: return rsrp >= thresholdDbm
-        }
+        return rsrp < thresholdDbm
     }
 }
 

@@ -13,6 +13,10 @@ import SwiftUI
 /// 代价仍然是掉网数秒，所以默认关闭、且默认只写日志。
 struct AutoRefreshPanels: View {
 
+    /// 右上角齿轮的回调，由 `BandHubView` 透传（这一页没有保存 / 刷新按钮，
+    /// 齿轮独自占 trailing 区 —— 外壳的齿轮在这页被关掉了，见 `BandHubView`）。
+    let openSettings: @MainActor () -> Void
+
     @StateObject private var controller = BandAutoRefreshController()
     /// 后台那条路的状态。单例由 `RootView` 起的看门狗喂，这里只是读它。
     @ObservedObject private var daemon = BandRefreshDaemonBridge.shared
@@ -54,6 +58,16 @@ struct AutoRefreshPanels: View {
         // 切走分段就停表。后台模式关着时 App 退后台本来也会被挂起；
         // 这里补的是「还在 App 里但不在这一页」那一段。
         .onDisappear { controller.stop() }
+        // 这一页 trailing 区只有齿轮一个（`PageHubScaffold` 的 `showsGear` 已关）。
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { openSettings() } label: {
+                    Image(systemName: "gearshape")
+                }
+                .tint(.mwAccent)
+                .accessibilityLabel(Text("Settings"))
+            }
+        }
     }
 
     /// 前台定时器与后台守护进程**二选一**。
@@ -82,27 +96,20 @@ struct AutoRefreshPanels: View {
                 }
                 toggle("Log only (do not refresh)", isOn: $config.dryRun)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Trigger when")
-                        .font(AppFont.text(13))
-                        .foregroundStyle(Color.mwMuted)
-                    Picker("Trigger when", selection: $config.direction) {
-                        ForEach(BandAutoRefreshConfig.Direction.allCases) { direction in
-                            Text(verbatim: direction.menuTitle).tag(direction)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-
+                // 触发方向不再可选（2026-10-14）：只有「RSRP 低于阈值」一种 ——
+                // 这个功能的存在理由就是信号变弱时重载 modem。
                 stepper(value: $config.thresholdDbm, in: -125...(-70), step: 1,
-                        label: "\(config.thresholdDbm) dBm")
+                        label: "Trigger threshold",
+                        valueText: "\(config.thresholdDbm) dBm")
                 stepper(value: $config.dwellSec, in: 0...120, step: 5,
-                        label: Strings.text("%lld s", Int(config.dwellSec)))
+                        label: "Sustained for",
+                        valueText: Strings.text("%lld s", Int(config.dwellSec)))
                 stepper(value: $config.cooldownSec, in: 30...1800, step: 30,
-                        label: Strings.text("%lld s", Int(config.cooldownSec)))
+                        label: "Cooldown",
+                        valueText: Strings.text("%lld s", Int(config.cooldownSec)))
                 stepper(value: $config.sampleIntervalSec, in: 1...30, step: 1,
-                        label: Strings.text("%lld s", Int(config.sampleIntervalSec)))
+                        label: "Sample every",
+                        valueText: Strings.text("%lld s", Int(config.sampleIntervalSec)))
 
                 // 「信号弱于 -100 且持续 20 秒」比四行开关更能说明它在等什么。
                 Text(verbatim: summary)
@@ -116,8 +123,7 @@ struct AutoRefreshPanels: View {
     }
 
     private var summary: String {
-        let relation = config.direction == .weaker ? "≤" : "≥"
-        return "RSRP \(relation) \(config.thresholdDbm) dBm for \(Int(config.dwellSec))s → refresh, then wait \(Int(config.cooldownSec))s"
+        return "RSRP < \(config.thresholdDbm) dBm for \(Int(config.dwellSec))s → refresh, then wait \(Int(config.cooldownSec))s"
     }
 
     // MARK: - 状态
@@ -225,11 +231,20 @@ struct AutoRefreshPanels: View {
 
     /// `V: Strideable` 而不是 `BinaryInteger`：阈值与间隔里既有 `Int` 也有 `Double`
     /// （`Stepper` 自己的泛型约束就是 `Strideable`，`step` 的类型是 `V.Stride`）。
+    /// 左标签右值 —— 只有一串数字的 stepper 看不出它在调什么。
     private func stepper<V: Strideable>(value: Binding<V>, in range: ClosedRange<V>,
-                                        step: V.Stride, label: String) -> some View {
+                                        step: V.Stride, label: LocalizedStringKey,
+                                        valueText: String) -> some View {
         Stepper(value: value, in: range, step: step) {
-            Text(verbatim: label)
-                .font(AppFont.text(13))
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label)
+                    .font(AppFont.text(13))
+                    .foregroundStyle(Color.mwMuted)
+                Spacer(minLength: 8)
+                Text(verbatim: valueText)
+                    .font(AppFont.text(13, weight: .semibold))
+                    .multilineTextAlignment(.trailing)
+            }
         }
     }
 

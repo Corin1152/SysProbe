@@ -9,9 +9,9 @@ import SwiftUI
 /// `PageHubScaffold` 而不是 `PageScaffold`（后者的内容会被塞进它自己的 `ScrollView`，
 /// 变成滚动套滚动）。
 ///
-/// 右上角的保存 / 刷新按钮仍然走 `.toolbar` —— `toolbar` 会向上找到最近的
-/// `NavigationStack`（也就是 `MaintenanceHubView` 那一个）。分段被切走时这一层整体
-/// 消失，两个按钮随之消失，不会留在别的分段上。
+/// 右上角的保存 / 刷新 / 齿轮三个按钮走 `.toolbar` —— `toolbar` 会向上找到最近的
+/// `NavigationStack`（也就是 `BandHubView` 那一个）。分段被切走时这一层整体
+/// 消失，三个按钮随之消失，不会留在别的分段上。
 ///
 /// ## 这一页是整个 App 里唯一会「写系统状态」的地方
 ///
@@ -35,6 +35,10 @@ import SwiftUI
 /// 是配合它一起加的第二道提示。
 struct BandPanels: View {
     @EnvironmentObject private var hardware: HardwareMonitor
+
+    /// 右上角齿轮的回调，由 `BandHubView` 透传（外壳的齿轮在这页被关掉了，
+    /// 因为三个按钮的顺序必须由这一层自己排，见下面 `.toolbar` 的说明）。
+    let openSettings: @MainActor () -> Void
 
     @StateObject private var service = BandService()
 
@@ -125,20 +129,13 @@ struct BandPanels: View {
                 service.load(slot: slot)
             }
         }
-        // 保存与刷新放导航栏右上 —— 与上游 CellularInfo 一致（它的
-        // `navigationItem.rightBarButtonItems` 就是这两个，顺序也一样：刷新在左、
-        // 保存在右）。放在这里的好处是**不随内容滚动**：频段列表很长时，
-        // 页面内的保存按钮要滚到底才能按到。
+        // 保存与刷新放导航栏右上 —— 与上游 CellularInfo 同款。三个按钮的顺序
+        // （2026-10-14 定）从左到右是 **保存 → 刷新 → 齿轮**：保存是这一页最常用
+        // 也最重要的动作，紧挨内容；齿轮最右。齿轮在这里声明而不是外壳
+        // （`PageHubScaffold` 的 `showsGear` 为 false），因为父级声明的 toolbar 项
+        // 合并时排最左，留在那儿会变成「齿轮第一」。
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    service.load(slot: slot)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(service.isLoading || service.availability == .unavailable)
-                .accessibilityLabel(Text("Refresh"))
-
                 Button {
                     // 第 2 层：默认还要再确认一次。
                     if saveConfirm {
@@ -151,6 +148,20 @@ struct BandPanels: View {
                 }
                 .disabled(!hasUnsavedChanges)
                 .accessibilityLabel(Text("Save"))
+
+                Button {
+                    service.load(slot: slot)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(service.isLoading || service.availability == .unavailable)
+                .accessibilityLabel(Text("Refresh"))
+
+                Button { openSettings() } label: {
+                    Image(systemName: "gearshape")
+                }
+                .tint(.mwAccent)
+                .accessibilityLabel(Text("Settings"))
             }
         }
         .onChange(of: service.bandInfo) { _ in

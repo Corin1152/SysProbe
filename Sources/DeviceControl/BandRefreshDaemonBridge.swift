@@ -83,7 +83,6 @@ final class BandRefreshDaemonBridge: ObservableObject {
         let dict: [String: Any] = [
             "enabled": config.backgroundDaemon,
             "dryRun": config.dryRun,
-            "direction": config.direction.rawValue,
             "thresholdDbm": config.thresholdDbm,
             "slot": slot,
             "dwellSec": config.dwellSec,

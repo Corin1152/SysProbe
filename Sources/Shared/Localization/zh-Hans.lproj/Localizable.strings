@@ -367,7 +367,7 @@
 
 /* 频段分页：拆成两个分段，新增自动刷新（2026-10-14） */
 "Band lock" = "频段锁定";
-"Auto refresh" = "自动刷新";
+"Band refresh" = "频段刷新";
 "Recent activity" = "最近动作";
 "Enabled" = "启用";
 "Log only (do not refresh)" = "仅记录日志（不执行刷新）";
@@ -378,8 +378,6 @@
 "Watching" = "监视中";
 "Triggered · %lld s left" = "已触发 · 还剩 %lld 秒";
 "Cooling down · %lld s left" = "冷却中 · 还剩 %lld 秒";
-"RSRP at or below" = "RSRP 低于或等于";
-"RSRP at or above" = "RSRP 高于或等于";
 "dry-run %@ dBm → would refresh" = "试运行 %@ dBm → 将执行刷新";
 "refreshed at %@ dBm" = "已于 %@ dBm 执行刷新";
 "refresh failed at %@ dBm" = "刷新失败（%@ dBm）";
@@ -400,3 +398,9 @@
 "Starting" = "启动中";
 "Not available" = "不可用";
 "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back." = "运行在独立的 root 进程中，离开 App 后仍会继续工作。手机重启后它会停止 —— 打开一次 SysProbe 即可恢复。";
+
+/* 自动刷新参数加上可见标签；触发方向选择器移除（2026-10-14） */
+"Trigger threshold" = "触发阈值";
+"Sustained for" = "持续低于";
+"Cooldown" = "冷却时间";
+"Sample every" = "采样间隔";

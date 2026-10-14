@@ -104,7 +104,6 @@ static NSTimeInterval heartbeatValidity(NSTimeInterval interval) {
 typedef struct {
     BOOL enabled;
     BOOL dryRun;
-    int direction;   // 0 = weaker（RSRP ≤ 阈值），1 = stronger（RSRP ≥ 阈值）
     int thresholdDbm;
     int slot;
     NSTimeInterval dwellSec;
@@ -121,7 +120,6 @@ static BandRefreshConfig readConfig(void) {
     BandRefreshConfig c;
     c.enabled = NO;
     c.dryRun = YES;
-    c.direction = 0;
     c.thresholdDbm = -100;
     c.slot = 1;
     c.dwellSec = 20;
@@ -136,7 +134,6 @@ static BandRefreshConfig readConfig(void) {
     id v;
     if ((v = raw[@"enabled"])) c.enabled = [v respondsToSelector:@selector(boolValue)] ? [v boolValue] : NO;
     if ((v = raw[@"dryRun"])) c.dryRun = [v respondsToSelector:@selector(boolValue)] ? [v boolValue] : YES;
-    if ((v = raw[@"direction"])) c.direction = [v respondsToSelector:@selector(intValue)] ? [v intValue] : 0;
     if ((v = raw[@"thresholdDbm"])) c.thresholdDbm = [v respondsToSelector:@selector(intValue)] ? [v intValue] : -100;
     if ((v = raw[@"slot"])) {
         int s = [v respondsToSelector:@selector(intValue)] ? [v intValue] : 1;
@@ -156,14 +153,17 @@ static BandRefreshConfig readConfig(void) {
     return c;
 }
 
-/// 当前值是否满足条件。
+/// 当前值是否满足条件：RSRP **低于**阈值（严格小于，等于不算）。
 ///
 /// **RSRP 必须 < 0 才参与判断**：0 是「没读到」的哨兵（见 `CommCenterBridge.m`），
 /// 少了这一句它会变成「信号极好」，判定整个反过来 —— 而这个进程没有界面，
 /// 反了也看不出来。
+///
+/// 与 App 侧 `BandAutoRefreshConfig.matches(_:)` 是同一份逻辑（2026-10-14 起
+/// 只剩「低于」一个方向），改这里时改那边。
 static BOOL matches(int rsrp, BandRefreshConfig c) {
     if (rsrp >= 0) { return NO; }
-    return c.direction == 1 ? (rsrp >= c.thresholdDbm) : (rsrp <= c.thresholdDbm);
+    return rsrp < c.thresholdDbm;
 }
 
 // ── 状态 ────────────────────────────────────────────────────────────────────

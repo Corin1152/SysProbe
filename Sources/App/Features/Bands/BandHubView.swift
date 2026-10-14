@@ -26,6 +26,10 @@ struct BandHubView: View {
             title: page.title,
             glow: .mwAccent,
             openSettings: openSettings,
+            // 齿轮不在外壳渲染：trailing 区三个按钮（保存 / 刷新 / 齿轮）的顺序
+            // 必须是「保存最左、齿轮最右」，而父子两处 `.toolbar` 合并时父级
+            // 声明的排最左 —— 齿轮必须由内容层自己在分组末尾声明，见 `BandPanels`。
+            showsGear: false,
             header: {
                 Picker("Bands", selection: $page) {
                     ForEach(BandSegment.allCases) { segment in
@@ -37,8 +41,8 @@ struct BandHubView: View {
             },
             content: {
                 switch page {
-                case .lock: BandPanels()
-                case .autoRefresh: AutoRefreshPanels()
+                case .lock: BandPanels(openSettings: openSettings)
+                case .autoRefresh: AutoRefreshPanels(openSettings: openSettings)
                 }
             }
         )
@@ -60,7 +64,7 @@ enum BandSegment: Int, CaseIterable, Identifiable {
     var title: LocalizedStringKey {
         switch self {
         case .lock: return "Band lock"
-        case .autoRefresh: return "Auto refresh"
+        case .autoRefresh: return "Band refresh"
         }
     }
 }

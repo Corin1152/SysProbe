@@ -367,7 +367,7 @@
 
 /* Band tab: page split into two segments, and the auto-refresh feature (2026-10-14) */
 "Band lock" = "Band lock";
-"Auto refresh" = "Auto refresh";
+"Band refresh" = "Band refresh";
 "Recent activity" = "Recent activity";
 "Enabled" = "Enabled";
 "Log only (do not refresh)" = "Log only (do not refresh)";
@@ -378,8 +378,6 @@
 "Watching" = "Watching";
 "Triggered · %lld s left" = "Triggered · %lld s left";
 "Cooling down · %lld s left" = "Cooling down · %lld s left";
-"RSRP at or below" = "RSRP at or below";
-"RSRP at or above" = "RSRP at or above";
 "dry-run %@ dBm → would refresh" = "dry-run %@ dBm → would refresh";
 "refreshed at %@ dBm" = "refreshed at %@ dBm";
 "refresh failed at %@ dBm" = "refresh failed at %@ dBm";
@@ -400,3 +398,9 @@
 "Starting" = "Starting";
 "Not available" = "Not available";
 "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back." = "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back.";
+
+/* Auto-refresh parameters get visible labels; direction picker removed (2026-10-14) */
+"Trigger threshold" = "Trigger threshold";
+"Sustained for" = "Sustained for";
+"Cooldown" = "Cooldown";
+"Sample every" = "Sample every";
