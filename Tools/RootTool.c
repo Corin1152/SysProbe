@@ -501,6 +501,44 @@ static int thermal_read_disabled(int *disabledOut, const char **error) {
     return 0;
 }
 
+/// 从任意路径读一个 plist 字典。读不到、或者根本不是字典，都返回 NULL。
+///
+/// 与 `thermal_load` 分开写而不是复用它：那个函数的路径是**写死的**
+/// （`SYSPROBE_DISABLED_PLIST`），而这里要读的是守护进程的状态文件。
+/// 两者唯一的共同点是「都是 plist」，合并只会给 `thermal_load` 多一个参数、
+/// 多一处可能传错的位置，换不来什么。
+static CFDictionaryRef plist_dict_at(const char *path) {
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        kCFAllocatorDefault, (const UInt8 *)path, (CFIndex)strlen(path), false);
+    if (url == NULL) {
+        return NULL;
+    }
+
+    CFReadStreamRef stream = CFReadStreamCreateWithFile(kCFAllocatorDefault, url);
+    CFRelease(url);
+    if (stream == NULL) {
+        return NULL;
+    }
+    if (!CFReadStreamOpen(stream)) {
+        CFRelease(stream);
+        return NULL;
+    }
+
+    CFPropertyListRef plist = CFPropertyListCreateWithStream(
+        kCFAllocatorDefault, stream, 0, kCFPropertyListImmutable, NULL, NULL);
+    CFReadStreamClose(stream);
+    CFRelease(stream);
+
+    if (plist == NULL) {
+        return NULL;
+    }
+    if (CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
+        CFRelease(plist);
+        return NULL;
+    }
+    return (CFDictionaryRef)plist;
+}
+
 /// `daemon-kill`：杀掉还在跑的频段刷新守护进程（按状态文件里记录的 pid）。
 ///
 /// ── 为什么需要它（2026-10-14）───────────────────────────────────────────────
@@ -516,18 +554,36 @@ static int thermal_read_disabled(int *disabledOut, const char **error) {
 /// 用 SIGKILL 而不是 SIGTERM：守护进程把 TERM/HUP 都设成了忽略（守护进程化），
 /// 只有 KILL 能停它。它本来就是无状态轮询进程，被杀没有任何善后问题 ——
 /// 状态文件会在新进程起来后的第一秒被覆盖。
+///
+/// ── 读状态文件必须走 CoreFoundation（2026-10-14 修）─────────────────────────
+///
+/// 这是 **`.c`**，不是 `.m`：整个工具是纯 C + CoreFoundation，没有开 ARC，也
+/// 没有链接 Objective-C 运行时。所以 `[NSDictionary dictionaryWithContentsOfFile:]`
+/// 这类写法在编译期就过不去 ——
+///     error: use of undeclared identifier 'NSDictionary'
+/// 它是随这一版**第一次**上 CI 的，本地从没验过。
 static int do_daemon_kill(void) {
-    NSDictionary *s = [NSDictionary dictionaryWithContentsOfFile:
-        SYSPROBE_BAND_STATE_PATH];
-    if (![s isKindOfClass:[NSDictionary class]]) {
+    CFDictionaryRef state = plist_dict_at(SYSPROBE_BAND_STATE_PATH);
+    if (state == NULL) {
         return SYSPROBE_EXIT_OK;   // 没有状态文件 = 从来没跑过。
     }
 
-    id pidObj = s[@"pid"];
-    if (![pidObj respondsToSelector:@selector(intValue)]) {
-        return SYSPROBE_EXIT_OK;
+    pid_t pid = 0;
+    CFTypeRef value = CFDictionaryGetValue(state, CFSTR("pid"));
+    // 正常写法是 CFNumber。也认 CFString —— 状态文件由守护进程写，
+    // 而跨进程落盘的整数有时会变成字符串，认一个总比静默失败好。
+    if (value != NULL) {
+        if (CFGetTypeID(value) == CFNumberGetTypeID()) {
+            int number = 0;
+            if (CFNumberGetValue((CFNumberRef)value, kCFNumberIntType, &number)) {
+                pid = (pid_t)number;
+            }
+        } else if (CFGetTypeID(value) == CFStringGetTypeID()) {
+            pid = (pid_t)CFStringGetIntValue((CFStringRef)value);
+        }
     }
-    pid_t pid = (pid_t)[pidObj intValue];
+    CFRelease(state);
+
     if (pid <= 0) {
         return SYSPROBE_EXIT_OK;
     }

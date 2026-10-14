@@ -436,14 +436,15 @@ struct AutoRefreshPanels: View {
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
+}
 
-    /// 倒计时锚点：拿到剩余秒数的那一刻，以及那一刻的剩余值。
-    ///
-    /// `nonisolated`：它只是一对值，不碰任何 UI 状态；默认的 MainActor 隔离会让
-    /// `Equatable` 的合成实现与协议要求（`nonisolated`）对不上，Swift 6 语言模式下
-    /// 直接编译不过。
-    nonisolated private struct CountdownAnchor: Equatable {
-        let at: Date
-        let remaining: Double
-    }
+/// 倒计时锚点：拿到剩余秒数的那一刻，以及那一刻的剩余值。
+///
+/// 放在**文件作用域**而不是 `AutoRefreshPanels` 里面 —— 与 `LegendLine`
+/// （`DashboardPanels.swift`）同一个理由：默认 MainActor 隔离下，嵌套类型的隔离
+/// 跟着外层走，而 `Equatable` 的合成实现必须是 `nonisolated` 的。它本来就只是
+/// 一对值，与那个视图没有任何关系。
+nonisolated private struct CountdownAnchor: Equatable {
+    let at: Date
+    let remaining: Double
 }
