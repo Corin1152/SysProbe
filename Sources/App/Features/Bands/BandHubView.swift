@@ -63,10 +63,17 @@ struct BandHubView: View {
                 .labelsHidden()
             },
             content: {
-                switch page {
-                case .lock: BandPanels(service: bands)
-                case .autoRefresh: AutoRefreshPanels()
+                // `.id(page)`：给内容一个显式 identity，分段一切换就丢弃旧子树、
+                // 构建新子树，不依赖 SwiftUI 对 `_ConditionalContent` 的自动判断 ——
+                // 用户报过的「极小概率点了分段没反应」正是那条路径最坏情况下丢了
+                // 一次更新（高亮变了、内容没变）。理由详注见 `PowerHubView`。
+                Group {
+                    switch page {
+                    case .lock: BandPanels(service: bands)
+                    case .autoRefresh: AutoRefreshPanels()
+                    }
                 }
+                .id(page)
             }
         )
     }

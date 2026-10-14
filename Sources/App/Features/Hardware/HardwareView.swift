@@ -195,8 +195,15 @@ struct HardwareView: View {
 /// 挂在 `HardwareView` 里的时候，每变一次整页都要重算 —— 而那几十次正好落在用户
 /// 盯着进度条的那几秒里，看起来就是「进度条一格一格地卡」。
 ///
-/// 独立出来之后，重算范围缩到这一块：进度条、两行文字、一个按钮。
-/// 页面上那四个面板（含 8 条每核占用条）一次都不再跟着动。
+/// 独立出来之后，重算范围缩到这一块：百分比与已分配量的那一行、结果三档读数、
+/// 一个按钮。页面上那四个面板（含 8 条每核占用条）一次都不再跟着动。
+///
+/// ── 为什么没有进度条（2026-10-14）───────────────────────────────────────────
+///
+/// 按用户要求去掉了 `ProgressView`，只保留百分比数字与已分配量。理由是它把这一块
+/// **从「几十行里变一行」拖成「一直在动」**：`ProgressView.value` 每收一次进度就会
+/// 走一遍自己的动画与轨迹重绘，而进度一轮要发 20 次（5% 一档）；百分比数字是文本，
+/// 一转就过，成本低一个量级。
 ///
 /// ── 为什么它自己不知道「优化结束要刷新内存读数」──────────────────────────────
 ///
@@ -236,9 +243,6 @@ private struct OptimizeSection: View {
             }
 
             switch optimizer.phase {
-            case .running(let progress, _):
-                ProgressView(value: progress)
-                    .tint(.mwAccent)
             case .finished(let before, let after, _):
                 let delta = Int64(after) - Int64(before)
                 HStack(spacing: 14) {
@@ -253,10 +257,10 @@ private struct OptimizeSection: View {
                 // `reason` 是运行期才知道的键（`MemoryOptimizer.Phase.failed`），
                 // 走 `EmptyNote(key:)` 直接查表，不经过 SwiftUI 的解析。
                 EmptyNote(key: reason, systemImage: "exclamationmark.triangle")
-            case .idle:
-                // 那段说明文字按用户要求去掉了：它把这块区域撑得很高，想说的其实只有
-                // 一句「这是一次推动，不是保证」。按钮标题加上下方的
-                // Before / After / Released，已经把做了什么、结果如何说清楚了。
+            default:
+                // `.running`（进度百分比与已分配量已经在上面那一行显示）与 `.idle`
+                // 都留空。原来这里 `.running` 会画一条 `ProgressView`，
+                // 2026-10-14 按用户要求去掉，理由见类型头。
                 EmptyView()
             }
 

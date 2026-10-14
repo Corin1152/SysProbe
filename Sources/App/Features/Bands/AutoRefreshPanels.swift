@@ -142,7 +142,57 @@ struct AutoRefreshPanels: View {
     }
 
     private var displayedLog: [String] {
-        config.backgroundDaemon ? daemon.state.log : controller.log
+        let lines = config.backgroundDaemon ? daemon.state.log : controller.log
+        // 两条路的日志要在这里归一成同一种语言：前台那条路本来就是本地化过的中文；
+        // 守护进程那一侧写的是英文原文（它进程里没有本地化能力），逐行翻过来。
+        // 见 `displayLine` —— 翻译只发生在界面上，状态文件里的原文不动。
+        return config.backgroundDaemon ? lines.map(Self.displayLine) : lines
+    }
+
+    /// 把守护进程报回来的日志行翻成界面文案。
+    ///
+    /// ── 为什么要单独翻一遍 ────────────────────────────────────────────────────
+    ///
+    /// 守护进程是一个 clang 直编的裸可执行文件，不带 `.lproj`，进程里也没有本地化
+    /// 能力 —— 它写进状态文件的是英文字面量。前台那条路（`BandAutoRefreshController`）
+    /// 用的是 `Strings.text(...)`，本来就是中文。两条路显示的同一件事却不一样语言，
+    /// 用户看着会以为后台那条坏了。
+    ///
+    /// **翻译只发生在界面上，状态文件保持英文原文** —— 那是对着真机日志排查问题时
+    /// 唯一能核对的凭据，跟着界面一起改会让两边对不上。
+    ///
+    /// 做法是按行为前缀映射到文案表里**已有的那些键**（前台那条路用的正是同一批），
+    /// 所以前后台说的是同一句话。认不出的行原样返回：守护进程以后新增行为不至于
+    /// 显示成空白。
+    private static func displayLine(_ line: String) -> String {
+        // 行首是 "HH:mm:ss "，后面才是内容。
+        guard let split = line.firstIndex(of: " ") else { return translated(line) }
+        let stamp = String(line[line.startIndex...split])
+        return stamp + translated(String(line[line.index(after: split)...]))
+    }
+
+    /// 日志里**除 RSRP 以外**的部分：去掉时间戳，按前缀映射到本地化文案。
+    private static func translated(_ body: String) -> String {
+        let payload: String = {
+            let words = body.components(separatedBy: " ")
+            return words.count >= 2 ? words[1] : ""
+        }()
+        if body.hasPrefix("dry-run ") {
+            return Strings.text("dry-run %@ dBm → would refresh", payload)
+        }
+        if body.hasPrefix("refreshed at ") {
+            return Strings.text("refreshed at %@ dBm", payload)
+        }
+        if body.hasPrefix("refresh failed at ") {
+            return Strings.text("refresh failed at %@ dBm", payload)
+        }
+        if body == "paused · Wi-Fi connected" {
+            return Strings.text("paused · Wi-Fi connected")
+        }
+        if body == "resumed · Wi-Fi disconnected" {
+            return Strings.text("resumed · Wi-Fi disconnected")
+        }
+        return body
     }
 
     /// 界面显示哪一侧的 Wi-Fi 状态。

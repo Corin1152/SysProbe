@@ -55,11 +55,21 @@ struct PowerHubView: View {
                 .labelsHidden()
             },
             content: {
-                switch page {
-                case .draw: DashboardPanels()
-                case .adapter: AdapterPanels()
-                case .control: ChargeControlPanels()
+                // `.id(page)`：给内容一个显式 identity —— 分段一切换，SwiftUI 就
+                // **丢弃旧子树、构建新子树**，不依赖它对 `_ConditionalContent` 的
+                // 自动判断。用户报过的「极小概率点了分段没反应」正是那条路径在最坏
+                // 情况下丢了一次更新：分段控件的高亮变了，而内容还停在上一段。
+                //
+                // 代价是内容全量重建 —— 那本来就是切分段的应有之义（两个分支是不同
+                // 的视图树），所以不额外多花任何东西。
+                Group {
+                    switch page {
+                    case .draw: DashboardPanels()
+                    case .adapter: AdapterPanels()
+                    case .control: ChargeControlPanels()
+                    }
                 }
+                .id(page)
             }
         )
     }
