@@ -10,10 +10,18 @@ import SwiftUI
 ///
 /// ── 两个分段 ────────────────────────────────────────────────────────────────
 ///
-///   · 「频段锁定」—— 勾选允许哪些频段（原 `BandPanels`，内容没动）；
-///   · 「自动刷新」—— 信号到阈值就刷新蜂窝信号（新增，`AutoRefreshPanels`）。
+///   · 「频段锁定」—— 勾选允许哪些频段（`BandPanels`，2026-10-14 起四个动作按钮
+///     从导航栏与页尾收成一排，放在页面顶部）；
+///   · 「频段刷新」—— 信号到阈值就刷新蜂窝信号（`AutoRefreshPanels`）。
 ///
 /// 两者读的是同一套基带状态，放在一起才说得清「锁了哪几个」与「什么时候刷新」。
+///
+/// ── 右上角 ────────────────────────────────────────────────────────────────
+///
+/// 只有一个齿轮，装「关于」，由外壳 `PageHubScaffold` 渲染。2026-10-14 之前频段页
+/// 把外壳的齿轮关掉、自己在导航栏声明「保存 / 刷新 / 齿轮」三个按钮，为的是控制它们
+/// 的顺序；现在那四个动作全部搬进了「频段锁定」分段内部（见 `BandPanels.actionRow`），
+/// 这一层不再需要自定义工具栏。
 struct BandHubView: View {
 
     /// 右上角齿轮的回调，由 `RootView` 给。
@@ -26,10 +34,6 @@ struct BandHubView: View {
             title: page.title,
             glow: .mwAccent,
             openSettings: openSettings,
-            // 齿轮不在外壳渲染：trailing 区三个按钮（保存 / 刷新 / 齿轮）的顺序
-            // 必须是「保存最左、齿轮最右」，而父子两处 `.toolbar` 合并时父级
-            // 声明的排最左 —— 齿轮必须由内容层自己在分组末尾声明，见 `BandPanels`。
-            showsGear: false,
             header: {
                 Picker("Bands", selection: $page) {
                     ForEach(BandSegment.allCases) { segment in
@@ -41,8 +45,8 @@ struct BandHubView: View {
             },
             content: {
                 switch page {
-                case .lock: BandPanels(openSettings: openSettings)
-                case .autoRefresh: AutoRefreshPanels(openSettings: openSettings)
+                case .lock: BandPanels()
+                case .autoRefresh: AutoRefreshPanels()
                 }
             }
         )

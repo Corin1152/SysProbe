@@ -123,7 +123,14 @@ final class BandRefreshDaemonBridge: ObservableObject {
         let current = loadState(interval: config.sampleIntervalSec)
 
         DispatchQueue.main.async { [weak self] in
-            self?.state = current
+            guard let self else { return }
+            // **只在真的变了才发布。**
+            //
+            // 看门狗每 10 秒一轮，而绝大多数轮次读回来的状态与上一轮一字不差
+            // （没触发、没刷新、日志没动）。无条件赋值会让观察它的那一页每 10 秒
+            // 把 body 整页重算一遍 —— 撞在滚动的某一帧上就是一次掉帧，而那一帧
+            // 里其实什么都没发生。
+            if self.state != current { self.state = current }
         }
 
         // 只有「本该在跑却没在跑」才拉。关掉后台开关之后这里必须安静 ——
@@ -140,7 +147,10 @@ final class BandRefreshDaemonBridge: ObservableObject {
         queue.async { [weak self] in
             guard let self else { return }
             let s = self.loadState(interval: interval)
-            DispatchQueue.main.async { self.state = s }
+            // 与 `tick` 同一条理由：没变就不发布，别让整页白重算一次。
+            DispatchQueue.main.async {
+                if self.state != s { self.state = s }
+            }
         }
     }
 

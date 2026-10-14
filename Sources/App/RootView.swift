@@ -242,24 +242,17 @@ struct PageHubScaffold<Header: View, Content: View>: View {
     /// 打开“关于”弹层。与 `PageScaffold` 同一个齿轮，同一条理由：
     /// 传动作，不传 `AppState`。
     var openSettings: @MainActor () -> Void
-    /// 是否由外壳渲染右上角齿轮。默认开；**频段页关掉** —— 它的 trailing 区要放
-    /// 保存 / 刷新 / 齿轮三个按钮且顺序有要求（保存在最左、齿轮在最右），而父子
-    /// 两处 `.toolbar` 的合并顺序是父先子后，齿轮在外壳里声明就永远排最左。
-    /// 所以频段页由内容层自己在 ToolbarItemGroup 末尾声明齿轮。
-    var showsGear: Bool
     @ViewBuilder var header: () -> Header
     @ViewBuilder var content: () -> Content
 
     init(title: LocalizedStringKey,
          glow: Color = .mwAccent,
          openSettings: @escaping @MainActor () -> Void,
-         showsGear: Bool = true,
          @ViewBuilder header: @escaping () -> Header,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
         self.openSettings = openSettings
-        self.showsGear = showsGear
         self.header = header
         self.content = content
     }
@@ -280,14 +273,12 @@ struct PageHubScaffold<Header: View, Content: View>: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if showsGear {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button { openSettings() } label: {
-                            Image(systemName: "gearshape")
-                        }
-                        .tint(.mwAccent)
-                        .accessibilityLabel(Text("Settings"))
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { openSettings() } label: {
+                        Image(systemName: "gearshape")
                     }
+                    .tint(.mwAccent)
+                    .accessibilityLabel(Text("Settings"))
                 }
             }
         }

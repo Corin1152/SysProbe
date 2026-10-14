@@ -150,6 +150,17 @@ final class BandAutoRefreshController: ObservableObject {
     func start(slot: Int) {
         stop()
         self.slot = slot
+        // **关着就不排拍。**
+        //
+        // 2026-10-14 修的一条卡顿：这个定时器原来是「进页面就起」，之后每
+        // `sampleIntervalSec`（默认 2 秒）做一次同步 XPC（`sysprobe_signal_sync`）
+        // 外加一次 `@Published` 更新 —— 而功能本身可能一直是关着的。那是一次
+        // 白烧的 XPC 往返，加上整页 body 每 2 秒重算一遍：正好撞在滚动的某一帧上
+        // 就是一次掉帧。
+        //
+        // 打开开关时由调用方再调一次 `start`（见 `AutoRefreshPanels` 里那条
+        // `.onChange(of: config.enabled)`）。
+        guard BandAutoRefreshConfig.load().enabled else { return }
         // 配置每拍重读，所以这里只管把第一拍排上。
         scheduleNext()
     }
@@ -165,7 +176,21 @@ final class BandAutoRefreshController: ObservableObject {
     }
 
     private func scheduleNext() {
-        let interval = TimeInterval(BandAutoRefreshConfig.load().sampleIntervalSec)
+        let config = BandAutoRefreshConfig.load()
+        // 关掉之后从这一拍起就停表，不再排下一拍 —— 见 `start` 里那条说明。
+        //
+        // 停在这里而不是 `tick` 里：那一拍已经在跑了，让它跑完（顺手把 phase 归位），
+        // 由「排下一拍」这一个出口决定要不要继续。
+        guard config.enabled else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.timer?.invalidate()
+                self.timer = nil
+                self.phase = .idle
+            }
+            return
+        }
+        let interval = TimeInterval(config.sampleIntervalSec)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.timer?.invalidate()

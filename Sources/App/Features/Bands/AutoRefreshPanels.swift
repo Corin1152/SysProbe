@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 「自动刷新信号」分段。
+/// 「频段刷新」分段。
 ///
 /// 与「频段锁定」并列在「频段」分页下 —— 两者读的是同一套基带状态，放在一起才说得清
 /// 「锁了哪几个频段」与「什么时候刷新」的关系。
@@ -9,13 +9,9 @@ import SwiftUI
 ///
 /// 到点了执行 `sysprobe_refresh_modem()` —— 上游 CellularInfo 的「刷新蜂窝网络信号」
 /// 同款（`_CTServerConnectionResetModem`），让 modem 重载并重新注册，**CommCenter
-/// 进程不动**。它既不是杀掉蜂窝服务（页面底部那个救援按钮），也不改允许频段。
-/// 代价仍然是掉网数秒，所以默认关闭、且默认只写日志。
+/// 进程不动**。它既不是杀掉蜂窝服务（「频段锁定」分段顶部那个「重启」按钮），也不改
+/// 允许频段。代价仍然是掉网数秒，所以默认关闭、且默认只写日志。
 struct AutoRefreshPanels: View {
-
-    /// 右上角齿轮的回调，由 `BandHubView` 透传（这一页没有保存 / 刷新按钮，
-    /// 齿轮独自占 trailing 区 —— 外壳的齿轮在这页被关掉了，见 `BandHubView`）。
-    let openSettings: @MainActor () -> Void
 
     @StateObject private var controller = BandAutoRefreshController()
     /// 后台那条路的状态。单例由 `RootView` 起的看门狗喂，这里只是读它。
@@ -39,7 +35,11 @@ struct AutoRefreshPanels: View {
             .padding(.bottom, 24)
         }
         .task {
-            let preferred = BandService.preferredSlot()
+            // **必须丢到 detached 里跑**：`preferredSlot()` 里是几次**同步 XPC**
+            // （`sysprobe_slot_has_sim` 每次两下、`sysprobe_preferred_data_slot` 一下），
+            // 而 `.task` 跑在主 actor 上 —— 留在主线程会卡住进这一分段的第一帧。
+            // 与 `BandPanels` 同一条理由。
+            let preferred = await Task.detached { BandService.preferredSlot() }.value
             slot = preferred
             syncExecutor()
             // 幂等：它已经在跑就什么都不做。放在这里而不是只靠 RootView，
@@ -55,19 +55,12 @@ struct AutoRefreshPanels: View {
         }
         // 只有「换执行体」才需要动前台那条定时器：阈值之类的参数它自己会重读。
         .onChange(of: config.backgroundDaemon) { _ in syncExecutor() }
+        // 开关本身也要跟着：关着的时候那条定时器**完全不排拍**（`start` 里的守卫），
+        // 所以打开它必须重新 `start` 一次，否则界面上「开了」却一动不动。
+        .onChange(of: config.enabled) { _ in syncExecutor() }
         // 切走分段就停表。后台模式关着时 App 退后台本来也会被挂起；
         // 这里补的是「还在 App 里但不在这一页」那一段。
         .onDisappear { controller.stop() }
-        // 这一页 trailing 区只有齿轮一个（`PageHubScaffold` 的 `showsGear` 已关）。
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button { openSettings() } label: {
-                    Image(systemName: "gearshape")
-                }
-                .tint(.mwAccent)
-                .accessibilityLabel(Text("Settings"))
-            }
-        }
     }
 
     /// 前台定时器与后台守护进程**二选一**。

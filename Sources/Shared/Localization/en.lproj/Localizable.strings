@@ -249,7 +249,7 @@
 "Each SIM keeps its own band configuration." = "Each SIM keeps its own band configuration.";
 "Hide this page" = "Hide this page";
 "I understand" = "I understand";
-"Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users." = "Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users.";
+"Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" at the top of this page.\n\nThis feature is intended for advanced users." = "Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" at the top of this page.\n\nThis feature is intended for advanced users.";
 "Incorrect band settings may cause cellular network issues, such as \"No Service\"." = "Incorrect band settings may cause cellular network issues, such as \"No Service\".";
 "Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3." = "Network band configuration reads and writes baseband bands through Apple's private CoreTelephony interfaces. The call shape follows CellularInfo by DevelopCubeLab, licensed under the GNU GPL v3.";
 "No bands reported" = "No bands reported";
@@ -257,11 +257,13 @@
 "Restart" = "Restart";
 "Restart Cellular Service" = "Restart Cellular Service";
 "Restart cellular service?" = "Restart cellular service?";
+"Restore" = "Restore";
 "Restore Default" = "Restore Default";
 "Restore the default band settings?" = "Restore the default band settings?";
 "SIM Slot" = "SIM Slot";
 "Save" = "Save";
 "Save the current band settings?" = "Save the current band settings?";
+"Saved changes are written to the modem straight away." = "Saved changes are written to the modem straight away.";
 "Select All" = "Select All";
 "Show in Settings" = "Show in Settings";
 "Slot %d" = "Slot %d";
@@ -363,7 +365,7 @@
 /* Band page: save/refresh moved to the navigation bar (2026-10-03) */
 "Refresh" = "Refresh";
 "If something goes wrong" = "If something goes wrong";
-"You have unsaved changes. Use the checkmark in the top right to save them." = "You have unsaved changes. Use the checkmark in the top right to save them.";
+"You have unsaved changes. Tap \"Save\" to write them to the modem." = "You have unsaved changes. Tap \"Save\" to write them to the modem.";
 
 /* Band tab: page split into two segments, and the auto-refresh feature (2026-10-14) */
 "Band lock" = "Band lock";

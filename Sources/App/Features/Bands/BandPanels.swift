@@ -9,9 +9,19 @@ import SwiftUI
 /// `PageHubScaffold` 而不是 `PageScaffold`（后者的内容会被塞进它自己的 `ScrollView`，
 /// 变成滚动套滚动）。
 ///
-/// 右上角的保存 / 刷新 / 齿轮三个按钮走 `.toolbar` —— `toolbar` 会向上找到最近的
-/// `NavigationStack`（也就是 `BandHubView` 那一个）。分段被切走时这一层整体
-/// 消失，三个按钮随之消失，不会留在别的分段上。
+/// ## 四个动作按钮：一排，在「当前网络」卡片上方
+///
+/// 2026-10-14 定稿的布局：**恢复默认 / 重启蜂窝网络服务 / 刷新 / 保存** 四个按钮
+/// 并排一行，放在页面最顶部（「当前网络」卡片正上方）。它们原先分成两处 —— 保存与
+/// 刷新在导航栏右上，恢复默认与重启在页面最底部；导航栏那一版的问题是「保存」这个
+/// 最重要的动作离内容最远，而底部那两个逃生通道要滚过整页频段网格才够得着。
+///
+/// 顺序即优先级：**恢复 → 重启 → 刷新 → 保存**。前两个是「出事了怎么办」，
+/// 后两个是日常操作；把保存排在最后不是降级，而是它旁边必须有一个明确的参照物 ——
+/// 它写的是基带，而基带写错了靠的就是前两个按钮救回来。
+///
+/// 右上角只剩齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 频段页不再自己
+/// 声明工具栏项。
 ///
 /// ## 这一页是整个 App 里唯一会「写系统状态」的地方
 ///
@@ -35,10 +45,6 @@ import SwiftUI
 /// 是配合它一起加的第二道提示。
 struct BandPanels: View {
     @EnvironmentObject private var hardware: HardwareMonitor
-
-    /// 右上角齿轮的回调，由 `BandHubView` 透传（外壳的齿轮在这页被关掉了，
-    /// 因为三个按钮的顺序必须由这一层自己排，见下面 `.toolbar` 的说明）。
-    let openSettings: @MainActor () -> Void
 
     @StateObject private var service = BandService()
 
@@ -87,16 +93,14 @@ struct BandPanels: View {
                 if service.availability == .unavailable {
                     unavailablePanel
                 } else {
+                    // 四个动作按钮：一排，紧贴页面顶部（「当前网络」卡片上方）。
+                    //
+                    // 2026-10-14 定稿：保存 / 刷新从导航栏右上搬下来，恢复默认 /
+                    // 重启蜂窝网络服务从页面最底部搬上来，四个并排。
+                    actionRow
                     infoPanel
                     if service.slots.count > 1 { slotPanel }
                     bandPanels
-                    // 两个逃生通道（恢复默认 / 重启蜂窝网络服务）排在**页面最末尾**。
-                    //
-                    // 它们 2026-10-04 曾被挪到第二张（紧跟信息卡），理由是「写错频段
-                    // 之后要够得着，不该滚过整页频段网格」。2026-10-11 又按要求挪回
-                    // 底部 —— 那次的理由反过来了：它们长得像普通操作按钮，放在最上面
-                    // 反而离「保存」更近，误触的代价比「多滚一屏」大得多。
-                    actionPanel
                 }
             }
             .padding(.horizontal, 16)
@@ -129,41 +133,9 @@ struct BandPanels: View {
                 service.load(slot: slot)
             }
         }
-        // 保存与刷新放导航栏右上 —— 与上游 CellularInfo 同款。三个按钮的顺序
-        // （2026-10-14 定）从左到右是 **保存 → 刷新 → 齿轮**：保存是这一页最常用
-        // 也最重要的动作，紧挨内容；齿轮最右。齿轮在这里声明而不是外壳
-        // （`PageHubScaffold` 的 `showsGear` 为 false），因为父级声明的 toolbar 项
-        // 合并时排最左，留在那儿会变成「齿轮第一」。
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    // 第 2 层：默认还要再确认一次。
-                    if saveConfirm {
-                        showSaveConfirm = true
-                    } else {
-                        save()
-                    }
-                } label: {
-                    Image(systemName: "checkmark")
-                }
-                .disabled(!hasUnsavedChanges)
-                .accessibilityLabel(Text("Save"))
-
-                Button {
-                    service.load(slot: slot)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .disabled(service.isLoading || service.availability == .unavailable)
-                .accessibilityLabel(Text("Refresh"))
-
-                Button { openSettings() } label: {
-                    Image(systemName: "gearshape")
-                }
-                .tint(.mwAccent)
-                .accessibilityLabel(Text("Settings"))
-            }
-        }
+        // 右上角只有齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 这一层
+        // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
+        // `.toolbar` 排在导航栏右侧，现在这四个动作全部搬到页面顶部（见 `actionRow`）。
         .onChange(of: service.bandInfo) { _ in
             syncSelectionFromModem()
         }
@@ -189,7 +161,7 @@ struct BandPanels: View {
                 showBandEditor = false
             }
         } message: {
-            Text("Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" below.\n\nThis feature is intended for advanced users.")
+            Text("Incorrect band settings can cause network problems, prevent the device from registering on the network, or result in \"No Service\".\n\nDo not disable every band of a network type — that can break VoLTE, VoNR, voice calls and SMS.\n\nSettings persist across reboots. If anything goes wrong, use \"Restore Default\" or \"Restart Cellular Service\" at the top of this page.\n\nThis feature is intended for advanced users.")
         }
         .confirmationDialog(
             Text(verbatim: Strings.text("Save the current band settings?")),
@@ -432,50 +404,90 @@ struct BandPanels: View {
 
     // MARK: - 动作
 
-    /// 两个逃生通道，并排一行。
+    /// 四个动作按钮，并排一行，在页面最顶部（「当前网络」卡片上方）。
     ///
-    /// **保存不在这里** —— 它按上游的位置放在导航栏右上。剩下这两件都与「保存」
-    /// 刻意解耦：恢复默认是写错之后的主要逃生通道，重启蜂窝网络是另一个；
-    /// 把它们并进保存流程等于替用户做了决定。
+    /// 2026-10-14 定稿的排布与顺序：**恢复默认 → 重启蜂窝网络服务 → 刷新 → 保存**。
     ///
-    /// 布局照维护页那两个破坏性按钮（`HStack` + 等宽 + 上图标下文字）：两页都是
-    /// 「按下去会立刻改变系统状态」的操作，长得不一样只会让人多犹豫一次。
-    /// 上面那句提示文案保留 —— 它回答「我改的东西存了没」。
-    private var actionPanel: some View {
-        Panel("If something goes wrong", systemImage: "lifepreserver") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    rescueButton(title: "Restore Default",
-                                 systemImage: "arrow.counterclockwise",
-                                 tint: .mwAccent) {
-                        showRestoreConfirm = true
-                    }
-                    rescueButton(title: "Restart Cellular Service",
-                                 systemImage: "antenna.radiowaves.left.and.right.slash",
-                                 tint: .mwDanger) {
-                        showRestartConfirm = true
+    /// 为什么是这四个挤成一排：这一页的操作以前散在两处 —— 保存与刷新在导航栏右上，
+    /// 两个逃生通道在页面最底部。右上角那一版的问题是「保存」这个最常用的动作离内容
+    /// 最远，而底部那两个要滚过整页频段网格才够得着。四合一之后，勾完同一屏里就能
+    /// 按下保存，出事了也一眼能看到「恢复」。
+    ///
+    /// 顺序即优先级：前两个救场，后两个日常。**把保存排最后不是降级** —— 它旁边必须
+    /// 有那两个逃生通道作参照：这一页写的是基带，而基带写错了靠的就是它们。
+    ///
+    /// 图标四枚，风格统一（都是 SF Symbols，16pt 半粗，线性实心混排）：
+    /// `arrow.counterclockwise`（恢复）、`antenna.radiowaves.left.and.right.slash`
+    /// （重启）、`arrow.clockwise`（刷新）、`checkmark`（保存）。
+    private var actionRow: some View {
+        // 显式的 `VStack` 而不是「一个 body 里两条语句」—— 前者不依赖隐式 result
+        // builder，任何工具链都编得过；视觉上就是「一排按钮 + 一行提示」。
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                actionButton(title: "Restore",
+                             systemImage: "arrow.counterclockwise",
+                             accessibilityLabel: "Restore Default",
+                             tint: .mwAccent,
+                             // 读不到的时候「恢复」一样写不进去（桥接层拿不到那个对象
+                             // 就直接失败），所以跟「刷新」一起禁掉 —— 不给一个按了
+                             // 没反应的按钮。
+                             disabled: service.isLoading || service.availability == .unavailable) {
+                    showRestoreConfirm = true
+                }
+                actionButton(title: "Restart",
+                             systemImage: "antenna.radiowaves.left.and.right.slash",
+                             accessibilityLabel: "Restart Cellular Service",
+                             tint: .mwDanger,
+                             disabled: service.isLoading) {
+                    showRestartConfirm = true
+                }
+                actionButton(title: "Refresh",
+                             systemImage: "arrow.clockwise",
+                             accessibilityLabel: "Refresh",
+                             tint: .mwAccent,
+                             disabled: service.isLoading || service.availability == .unavailable) {
+                    service.load(slot: slot)
+                }
+                actionButton(title: "Save",
+                             systemImage: "checkmark",
+                             accessibilityLabel: "Save",
+                             tint: .mwAccent,
+                             disabled: !hasUnsavedChanges) {
+                    // 第 2 层：默认还要再确认一次。
+                    if saveConfirm {
+                        showSaveConfirm = true
+                    } else {
+                        save()
                     }
                 }
-                // 与维护页同一条理由：一行里放多个按钮时默认样式会把整行当成一个
-                // 命中区域，点哪儿都会把行内所有按钮一起触发。
-                .buttonStyle(.borderless)
-
-                Text(hasUnsavedChanges
-                     ? "You have unsaved changes. Use the checkmark in the top right to save them."
-                     : "Saved changes are written to the modem straight away.")
-                    .font(AppFont.text(11))
-                    .foregroundStyle(Color.mwMuted)
             }
+            // 与维护页同一条理由：一行里放多个按钮时默认样式会把整行当成一个
+            // 命中区域，点哪儿都会把行内所有按钮一起触发。
+            .buttonStyle(.borderless)
+
+            // 提示文案回答「我改的东西存了没」。它跟着按钮走 —— 按钮挪到顶部之后，
+            // 这句话就不再需要滚到底才看得到了。
+            Text(hasUnsavedChanges
+                 ? "You have unsaved changes. Tap \"Save\" to write them to the modem."
+                 : "Saved changes are written to the modem straight away.")
+                .font(AppFont.text(11))
+                .foregroundStyle(Color.mwMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     /// 与维护页 `DeviceActionButton` 同构：上图标、下文字、等宽、居中。
     ///
+    /// 四枚按钮共用这一个外形（等宽、圆角底色、图标在上）—— 长得不一样只会让人
+    /// 在按下去之前多犹豫一次，而这一页按下去就会改基带。
+    ///
     /// 闭包类型写成 `@MainActor () -> Void` 而不是 `() -> Void`：闭包体里要碰主
     /// actor 隔离的状态，而项目默认主 actor 隔离，`() -> Void` 会在这里丢掉隔离域。
-    private func rescueButton(title: LocalizedStringKey,
+    private func actionButton(title: LocalizedStringKey,
                               systemImage: String,
+                              accessibilityLabel: LocalizedStringKey,
                               tint: Color,
+                              disabled: Bool = false,
                               tap: @escaping @MainActor () -> Void) -> some View {
         // 用 `Button { tap() } label:` 而不是 `Button(action: tap)`：后者要把闭包直接
         // 交给 SwiftUI，会再撞一次上面那个隔离域转换的问题。
@@ -487,7 +499,7 @@ struct BandPanels: View {
                     .font(.system(size: 16, weight: .semibold))
                 Text(title)
                     .font(AppFont.text(12, weight: .semibold))
-                    // 英文「Restart Cellular Service」比中文长得多，窄屏上要能缩。
+                    // 四列里每列只有屏宽的四分之一多一点，窄屏上要能缩。
                     .lineLimit(2)
                     .minimumScaleFactor(0.7)
                     .multilineTextAlignment(.center)
@@ -502,6 +514,8 @@ struct BandPanels: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel(Text(accessibilityLabel))
     }
 
     private var unavailablePanel: some View {
