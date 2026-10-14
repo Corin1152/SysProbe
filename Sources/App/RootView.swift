@@ -86,17 +86,17 @@ struct RootView: View {
     /// 把开关关掉之后整个分页消失（原来它是消失一个分段）。
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
-            HardwareView(openSettings: openSettings, isActive: app.selectedTab == 0)
+            HardwareView(openSettings: openSettings)
                 .tabItem { Label("Hardware", systemImage: "cpu") }
                 .tag(0)
-            PowerHubView(openSettings: openSettings, isActive: app.selectedTab == 1)
+            PowerHubView(openSettings: openSettings)
                 .tabItem { Label("Power", systemImage: "bolt.fill") }
                 .tag(1)
-            MaintenanceHubView(openSettings: openSettings, isActive: app.selectedTab == 2)
+            MaintenanceHubView(openSettings: openSettings)
                 .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
                 .tag(2)
             if showBandEditor {
-                BandHubView(openSettings: openSettings, isActive: app.selectedTab == 3)
+                BandHubView(openSettings: openSettings)
                     .tabItem { Label("Bands", systemImage: "antenna.radiowaves.left.and.right") }
                     .tag(3)
             }
@@ -156,74 +156,6 @@ struct MonitorLifecycle: View {
     }
 }
 
-/// 只在「这一页真的在屏幕上」时才求值它的内容。
-///
-/// ── 为什么需要它 ────────────────────────────────────────────────────────────
-///
-/// `TabView` 会把切走的分页留在视图树里 —— 那正是它保留滚动位置与状态的方式，
-/// 也是「切回来还在原处」的原因。代价是：分页里的视图**照旧每秒重算**，因为它们
-/// 观察着 `PowerMonitor` / `HardwareMonitor` / `ChargeControlService` 这些每秒发布
-/// 一次的对象。
-///
-/// 于是用户停在硬件页时，电源页（六个面板 + 圆环）、频段页（40 多个频段格子）、
-/// 充电页仍在各自每秒把 body 跑一遍 —— 三页加起来十几毫秒，正好是一帧的时间。
-/// 表现就是「不管在哪一页，滑动和切分段都偶尔顿一下」。
-///
-/// ── 为什么是等高占位，而不是干脆不渲染 ──────────────────────────────────────
-///
-/// 直接不渲染，滚动容器的内容高度会塌成 0，切回来时 `ScrollView` 会把偏移量钳回
-/// 顶部 —— 那是用户看得见的行为变化。记住上一次的高度、用等高占位顶住，切回来时
-/// 布局与滚动位置都不动。
-///
-/// 高度只在**可见期间**记录一次（`onAppear`）：切走之后内容不再求值，那时没有更好
-/// 的时机。它是近似值，而它只影响「切走期间占位多高」，不影响切回来之后的内容。
-///
-/// ── 为什么不用 `onChange` 跟着高度变 ──────────────────────────────────────────
-///
-/// 0.0.61 第一版是跟着写的， motivo 是「占位高度更准」。但它把一次 `@State` 写入
-/// 放在了分段切换的路径上：分段一切换内容高度就变 → 写 `height` → `DeferredContent`
-/// 连同整个外壳重算一次。那正是用户报的「滑块闪一下就弹回」的诱因之一 —— 点击之后
-/// 紧跟着一次计划外的重算。
-///
-/// 高度准一点只是切走期间那几秒的事（用户根本看不见），而它换来的是切换路径上一处
-/// 稳定的竞争源。所以只记一次，宁近似。
-struct DeferredContent<Content: View>: View {
-
-    /// 这一页现在在不在屏幕上。
-    let isVisible: Bool
-
-    @ViewBuilder var content: () -> Content
-
-    @State private var height: CGFloat = 0
-
-    var body: some View {
-        Group {
-            if isVisible {
-                content()
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.onAppear { height = proxy.size.height }
-                        }
-                    )
-            } else {
-                Color.clear.frame(height: height)
-            }
-        }
-        // 切回来时淡入，而不是「啪」地跳出来。
-        //
-        // 这一步是 0.0.61 引入「不可见就停止求值」之后补的代价：切回分页时内容要
-        // 整页重建，重建落在一帧里就是一次跳变（用户报过的「页面切换动画生硬」）。
-        //
-        // ── 为什么是 60ms（2026-10-14 定）────────────────────────────────────
-        // 120ms 太长：用户后来反馈「切换发肉、等得起腻」。60ms 足够盖住重建那一帧
-        // 的跳变，又短到几乎察觉不到是一个「动画」—— 手感接近即时，只是不再跳。
-        // 真正拖后腿的是内容重建本身，见 `HardwareCard`（把每页拆成卡片，稳态重算
-        // 不再牵动整页外壳）。
-        .transition(.opacity)
-        .animation(.easeOut(duration: 0.06), value: isVisible)
-    }
-}
-
 /// Shared page chrome: the instrument backdrop behind a scrolling column of panels.
 ///
 /// 2026-10-14：**齿轮回来了**，它装的是「关于」（版本 / 发布日期 / 诊断）。
@@ -232,13 +164,6 @@ struct DeferredContent<Content: View>: View {
 struct PageScaffold<Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color
-    /// 这一页现在是不是选中的那个分页。
-    ///
-    /// 由 `RootView` 按 `selectedTab` 给。**不用 `onAppear` / `onDisappear` 判**：
-    /// 那一对回调的触发时机取决于 `TabView` 什么时候创建分页的视图，而这里要的是
-    /// 确定的答案 —— 非当前分页必须**停止求值内容**，否则它会跟着每秒一次的采样
-    /// 一直重算（详见 `DeferredContent`）。
-    var isActive: Bool = true
     /// 标题样式。默认大标题；**带分段控件的分页要用 `.inline`** ——
     /// 大标题会占掉整整一行半的高度，而分段控件就压在它下面，两者叠起来第一屏
     /// 几乎看不到内容。见 `PageHubScaffold`。
@@ -251,13 +176,11 @@ struct PageScaffold<Content: View>: View {
 
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
-         isActive: Bool = true,
          titleDisplayMode: NavigationBarItem.TitleDisplayMode = .large,
          openSettings: @escaping @MainActor () -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
-        self.isActive = isActive
         self.titleDisplayMode = titleDisplayMode
         self.openSettings = openSettings
         self.content = content
@@ -272,7 +195,7 @@ struct PageScaffold<Content: View>: View {
                 Backdrop(glow: glow).equatable()
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        DeferredContent(isVisible: isActive) { content() }
+                        content()
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
@@ -318,8 +241,6 @@ struct PageScaffold<Content: View>: View {
 struct PageHubScaffold<Header: View, Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color
-    /// 这一页现在是不是选中的那个分页。见 `PageScaffold.isActive`。
-    var isActive: Bool = true
     /// 打开“关于”弹层。与 `PageScaffold` 同一个齿轮，同一条理由：
     /// 传动作，不传 `AppState`。
     var openSettings: @MainActor () -> Void
@@ -328,13 +249,11 @@ struct PageHubScaffold<Header: View, Content: View>: View {
 
     init(title: LocalizedStringKey,
          glow: Color = .mwAccent,
-         isActive: Bool = true,
          openSettings: @escaping @MainActor () -> Void,
          @ViewBuilder header: @escaping () -> Header,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
-        self.isActive = isActive
         self.openSettings = openSettings
         self.header = header
         self.content = content
@@ -351,8 +270,7 @@ struct PageHubScaffold<Header: View, Content: View>: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 2)
                         .padding(.bottom, 8)
-                    // 只有选中的分页才求值分段内容 —— 见 `DeferredContent`。
-                    DeferredContent(isVisible: isActive) { content() }
+                    content()
                 }
             }
             .navigationTitle(title)

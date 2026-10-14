@@ -171,6 +171,8 @@
 "Credits" = "致谢";
 "Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only." = "功率与适配器读数移植自 MiniWatts，© MiniWatts 作者，以 Apache License 2.0 授权。数据取自 Apple 的私有 IOKit 接口，全部只读、无任何写入 —— 这也是本 App 只能侧载的原因。";
 "Plug in a charger to read the adapter's handshake." = "接入充电器后可读取适配器握手信息。";
+"Plug in a charger to read its advertised profiles." = "接入充电器后可读取它广播的档位表。";
+"Plug in a charger to measure the path." = "接入充电器后可测量这条通路的压降与损耗。";
 "Loss" = "损耗";
 "Actual" = "实际";
 "Rated" = "额定";

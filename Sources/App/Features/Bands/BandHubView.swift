@@ -38,10 +38,6 @@ struct BandHubView: View {
     /// 右上角齿轮的回调，由 `RootView` 给。
     let openSettings: @MainActor () -> Void
 
-    /// 这一页是不是当前选中的分页。见 `PageScaffold.isActive` —— 非当前分页会
-    /// 停止求值内容，不然它会跟着每秒一次的采样一直重算（`DeferredContent`）。
-    let isActive: Bool
-
     @State private var page: BandSegment = .lock
 
     /// 频段会话：基带读回来的数据 + 当前卡槽。见类型头上的说明。
@@ -51,25 +47,24 @@ struct BandHubView: View {
         PageHubScaffold(
             title: page.title,
             glow: .mwAccent,
-            isActive: isActive,
             openSettings: openSettings,
             header: {
-                // 自绘分段控件 —— 命中高度显式给定，切换不经过第二步同步。
-                // 理由见 `SegmentedTabs` 类型头。
-                SegmentedTabs(items: BandSegment.allCases, selection: $page, title: { $0.title })
-            },
-            content: {
-                // `.id(page)`：给内容一个显式 identity，分段一切换就丢弃旧子树、
-                // 构建新子树，不依赖 SwiftUI 对 `_ConditionalContent` 的自动判断 ——
-                // 用户报过的「极小概率点了分段没反应」正是那条路径最坏情况下丢了
-                // 一次更新（高亮变了、内容没变）。理由详注见 `PowerHubView`。
-                Group {
-                    switch page {
-                    case .lock: BandPanels(service: bands)
-                    case .autoRefresh: AutoRefreshPanels()
+                Picker("Bands", selection: $page) {
+                    ForEach(BandSegment.allCases) { segment in
+                        Text(segment.title).tag(segment)
                     }
                 }
-                .id(page)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            },
+            content: {
+                // 裸 `switch`，**不带 `.id(page)`** —— 理由见 `PowerHubView` 里那段：
+                // 加 identity 会让每次切换丢弃整棵子树再重建，而它要修的那个问题
+                // （系统分段控件的选中态被外壳重算重置）已经不存在了。
+                switch page {
+                case .lock: BandPanels(service: bands)
+                case .autoRefresh: AutoRefreshPanels()
+                }
             }
         )
     }

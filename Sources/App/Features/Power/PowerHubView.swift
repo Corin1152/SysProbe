@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// 「电源」分页 —— 原来的「电源 / 适配器 / 智充」三页收成这一页的分段。
+/// 「电源」分页 —— 「功率 / 充电控制」两个分段。
 ///
-/// ── 为什么要合 ──────────────────────────────────────────────────────────────
+/// ── 2026-10-14：从三个分段收成两个 ──────────────────────────────────────────
 ///
-/// 这三页回答的是同一件事的不同侧面：这一秒电从哪来、去了哪、怎么拦住它。
-/// 拆成三个底部分页之后，想对照「适配器给了 5 V」和「充电控制在 40% 停」要横跨两页，
-/// 而它们本来就该一起看。合成一页 + 分段控件，底部分页栏也腾出位置给了
-/// 「维护」和「关于」（那两页原来藏在齿轮里）。
+/// 「适配器」那一格去掉了：它去掉三张卡片之后剩下的「广播档位」与「线缆与连接」
+/// 并进了「功率」分段（理由见 `DashboardPanels` 头上那段）。现在这条分段栏回答的是
+/// 两个问题 —— **这一秒电从哪来、去了哪**，以及**怎么把它拦住**。
 ///
 /// ── 分段内容的约定 ──────────────────────────────────────────────────────────
 ///
@@ -19,86 +18,82 @@ import SwiftUI
 /// 等于几个页面同时跑每秒采样。
 struct PowerHubView: View {
 
-    /// **只观察低频上下文，不观察 `PowerMonitor`。**
+    /// **直接观察 `PowerMonitor`**（每秒发布一次）。
     ///
-    /// 这一层需要 `PowerMonitor` 的只有一件事：光晕按「降频 / 无线 / 插电」变色。
-    /// 而这三件事都是插拔级或分钟级的事件 —— 观察 `PowerMonitor` 的话，它每秒
-    /// 发布一次，于是**整个分页外壳（分段控件 + 当前分段的内容）每秒重算一遍**，
-    /// 即使这一页根本没在看。那正是「切分段偶尔顿一下、极小概率点了没反应」的来源：
-    /// 用户点分段的那一帧，正好撞上每秒一次的重算。
+    /// ── 2026-10-14：从 `PowerContext` 改回来 ──────────────────────────────────
     ///
-    /// 分页内容该实时还是实时 —— `DashboardPanels` 那些面板自己读 `PowerMonitor`。
-    @EnvironmentObject private var context: PowerContext
+    /// 0.0.61 前后把它换成 `PowerContext`，为的是「外壳不要跟着每秒重算」。方向没错，
+    /// 但当时是**和「非当前分段停止求值」一起改的**——那一套的代价（切换时分段内容
+    /// 整页重建、再补一层淡入去盖它）比这点收益大得多，用户实机对比 0.0.56 的结论是
+    /// 「56 版更流畅」。所以整体退回 0.0.56 的写法：外壳重算就重算，它只是几个
+    /// label 和一层背景；换来的是分段内容**从切走那一刻起就一直在**，切回来是
+    /// 已经画好的东西，不需要重建。
+    ///
+    /// 分段内容该实时还是实时 —— `DashboardPanels` 那些面板自己读 `PowerMonitor`。
+    @EnvironmentObject private var monitor: PowerMonitor
 
     /// 右上角齿轮的回调，由 `RootView` 给。
     let openSettings: @MainActor () -> Void
 
-    /// 这一页是不是当前选中的分页。见 `PageScaffold.isActive` —— 非当前分页会
-    /// 停止求值内容，不然它会跟着每秒一次的采样一直重算（`DeferredContent`）。
-    let isActive: Bool
-
     @State private var page: PowerSegment = .draw
+
+    private var snapshot: PowerSnapshot { monitor.snapshot }
 
     var body: some View {
         PageHubScaffold(
             title: page.title,
             glow: glow,
-            isActive: isActive,
             openSettings: openSettings,
             header: {
-                // 自绘分段控件（2026-10-14 换掉系统 `Picker`）—— 命中高度显式给定，
-                // 切换是「命中哪格写哪个值」，不再经过 SwiftUI ↔ UIKit 的第二步同步。
-                // 理由见 `SegmentedTabs` 类型头。
-                SegmentedTabs(items: PowerSegment.allCases, selection: $page, title: { $0.title })
-            },
-            content: {
-                // `.id(page)`：给内容一个显式 identity —— 分段一切换，SwiftUI 就
-                // **丢弃旧子树、构建新子树**，不依赖它对 `_ConditionalContent` 的
-                // 自动判断。用户报过的「极小概率点了分段没反应」正是那条路径在最坏
-                // 情况下丢了一次更新：分段控件的高亮变了，而内容还停在上一段。
-                //
-                // 代价是内容全量重建 —— 那本来就是切分段的应有之义（两个分支是不同
-                // 的视图树），所以不额外多花任何东西。
-                Group {
-                    switch page {
-                    case .draw: DashboardPanels()
-                    case .adapter: AdapterPanels()
-                    case .control: ChargeControlPanels()
+                Picker("Power", selection: $page) {
+                    ForEach(PowerSegment.allCases) { segment in
+                        Text(segment.title).tag(segment)
                     }
                 }
-                .id(page)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            },
+            content: {
+                // 裸 `switch`，**不带 `.id(page)`** —— 与 0.0.56 一致。
+                //
+                // 0.0.63 加过一层 `.id(page)`（为了让内容一定跟着分段换）。代价是
+                // 每次切换都**丢弃整棵子树再重建**：圆环、四行读数、档位表全部重新
+                // 布局一遍，那一帧就是用户看到的卡顿。而它要修的那个问题
+                // （「极小概率点了分段没反应」）在 0.0.63 换成自绘控件之后已经
+                // 不存在了 —— 那本来是系统 `UISegmentedControl` 的选中态被外壳
+                // 重算重置造成的，现在用的是系统分段控件但外壳不再拦截它的更新。
+                switch page {
+                case .draw: DashboardPanels()
+                case .control: ChargeControlPanels()
+                }
             }
         )
     }
 
     /// 背景光晕。规则住在 `PowerSegment.glow` —— 功率环的 tint 用的是同一个函数，
     /// 两处对不上时看起来像坏了。
-    ///
-    /// 输入取自 `context`（低频），不是 `monitor.snapshot`（每秒）。见上面那段说明。
     private var glow: Color {
         PowerSegment.glow(for: page,
-                          throttling: context.throttling,
-                          wirelessInput: context.wireless,
-                          externalConnected: context.externalConnected)
+                          throttling: monitor.thermalState.isThrottling,
+                          wirelessInput: snapshot.isWirelessInput,
+                          externalConnected: snapshot.externalConnected)
     }
 }
 
-/// 「电源」页的三个分段。
+/// 「电源」页的两个分段。
 ///
-/// 顺序是明确要求的：功率 → 适配器 → 充电控制。
-/// 从「电从哪来」到「怎么管它」，是一条能顺着读下去的线。
+/// 顺序是明确要求的：功率 → 充电控制。从「电从哪来」到「怎么管它」，
+/// 是一条能顺着读下去的线。
 ///
-/// 「电池信息」原本是第四个分段（2026-10-11 上午加的），当日下午按要求并进了
-/// 「充电控制」——它的两张卡片（电池 / 电池参数）现在排在那一页最后，
-/// 而原来那张「充电中」卡片被删掉了。
+/// 「适配器」原本是第二格（2026-10-11 加的），2026-10-14 随内容并入「功率」而取消 ——
+/// 见 `DashboardPanels` 头上那段。两个分段的文案键保持原样
+/// （`"Power draw"` / `"Charge control"`，中文落到「功率」/「充电控制」）。
 ///
 /// `title` 同时当分段标签与导航栏标题用 —— 一处定义，两处显示，不会漂移。
 enum PowerSegment: Int, CaseIterable, Identifiable {
-    /// 原 `DashboardView`（底部分页「电源」）。
+    /// 功率：圆环、电池、供电路径，以及从「适配器」迁来的广播档位 / 线缆与连接。
     case draw
-    /// 原 `AdapterView`（底部分页「适配器」）。
-    case adapter
-    /// 原「智充」页 —— 充电控制 + 电池信息。
+    /// 充电控制 + 电池信息。
     case control
 
     var id: Int { rawValue }
@@ -108,7 +103,6 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
         // 注意：**不是** "Power"。底部分页已经叫「电源」（键 "Power"），
         // 这里再叫一次会让「标题」与「分段标签」重名，用户看不出自己在哪一层。
         case .draw: return "Power draw"
-        case .adapter: return "Adapter"
         case .control: return "Charge control"
         }
     }
@@ -117,7 +111,6 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
     /// 合并之后不做统一 —— 那会把「热到降频」这类信号抹掉。
     ///
     ///   · 功率：降频时红色；无线充电紫色；插着电青色；电池供电橙色（`mwLoss`）；
-    ///   · 适配器：无线紫色，有线青色；
     ///   · 充电控制：电池绿。
     ///
     /// **两个调用点，必须是同一个值**：`PowerHubView` 拿它当整页光晕，
@@ -133,8 +126,6 @@ enum PowerSegment: Int, CaseIterable, Identifiable {
             if throttling { return .mwDanger }
             if wirelessInput { return .mwWireless }
             return externalConnected ? .mwAccent : .mwLoss
-        case .adapter:
-            return wirelessInput ? .mwWireless : .mwAccent
         case .control:
             return .mwBattery
         }

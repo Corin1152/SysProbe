@@ -1,22 +1,20 @@
 import SwiftUI
 
-/// 「电源」页的分段 1 —— 功率。原先是底部第 2 个分页。
+/// 「电源」页的分段 1 —— 功率。
 ///
-/// 2026-10-11 起它不再是一个独立分页，而是 `PowerHubView` 里的一个分段：
-/// 外壳（导航栈、画布、光晕、标题、分段控件）全部由 `PowerHubView` 提供，
-/// 这里只负责**滚动容器 + 面板**。
+/// ── 2026-10-14：适配器分段并进来了 ────────────────────────────────────────────
 ///
-/// 这样拆有一个必须守住的地方：`isVisible` 还是靠 `onAppear` / `onDisappear` 维护。
-/// 它决定实时曲线要不要每秒刷新 —— 分段被切走时视图会被销毁，`onDisappear` 照常触发，
-/// 所以「离开这一屏还在采样」不会发生。改动这里时别把这两个回调挪到外层。
+/// 「适配器」原本是与它并列的一个分段。去掉「实际 vs 额定」「握手信息」「实时供电轨」
+/// 三张卡片之后，那边剩下的两张 —— 「广播档位」与「线缆与连接」—— 说的都是
+/// 「这条充电链路本身怎么样」，与这一页的「功率从哪来、去了哪」是同一个问题的两面，
+/// 于是并到这里，分段栏从三格收成两格（功率 / 充电控制）。
+///
+/// 一并去掉的还有三张：**采样曲线图**（这一页最贵的一块，每秒重绘）、
+/// **本次充电**（充电过程中的累计量几乎不动）、**无传感器提示**（只在模拟器上出现，
+/// 真机永远读得到 HID 传感器）。散热横幅保留 —— 它是真实会发生、且与充电直接相关的
+/// 一条告警。
 struct DashboardPanels: View {
     @EnvironmentObject private var monitor: PowerMonitor
-
-    /// 这一段是不是正在显示。
-    ///
-    /// 以前读的是 `AppState.selectedTab`，但那意味着这一页得观察 `AppState`。
-    /// 换成本地状态，由 `onAppear` / `onDisappear` 维护，观察面就干净了。
-    @State private var isVisible = false
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
@@ -29,9 +27,8 @@ struct DashboardPanels: View {
                 if monitor.thermalState.isThrottling { throttleBanner }
                 batteryPanel
                 breakdownPanel
-                livePanel
-                sessionPanel
-                if !monitor.sensorsAvailable { sensorNote }
+                profilesPanel
+                connectionPanel
             }
             .padding(.horizontal, 16)
             // 顶上的 4 减到 2：分段控件已经给了 8 的下边距，再叠一层 4 就偏松了。
@@ -39,8 +36,6 @@ struct DashboardPanels: View {
             .padding(.bottom, 24)
             .mwContainerWidth()
         }
-        .onAppear { isVisible = true }
-        .onDisappear { isVisible = false }
     }
 
     /// 功率环的 tint。
@@ -92,8 +87,6 @@ struct DashboardPanels: View {
     private var wirelessInputUnmeasurable: Bool {
         plugged && snapshot.inputWatts == nil && snapshot.isWirelessInput
     }
-
-
 
     /// Full scale is the adapter's nameplate when it declares one, so the dial
     /// shows how much of the charger is actually being used.
@@ -234,65 +227,170 @@ struct DashboardPanels: View {
         return efficiency >= 85 ? .mwBattery : (efficiency >= 70 ? .mwLoss : .mwDanger)
     }
 
-    // MARK: Live
+    // MARK: Profiles（2026-10-14 从「适配器」分段迁入）
 
-    private var livePanel: some View {
-        Panel("Last 3 minutes", systemImage: "waveform.path.ecg",
-              trailing: Text("\(monitor.live.count) samples")) {
-            VStack(alignment: .leading, spacing: 8) {
-                // 没在看这一页时只占位、不建图：`TabView` 会把切走的分页留在视图树里，
-                // 采样一发布这张图就跟着重算 —— 它是重渲染里最贵的一块。占位高度与图
-                // 一致（`LivePowerChart` 默认 130），切回来时布局不跳。
-                if isVisible {
-                    LivePowerChart(samples: monitor.live)
-                } else {
-                    Color.clear.frame(height: 130)
-                }
-                HStack(spacing: 14) {
-                    LegendDot(color: .mwAccent, text: "From charger")
-                    LegendDot(color: .mwBattery, text: "Into battery", dashed: true)
-                }
-            }
-        }
-    }
-
-    // MARK: Session
-
-    private var sessionPanel: some View {
-        Panel("This charge", systemImage: "sum",
-              trailing: monitor.currentSession.map { Text(verbatim: Formatting.duration($0.duration)) } ?? Text("idle")) {
-            if monitor.currentSession != nil {
-                let totals = monitor.sessionTotals
-                VStack(spacing: 12) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Metric(caption: "Delivered",
-                               value: totals.measuredInputWattHours.map { String(format: "%.2f", $0) } ?? "—",
-                               unit: "Wh", tint: .mwAccent, size: 20)
-                        Metric(caption: "Stored",
-                               value: String(format: "%.2f", totals.batteryWattHours),
-                               unit: "Wh", tint: .mwBattery, size: 20)
-                    }
-                    HStack(alignment: .top, spacing: 10) {
-                        Metric(caption: "Into cell",
-                               value: String(format: "%.0f", totals.batteryMilliAmpHours),
-                               unit: "mAh", size: 20)
-                        Metric(caption: "Round trip",
-                               value: totals.efficiencyPercent.map { String(format: "%.0f", $0) } ?? "—",
-                               unit: "%", tint: .mwLoss, size: 20)
-                    }
-                }
-            } else {
-                EmptyNote(text: "Plug in to start measuring. Energy is integrated from the live sensors while the app is open, and saved to History when you unplug.",
+    /// 适配器广播的 PD 档位表，当前生效的那一档带勾。
+    ///
+    /// 未插电时给一句空态而不是把「没有广播档位表」那句显示出来 —— 后者描述的是
+    /// 「充电器不上报」，没接充电器时说这句话是错的。
+    private var profilesPanel: some View {
+        Panel("Advertised profiles", systemImage: "list.bullet.rectangle",
+              trailing: snapshot.adapterProfiles.isEmpty ? nil : Text(verbatim: "\(snapshot.adapterProfiles.count)")) {
+            if !plugged {
+                EmptyNote(text: "Plug in a charger to read its advertised profiles.",
                           systemImage: "powerplug")
+            } else if snapshot.adapterProfiles.isEmpty {
+                EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(snapshot.adapterProfiles) { profile in
+                        ProfileRow(profile: profile,
+                                   isActive: profile.index == snapshot.negotiatedProfile?.index)
+                    }
+                }
             }
         }
     }
 
-    private var sensorNote: some View {
-        Panel("Sensors", systemImage: "sensor") {
-            EmptyNote(text: "No HID power sensors were found. On the simulator this is expected — IOKit reads the Mac's battery and the phone's PMU sensors do not exist. Run on the device for real numbers.",
-                      systemImage: "exclamationmark.triangle")
+    // MARK: Connection（2026-10-14 从「适配器」分段迁入）
+
+    /// What the cable and the two plugs are costing.
+    ///
+    /// The cable itself cannot be identified from the phone: while charging the
+    /// phone is the sink, so it is the charger that reads the cable's e-marker, and
+    /// none of that reaches iOS — `IOPortTransportComponentCCUSBPDSOPp` does not even
+    /// exist there. What is measurable is the consequence, and there are two ways to
+    /// get at it, which fail in opposite conditions:
+    ///
+    /// - `PathResistanceMeter` fits the port voltage against the current and needs no
+    ///   reference voltage, but needs the current to have moved.
+    /// - `PowerSnapshot.inputPathMilliohms` divides the drop from the negotiated
+    ///   voltage by the current, which answers immediately but trusts a contract
+    ///   figure that is a ceiling rather than a reading.
+    ///
+    /// The bad-cable case is exactly where the fit goes quiet: a collapsed rail pins
+    /// the current, so there is nothing to fit a slope to. Hence both, with the panel
+    /// saying which one it is showing.
+    private var connectionPanel: some View {
+        Panel("Cable and connection", systemImage: "cable.connector.horizontal",
+              trailing: monitor.pathResistance.map { Text("\($0.sampleCount) samples") }) {
+            if !plugged {
+                EmptyNote(text: "Plug in a charger to measure the path.",
+                          systemImage: "powerplug")
+            } else if let resistance {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Metric(caption: "Path resistance",
+                               value: String(format: "%.0f", resistance.milliohms),
+                               unit: "mΩ",
+                               tint: resistanceTint(resistance.milliohms),
+                               footnote: resistance.fitted
+                                   ? Text("fitted over the whole contract")
+                                   : Text("from one sample"),
+                               size: 22)
+                        Metric(caption: "Voltage drop",
+                               value: snapshot.inputVoltageDropVolts.map { String(format: "%.2f", $0) } ?? "—",
+                               unit: "V",
+                               tint: isSagging ? .mwDanger : .primary,
+                               // Copy with a measurement inside it, so the sentence
+                               // is extracted and the number is not.
+                               footnote: snapshot.usbInputVoltage.map { Text("\(String(format: "%.2f V", $0)) at the port") },
+                               size: 22)
+                    }
+                    HStack(alignment: .top, spacing: 10) {
+                        Metric(caption: "Lost in the path",
+                               value: snapshot.usbInputCurrent.map {
+                                   Formatting.watts(resistance.milliohms / 1000 * $0 * $0)
+                               } ?? "—",
+                               unit: "W",
+                               tint: .mwLoss,
+                               footnote: Text("at the current draw"),
+                               size: 22)
+                        Metric(caption: "Taking",
+                               value: snapshot.inputCurrentUtilisation.map { String(format: "%.0f", $0 * 100) } ?? "—",
+                               unit: "%",
+                               tint: (snapshot.inputCurrentUtilisation ?? 1) < 0.6 ? .mwLoss : .primary,
+                               footnote: Text("of the current on offer"),
+                               size: 22)
+                    }
+                    // 这里原本还有两段解释文字：`resistanceVerdict(...)`（按阻值分档给
+                    // 一句「正常 / 偏高」的判词）与 `provenance`（这个数字是拟合出来的
+                    // 还是单次采样算的）。2026-10-11 按要求去掉 —— 四行读数本身已经把
+                    // 「通路电阻 / 压降 / 损失 / 占用量」说清楚了，下面再堆三小段灰字
+                    // 只会把卡片拉长。
+                    //
+                    // 2026-10-14 又去掉了卡片顶部那段压降告警（`sagBanner`）：它是
+                    // 一整块红底长句，而「压降偏低」这件事下面那个读数已经用变色表达
+                    // 了，两者叠在一起是同一个信号的两次广播。
+                    //
+                    // 唯一损失的是「这个数是拟合的还是单次采样的」这个出处提示，
+                    // 它仍然在「通路电阻」那个读数的脚注里（`fitted over the whole
+                    // contract` / `from one sample`），只是不再展开解释。
+                }
+            } else if snapshot.isWirelessInput || snapshot.adapterIsWireless {
+                EmptyNote(text: "Wireless charging has no cable and no input-current sensor, so there is nothing to measure.",
+                          systemImage: "wave.3.right")
+            } else {
+                EmptyNote(text: "Waiting for the phone to draw enough to measure a drop. Below about 150 mA there is nothing to divide.",
+                          systemImage: "chart.xyaxis.line")
+            }
         }
+    }
+
+    /// The resistance to show, and whether it came from the fit or from one sample.
+    /// The fit wins when it exists: it needs no reference voltage, so it is the
+    /// better number whenever the current has moved enough to produce one.
+    private var resistance: (milliohms: Double, fitted: Bool)? {
+        if let estimate = monitor.pathResistance { return (estimate.milliohms, true) }
+        if let single = snapshot.inputPathMilliohms { return (single, false) }
+        return nil
+    }
+
+    /// The snapshot knows the electrical signature; heat, a hold and a nearly-full
+    /// battery are the innocent explanations for the same low draw, and only the
+    /// monitor knows about those.
+    private var isSagging: Bool {
+        guard snapshot.isInputSagging, !monitor.thermalState.isThrottling,
+              !snapshot.isChargingOnHold else { return false }
+        return (snapshot.percent ?? 0) <= 90
+    }
+
+    /// Deliberately coarse bands. The number includes the charger's output impedance
+    /// and both sets of contacts, so a precise threshold would be false precision —
+    /// what is being separated here is "unremarkable" from "worth swapping the cable".
+    private func resistanceTint(_ milliohms: Double) -> Color {
+        switch milliohms {
+        case ..<200: .mwBattery
+        case ..<400: .primary
+        default: .mwLoss
+        }
+    }
+}
+
+/// One advertised PD profile. A row rather than a plain `Text` so the active one can
+/// carry the accent tint and the filled radio.
+struct ProfileRow: View {
+    let profile: PDProfile
+    let isActive: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
+                .font(AppFont.text(13))
+                .foregroundStyle(isActive ? Color.mwAccent : Color.mwMuted.opacity(0.5))
+            Text(verbatim: profile.label)
+                .mwMono(size: 13, weight: isActive ? .semibold : .regular)
+            Spacer()
+            Text(String(format: "%.0f W", profile.watts))
+                .mwReadout(size: 14, weight: .semibold)
+                .foregroundStyle(isActive ? Color.mwAccent : Color.mwMuted)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isActive ? Color.mwAccent.opacity(0.12) : Color.mwMuted.opacity(0.06))
+        )
     }
 }
 
@@ -320,37 +418,6 @@ struct PowerFlowBar: View {
                 Text("system load + losses").font(.caption2).foregroundStyle(Color.mwLoss)
             }
         }
-    }
-}
-
-struct LegendDot: View {
-    let color: Color
-    let text: LocalizedStringKey
-    var dashed: Bool = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            // One stroked line with a dash pattern, rather than two capsules —
-            // the second capsule used to be offset out of its own frame and
-            // landed on top of the label.
-            LegendLine()
-                .stroke(color, style: StrokeStyle(lineWidth: 2.5,
-                                                  lineCap: .round,
-                                                  dash: dashed ? [3.5, 3.5] : []))
-                .frame(width: 16, height: 2.5)
-            Text(text)
-                .font(.caption2)
-                .foregroundStyle(Color.mwMuted)
-        }
-    }
-}
-
-nonisolated private struct LegendLine: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return path
     }
 }
 

@@ -146,6 +146,11 @@ final class BandRefreshDaemonBridge: ObservableObject {
         // 留下一串僵尸（与 ChargeSpawn.c 里那条注释同一个坑）。
         guard config.backgroundDaemon, !current.alive else { return }
         guard let path = daemonPath else { return }
+        // **先杀旧的再拉新的。** 旧进程可能是上一版 App 留下的、跑着上一版逻辑的
+        // 二进制 —— 新拉起的实例会因为它心跳还新鲜而直接退让（`anotherInstanceAlive`），
+        // 于是「升级了 App，行为却停在旧版」。这里保证落地的永远是本包的二进制。
+        // 没在跑时这一下是空操作（RootTool 的 daemon-kill 自己会兜住）。
+        DeviceActions.killBandDaemon()
         _ = sysprobe_spawn_root_daemon(path)
     }
 

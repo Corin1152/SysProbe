@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// 「频段刷新」分段。
@@ -19,6 +20,37 @@ struct AutoRefreshPanels: View {
     /// 界面上的值。改完立刻 `save()` —— 引擎每拍重新 `load()`，所以不用重开开关。
     @State private var config = BandAutoRefreshConfig.load()
     @State private var slot = 1
+
+    // MARK: - 倒计时的本地时钟
+    //
+    // ── 为什么界面不能直接显示数据源给的 `remaining`（2026-10-14 修）──────────
+    //
+    // 那个值是**拍报**，不是连续值：
+    //
+    //   · 后台模式下，守护进程写状态文件，而 App 侧的看门狗**每 10 秒**才回读一次
+    //     （`BandRefreshDaemonBridge.startWatchdog`）—— 界面拿到的 `remaining`
+    //     因此 10 秒才变一次。用户看到的就是「倒计时 10 秒才跳一下」，而这与倒计时
+    //     本身没有任何关系。
+    //   · 前台模式下，`remaining` 跟着**采样间隔**更新，而那个间隔用户能调到 30 秒。
+    //
+    // 这里改成记「拿到剩余秒数的那一刻 + 当时的秒数」，之后由本地的每秒时钟相减外推。
+    // 数据源多久刷新一次都不影响走字 —— 这是修复的全部依据。
+
+    /// 倒计时锚点。`nil` = 当前不在倒计时（待机 / 已暂停 / 未触发）。
+    @State private var countdownAnchor: CountdownAnchor?
+
+    /// 本地时钟。只做一件事：每秒变一次，把 body 重算一遍，让外推的剩余秒数跟着走。
+    @State private var now = Date()
+
+    /// 每秒一拍的时钟源。
+    ///
+    /// `.common` 而不是 `.default`：`ScrollView` 滚动时 run loop 会切到 tracking mode，
+    /// `.default` 的定时器在滚动期间不触发 —— 倒计时就会「一滚就僵住」。
+    ///
+    /// 放 `static let`：`autoconnect()` 的 publisher 在最后一个订阅者移除时会自己断开，
+    /// 视图消失不会留下跑着的定时器；而写成实例属性的话，body 每次重算都要新建一个。
+    private static let secondTick = Timer.publish(every: 1, on: .main, in: .common)
+        .autoconnect()
 
     var body: some View {
         ScrollView {
@@ -42,15 +74,19 @@ struct AutoRefreshPanels: View {
             let preferred = await Task.detached { BandService.preferredSlot() }.value
             slot = preferred
             syncExecutor()
-            // 倒计时的每秒显示现在就开始，与「功能开没开」无关 —— 关着时它不显示
-            // 倒计时（`refreshDisplay` 里那两个分支都只在 armed / cooling 才动），
-            // 开了立刻就是 1 秒一刷新。见 `BandAutoRefreshController.startDisplayTicking`。
-            controller.startDisplayTicking()
+            // 进来先把倒计时锚点立起来 —— `onChange` 只在下一次**变化**时触发，
+            // 少了这一下，进来时已经在倒计时的话第一秒显示的是数据源原值。
+            resetCountdownAnchor()
             // 幂等：它已经在跑就什么都不做。放在这里而不是只靠 RootView，
             // 是为了让「刚装完第一次进这一页」也能立刻知道守护进程在不在。
             BandRefreshDaemonBridge.shared.startWatchdog()
             BandRefreshDaemonBridge.shared.refreshState()
         }
+        // 锚点跟着数据源走：它一报新的剩余秒数，就以那一刻重新起算。
+        .onChange(of: countdownSource) { _ in resetCountdownAnchor() }
+        // 每秒把 body 重算一遍，让外推出来的剩余秒数跟着走。见 `secondTick` 与
+        // `countdownAnchor` 的说明 —— 这是「倒计时每秒递减」的全部机制。
+        .onReceive(Self.secondTick) { now = $0 }
         // 参数一改就落盘，并**同步下发**给守护进程 —— 它每轮重读配置，
         // 所以改完立刻生效，不用重启进程、也不用重开开关。
         .onChange(of: config) { newValue in
@@ -64,11 +100,10 @@ struct AutoRefreshPanels: View {
         .onChange(of: config.enabled) { _ in syncExecutor() }
         // 切走分段就停表。后台模式关着时 App 退后台本来也会被挂起；
         // 这里补的是「还在 App 里但不在这一页」那一段。
+        //
+        // 倒计时的每秒时钟不用在这里停：它是 `onReceive` 的订阅，视图消失时自己断。
         .onDisappear {
             controller.stop()
-            // 倒计时的每秒显示也一起停：它跟着这一页的生命周期走，
-            // 不跟着功能开关走 —— 用户要的是「在这一页看着它每秒在走」。
-            controller.stopDisplayTicking()
         }
     }
 
@@ -241,14 +276,54 @@ struct AutoRefreshPanels: View {
         return date.map { Self.timeFormatter.string(from: $0) }
     }
 
+    /// 数据源报回来的「剩余秒数」。`nil` = 当前不在倒计时（待机 / 已暂停 / 未触发）。
+    ///
+    /// **它只用来立锚点，不用来直接显示** —— 见 `countdownAnchor` 头上那段说明。
+    private var countdownSource: Double? {
+        if config.backgroundDaemon {
+            guard daemon.state.alive else { return nil }
+            switch daemon.state.phase {
+            case "armed", "cooling": return daemon.state.remaining
+            default: return nil
+            }
+        }
+        switch controller.phase {
+        case .armed(let remaining), .cooling(let remaining): return remaining
+        default: return nil
+        }
+    }
+
+    /// 以「现在」重新起算倒计时锚点。数据源一报新的剩余秒数就调一次。
+    private func resetCountdownAnchor() {
+        guard let remaining = countdownSource else {
+            countdownAnchor = nil
+            return
+        }
+        countdownAnchor = CountdownAnchor(at: Date(), remaining: remaining)
+    }
+
+    /// 当前该显示的剩余秒数 = 锚点记下的秒数 − 本地时钟走过的部分。
+    ///
+    /// 夹到 0：数据源下一拍到来之前若已经走完，显示 `0 s left` 而不是负数。
+    private var displayedRemaining: Double? {
+        guard let anchor = countdownAnchor else { return nil }
+        let left = anchor.remaining - now.timeIntervalSince(anchor.at)
+        return left > 0 ? left : 0
+    }
+
+    /// 倒计时读数的整秒数。锚点还没立起来（进页面那一帧）时退回数据源原值。
+    private func secondsLeft(_ fallback: Double) -> Int {
+        Int((displayedRemaining ?? fallback).rounded(.up))
+    }
+
     private var phaseText: String {
         if config.backgroundDaemon {
             // 守护进程写的是英文 phase 字符串（它进程里没有本地化），在这里翻。
             switch daemon.state.phase {
             case "armed":
-                return Strings.text("Triggered · %lld s left", Int(daemon.state.remaining.rounded(.up)))
+                return Strings.text("Triggered · %lld s left", secondsLeft(daemon.state.remaining))
             case "cooling":
-                return Strings.text("Cooling down · %lld s left", Int(daemon.state.remaining.rounded(.up)))
+                return Strings.text("Cooling down · %lld s left", secondsLeft(daemon.state.remaining))
             case "paused":
                 return Strings.text("Paused · Wi-Fi connected")
             case "idle":
@@ -265,9 +340,9 @@ struct AutoRefreshPanels: View {
         case .paused:
             return Strings.text("Paused · Wi-Fi connected")
         case .armed(let remaining):
-            return Strings.text("Triggered · %lld s left", Int(remaining.rounded(.up)))
+            return Strings.text("Triggered · %lld s left", secondsLeft(remaining))
         case .cooling(let remaining):
-            return Strings.text("Cooling down · %lld s left", Int(remaining.rounded(.up)))
+            return Strings.text("Cooling down · %lld s left", secondsLeft(remaining))
         }
     }
 
@@ -361,4 +436,14 @@ struct AutoRefreshPanels: View {
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
+
+    /// 倒计时锚点：拿到剩余秒数的那一刻，以及那一刻的剩余值。
+    ///
+    /// `nonisolated`：它只是一对值，不碰任何 UI 状态；默认的 MainActor 隔离会让
+    /// `Equatable` 的合成实现与协议要求（`nonisolated`）对不上，Swift 6 语言模式下
+    /// 直接编译不过。
+    nonisolated private struct CountdownAnchor: Equatable {
+        let at: Date
+        let remaining: Double
+    }
 }

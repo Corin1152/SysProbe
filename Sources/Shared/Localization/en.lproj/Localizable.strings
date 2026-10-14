@@ -169,6 +169,8 @@
 "Credits" = "Credits";
 "Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only." = "Power and adapter readings are ported from MiniWatts, © the MiniWatts authors, licensed under the Apache License 2.0. They are read from Apple's private IOKit interfaces — read-only, no writes — which is why this app is sideload-only.";
 "Plug in a charger to read the adapter's handshake." = "Plug in a charger to read the adapter's handshake.";
+"Plug in a charger to read its advertised profiles." = "Plug in a charger to read its advertised profiles.";
+"Plug in a charger to measure the path." = "Plug in a charger to measure the path.";
 "Loss" = "Loss";
 "Actual" = "Actual";
 "Rated" = "Rated";

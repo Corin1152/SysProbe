@@ -10,11 +10,6 @@ struct HardwareView: View {
     /// 传动作，不传 `AppState`。
     let openSettings: @MainActor () -> Void
 
-    /// 这一页是不是当前选中的分页。由 `RootView` 按 `selectedTab` 给。
-    /// 非当前分页会**停止求值内容** —— 否则它会跟着每秒一次的采样一直重算，
-    /// 见 `DeferredContent`。
-    let isActive: Bool
-
     /// 第一屏所有**读数**的字号。
     ///
     /// 原来这一页混着 18 / 20 / 22 / 28 / 30 五档，同一个面板里两个数字不一样大，
@@ -30,7 +25,7 @@ struct HardwareView: View {
     fileprivate static let valueSize: CGFloat = 18
 
     var body: some View {
-        PageScaffold("Hardware", glow: .mwAccent, isActive: isActive, openSettings: openSettings) {
+        PageScaffold("Hardware", glow: .mwAccent, openSettings: openSettings) {
             DeviceCard()
             CPUCard()
             MemoryCard()

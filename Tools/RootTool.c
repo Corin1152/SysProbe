@@ -253,6 +253,13 @@ static int do_restart_commcenter(void) {
 #define SYSPROBE_THERMAL_BACKUP_DIR "/var/root/SysProbe"
 #define SYSPROBE_THERMAL_BACKUP SYSPROBE_THERMAL_BACKUP_DIR "/disabled.plist.orig"
 
+/// 频段刷新守护进程的状态文件。**与 `BandRefreshDaemon.m` 的 `kStatePath` 必须是
+/// 同一个串**：`daemon-kill` 靠它找到旧进程的 pid。两处各写一份的原因是这个目录
+/// (`/var/mobile/Library/Caches/`) 对守护进程（mobile 身份）可写、对 App 同样可读，
+/// 而本工具只需要「读 pid」这一个字段 —— 引入共享头文件的收益抵不上它带来的耦合。
+#define SYSPROBE_BAND_STATE_PATH \
+    "/var/mobile/Library/Caches/sysprobe-bandrefresh-state.plist"
+
 /// `disabled.plist` 在不在。
 static int thermal_file_exists(void) {
     return access(SYSPROBE_DISABLED_PLIST, F_OK) == 0;
@@ -492,6 +499,48 @@ static int thermal_read_disabled(int *disabledOut, const char **error) {
     CFRelease(dict);
     *disabledOut = disabled;
     return 0;
+}
+
+/// `daemon-kill`：杀掉还在跑的频段刷新守护进程（按状态文件里记录的 pid）。
+///
+/// ── 为什么需要它（2026-10-14）───────────────────────────────────────────────
+///
+/// 守护进程是随包发布的二进制，但它**不随 App 更新而更新**：新拉起的实例检测到
+/// 「状态文件里有一个心跳还新鲜的 pid」就直接退出（`anotherInstanceAlive`，见
+/// `BandRefreshDaemon.m`），把舞台让给旧进程 —— 那是上一版 App 留下的、跑着上一版
+/// 逻辑的进程。用户升级 App 之后不改任何配置，行为却停在旧版上，而且没有任何提示。
+///
+/// 所以 App 在拉起守护进程之前先跑一次本命令，把旧进程杀掉；随后的 spawn 拉起的
+/// 才是**本包里**的二进制。没在跑（pid 无效 / 进程已死）时返回 OK，什么都不做。
+///
+/// 用 SIGKILL 而不是 SIGTERM：守护进程把 TERM/HUP 都设成了忽略（守护进程化），
+/// 只有 KILL 能停它。它本来就是无状态轮询进程，被杀没有任何善后问题 ——
+/// 状态文件会在新进程起来后的第一秒被覆盖。
+static int do_daemon_kill(void) {
+    NSDictionary *s = [NSDictionary dictionaryWithContentsOfFile:
+        SYSPROBE_BAND_STATE_PATH];
+    if (![s isKindOfClass:[NSDictionary class]]) {
+        return SYSPROBE_EXIT_OK;   // 没有状态文件 = 从来没跑过。
+    }
+
+    id pidObj = s[@"pid"];
+    if (![pidObj respondsToSelector:@selector(intValue)]) {
+        return SYSPROBE_EXIT_OK;
+    }
+    pid_t pid = (pid_t)[pidObj intValue];
+    if (pid <= 0) {
+        return SYSPROBE_EXIT_OK;
+    }
+    // 进程已经不在了（陈旧状态文件）也算成功。
+    if (kill(pid, 0) != 0) {
+        return SYSPROBE_EXIT_OK;
+    }
+
+    if (kill(pid, SIGKILL) != 0) {
+        fprintf(stderr, "daemon-kill: cannot kill %d (%s)\n", pid, strerror(errno));
+        return SYSPROBE_EXIT_FAILED;
+    }
+    return SYSPROBE_EXIT_OK;
 }
 
 /// `thermal-status`：0 = 已禁用，5 = 未禁用，4 = 读失败。
@@ -1778,7 +1827,7 @@ int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s check|reboot|respring|restart-commcenter"
-                "|thermal-status|thermal-disable|thermal-enable"
+                "|thermal-status|thermal-disable|thermal-enable|daemon-kill"
                 "|clean-scan <report>|clean-run <scope> <report> [bundleId] [excludeCsv]\n",
                 argv[0]);
         return SYSPROBE_EXIT_USAGE;
@@ -1804,6 +1853,9 @@ int main(int argc, char *argv[]) {
     }
     if (strcmp(argv[1], "thermal-enable") == 0) {
         return do_thermal_set(0);
+    }
+    if (strcmp(argv[1], "daemon-kill") == 0) {
+        return do_daemon_kill();
     }
 
     fprintf(stderr, "%s: unknown command %s\n", argv[0], argv[1]);

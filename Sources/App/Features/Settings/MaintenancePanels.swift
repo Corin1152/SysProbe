@@ -55,11 +55,37 @@ struct MaintenancePanels: View {
     /// 读回来看见没变就什么都不做。键名带 `sysprobe.` 前缀，与这一组其它开关一致。
     @AppStorage("sysprobe.thermalDisabled") private var thermalDisabled = false
 
-    /// 已经改过配置、还没重启。用来把「重启后生效」那一行显示出来。
+    /// 已经改过配置、**还没重启**。用来把「重启后生效」那一行显示出来。
     ///
     /// 与 `thermalDisabled` 同理：它也是「跨视图重建必须留住」的状态 ——
     /// 切走再回来就看不到「重启以生效」的提示，等于把用户刚做的改动说丢了。
-    @AppStorage("sysprobe.thermalNeedsRestart") private var thermalNeedsRestart = false
+    ///
+    /// ── 2026-10-14：为什么它旁边还多了一个时刻（修「重启之后提示还在」）────
+    ///
+    /// 这条标记一旦置上，就**只有重启设备才算兑现**，而它自己不知道那件事发生过。
+    /// 原来没有任何一处把它写回 `false`（改 `@AppStorage` 之前靠视图重建顺手丢掉，
+    /// 持久化之后连那一下都没有了）—— 于是它永远为真：用户点过一次开关，
+    /// 「重启以生效」就再也不会消失，连真的重启了设备都还在。
+    ///
+    /// 所以写入时一并记下**那一刻的系统运行时长**（`systemUptime`）。读的时候比一比：
+    /// 系统重启过的话运行时长会归零重来，必然小于记下的那个值 —— 那就是「已经兑现了」。
+    /// 用运行时长而不是绝对时间戳，是因为它不依赖时钟（用户改表、换时区都不影响），
+    /// 也不需要在 App 里额外记一份启动历史。
+    @AppStorage("sysprobe.thermalNeedsRestart") private var thermalNeedsRestartPending = false
+
+    /// 置上「待重启」那一刻的系统运行时长，秒。`0` = 没有这条记录。
+    @AppStorage("sysprobe.thermalNeedsRestartAt") private var thermalNeedsRestartAt: Double = 0
+
+    /// 「重启以生效」这一行该不该显示。
+    ///
+    /// 两个条件都成立才显示：改过配置，**而且**改完之后系统没有重启过。
+    private var thermalNeedsRestart: Bool {
+        guard thermalNeedsRestartPending else { return false }
+        // 没有时刻记录（持久化改造之前写下的那一批数据）→ 判断不出兑现与否，
+        // 当作已失效。宁可少提示一次，也不要一条永远消不掉的提示。
+        guard thermalNeedsRestartAt > 0 else { return false }
+        return ProcessInfo.processInfo.systemUptime >= thermalNeedsRestartAt
+    }
 
     /// 配置读不出来（工具不在包里 / 拿不到 root）。此时整行禁用。
     ///
@@ -103,6 +129,12 @@ struct MaintenancePanels: View {
             case .disabled: thermalDisabled = true
             case .enabled: thermalDisabled = false
             case .unknown: thermalUnavailable = true
+            }
+
+            // 持久化改造之前写下的那批「待重启」没有时刻，永远判断不出兑现与否。
+            // 在这里一次性清干净，免得它变成一条消不掉的提示（2026-10-14）。
+            if thermalNeedsRestartPending, thermalNeedsRestartAt == 0 {
+                thermalNeedsRestartPending = false
             }
         }
         .confirmationDialog(
@@ -262,8 +294,13 @@ struct MaintenancePanels: View {
         thermalBusy = false
         if ok {
             thermalDisabled = disabled
-            // 写成功也**不等于**已经生效 —— 要重启。
-            thermalNeedsRestart = true
+            // 写成功也**不等于**已经生效 —— 要重启。连同「此刻的系统运行时长」一起
+            // 记下，重启之后这一行才会自己消失（见 `thermalNeedsRestart`）。
+            //
+            // 顺序不能反：先落时刻、再置标记 —— 标记是显示与否的总闸，
+            // 若先置标记，中间那一帧会用一个还没更新的时刻去判断。
+            thermalNeedsRestartAt = ProcessInfo.processInfo.systemUptime
+            thermalNeedsRestartPending = true
         } else {
             // 回滚，别让开关停在一个假的「已开启」上。
             thermalDisabled = !disabled

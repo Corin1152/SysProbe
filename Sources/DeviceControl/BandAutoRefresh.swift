@@ -167,23 +167,17 @@ final class BandAutoRefreshController: ObservableObject {
     private var timer: Timer?
     private var queue = DispatchQueue(label: "com.corin.sysprobe.bandAutoRefresh")
     private var slot = 1
+    /// 倒计时的两个**绝对锚点**，状态机内部用。
+    ///
+    /// 界面**不读这两个值** —— 它读的是 `phase` 里那一份「拍报」的剩余秒数，
+    /// 由自己本地的每秒时钟外推（见 `AutoRefreshPanels.countdownAnchor`）。
+    /// 这里保留绝对时刻是因为状态机的判断（什么时候到点、冷却还剩多久）本来就
+    /// 该基于时刻而不是累减计数。
     private var armedSince: Date?
     private var cooldownUntil: Date?
     /// 上一拍是不是处于「连 Wi-Fi 暂停」—— 只为了在**切换**那一刻写一条日志，
     /// 而不是每拍刷屏。
     private var pausedForWiFi = false
-    /// 倒计时的显示刷新：独立于采样定时器，每秒一拍重算剩余秒数。
-    ///
-    /// ── 为什么与采样分开 ──
-    ///
-    /// 采样间隔由用户定（1–30 秒，默认 2 秒，真机上常见 10 秒）。而 `armed` /
-    /// `cooling` 显示的是**剩余秒数**，10 秒一跳的话，用户盯着倒计时看它 8 秒不动、
-    /// 一跳跳掉一整秒 —— 用户报的就是这个（"我估算是 10s 才刷新一次"）。
-    ///
-    /// 这条定时器只做一件事：把 `armedSince` / `cooldownUntil` 与 `now` 的差重新
-    /// 算一遍发布出去。**它不读数、不改状态机**，每秒一次的成本是两次 `Date()`
-    /// 相减加一次 `@Published`。
-    private var displayTicker: AnyCancellable?
 
     // MARK: - 生命周期
 
@@ -205,42 +199,11 @@ final class BandAutoRefreshController: ObservableObject {
         scheduleNext()
     }
 
-    /// 起倒计时的每秒显示。**与 `start` 无关**：功能关着时没有倒计时可显，
-    /// 而开着时它必须在采样间隔之外单独走 —— 见 `displayTicker` 的说明。
-    func startDisplayTicking() {
-        guard displayTicker == nil else { return }
-        displayTicker = Timer.publish(every: 1, on: .main, in: .default)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.refreshDisplay()
-            }
-    }
-
-    func stopDisplayTicking() {
-        displayTicker?.cancel()
-        displayTicker = nil
-    }
-
-    /// 把倒计时重新算一遍发出去。**不读数、不改状态机** —— 只重算那一个差值。
-    private func refreshDisplay() {
-        let now = Date()
-        // 用 `if case` 而不是 `phase == .armed(remaining: 0)`：后者要求关联值恰好
-        // 等于 0 才匹配得上，而剩余秒数几乎不会正好是 0。
-        if case .armed = phase, let since = armedSince {
-            let config = BandAutoRefreshConfig.load()
-            let remaining = config.dwellSec - now.timeIntervalSince(since)
-            if remaining > 0 {
-                update { s in s.phase = .armed(remaining: remaining) }
-            }
-        } else if case .cooling = phase, let until = cooldownUntil, now < until {
-            update { s in s.phase = .cooling(remaining: until.timeIntervalSince(now)) }
-        }
-    }
-
+    /// 停表。**倒计时不再需要在这里额外停什么** —— 每秒走字的时钟在视图层，
+    /// 跟着 `AutoRefreshPanels` 的生命周期走（见那里的 `secondTick`）。
     func stop() {
         timer?.invalidate()
         timer = nil
-        stopDisplayTicking()
         armedSince = nil
         cooldownUntil = nil
         // 连同「暂停中」的记忆一起清掉：下次 `start` 重新开表时，若仍连着 Wi-Fi，

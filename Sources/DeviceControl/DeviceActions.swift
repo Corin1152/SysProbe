@@ -174,4 +174,27 @@ nonisolated enum DeviceActions {
         guard sysprobe_spawn_root_tool_sync(path, command, &status) == 0 else { return false }
         return status == 0
     }
+
+    /// 杀掉还在跑的频段刷新守护进程（`RootTool` 的 `daemon-kill`）。
+    ///
+    /// ── 为什么需要它（2026-10-14）───────────────────────────────────────────
+    ///
+    /// 守护进程是随包发布的二进制，但它**不随 App 更新而更新**：新拉起的实例检测到
+    /// 「状态文件里有一个心跳还新鲜的 pid」就直接退出，把舞台让给旧进程 —— 那是
+    /// 上一版 App 留下的、跑着上一版逻辑的进程。用户升级 App 之后不改任何配置，
+    /// 行为却停在旧版上，而且没有任何提示。
+    ///
+    /// App 在拉起守护进程之前先跑一次本命令，保证随后 spawn 出来的是**本包里**
+    /// 的二进制。没在跑时它什么都不做、照常返回成功。
+    ///
+    /// 阻塞调用（等子进程收尾），别放在主线程。
+    @discardableResult
+    static func killBandDaemon() -> Bool {
+        guard let path = toolPath else { return false }
+        var status: Int32 = 0
+        guard sysprobe_spawn_root_tool_sync(path, "daemon-kill", &status) == 0 else {
+            return false
+        }
+        return status == 0
+    }
 }
