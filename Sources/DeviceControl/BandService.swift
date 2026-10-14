@@ -21,6 +21,17 @@ nonisolated struct SlotInfo: Equatable {
     var rat: String?
     /// 服务小区的频段号。
     var band: Int?
+    /// 物理小区 ID（PCI）。LTE 下 0–503。
+    var pci: Int?
+    /// 跟踪区码（TAC）。LTE/NR 才有。
+    var tac: Int?
+    /// 位置区码（LAC）。
+    ///
+    /// 桥接层在 LTE/NR 下直接把 TAC 填进这个键（2G/3G 时那一个键不出现）——
+    /// 上游 CellularInfo 的界面也是这么显示的：4G/5G 两栏同一个数。
+    var lac: Int?
+    /// 基站 ID（Cell ID）。
+    var cellId: Int?
     var rsrp: Int?
     var snr: Double?
 
@@ -59,6 +70,10 @@ nonisolated struct SlotInfo: Equatable {
         info.maxBars = (raw["maxBars"] as? NSNumber)?.intValue
         info.rat = raw["rat"] as? String
         info.band = (raw["band"] as? NSNumber)?.intValue
+        info.pci = (raw["pci"] as? NSNumber)?.intValue
+        info.tac = (raw["tac"] as? NSNumber)?.intValue
+        info.lac = (raw["lac"] as? NSNumber)?.intValue
+        info.cellId = (raw["cellId"] as? NSNumber)?.intValue
         info.rsrp = (raw["rsrp"] as? NSNumber)?.intValue
         info.snr = (raw["snr"] as? NSNumber)?.doubleValue
         return info

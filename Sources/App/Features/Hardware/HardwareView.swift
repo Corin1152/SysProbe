@@ -5,6 +5,10 @@ struct HardwareView: View {
     @EnvironmentObject private var hardware: HardwareMonitor
     @EnvironmentObject private var optimizer: MemoryOptimizer
 
+    /// 右上角齿轮的回调，由 `RootView` 给 —— 见 `PageScaffold` 上那条注释：
+    /// 传动作，不传 `AppState`。
+    let openSettings: @MainActor () -> Void
+
     private var snapshot: HardwareSnapshot { hardware.snapshot }
 
     /// 第一屏所有**读数**的字号。
@@ -18,7 +22,7 @@ struct HardwareView: View {
     private static let valueSize: CGFloat = 18
 
     var body: some View {
-        PageScaffold("Hardware", glow: .mwAccent) {
+        PageScaffold("Hardware", glow: .mwAccent, openSettings: openSettings) {
             devicePanel
             cpuPanel
             memoryPanel

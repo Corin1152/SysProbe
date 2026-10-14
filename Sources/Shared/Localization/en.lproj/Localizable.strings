@@ -364,3 +364,39 @@
 "Refresh" = "Refresh";
 "If something goes wrong" = "If something goes wrong";
 "You have unsaved changes. Use the checkmark in the top right to save them." = "You have unsaved changes. Use the checkmark in the top right to save them.";
+
+/* Band tab: page split into two segments, and the auto-refresh feature (2026-10-14) */
+"Band lock" = "Band lock";
+"Auto refresh" = "Auto refresh";
+"Recent activity" = "Recent activity";
+"Enabled" = "Enabled";
+"Log only (do not refresh)" = "Log only (do not refresh)";
+"Trigger when" = "Trigger when";
+"State" = "State";
+"Last refresh" = "Last refresh";
+"Idle" = "Idle";
+"Watching" = "Watching";
+"Triggered · %lld s left" = "Triggered · %lld s left";
+"Cooling down · %lld s left" = "Cooling down · %lld s left";
+"RSRP at or below" = "RSRP at or below";
+"RSRP at or above" = "RSRP at or above";
+"dry-run %@ dBm → would refresh" = "dry-run %@ dBm → would refresh";
+"refreshed at %@ dBm" = "refreshed at %@ dBm";
+"refresh failed at %@ dBm" = "refresh failed at %@ dBm";
+"Settings" = "Settings";
+"Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands." = "Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands.";
+"Only runs while this page is in the foreground — the app has no background modes." = "Only runs while this page is in the foreground — the app has no background modes.";
+/* Serving-cell identifiers (2026-10-14) */
+"Physical Cell ID" = "Physical Cell ID";
+"Tracking Area Code" = "Tracking Area Code";
+"Location Area Code" = "Location Area Code";
+"Cell ID" = "Cell ID";
+"Parameters" = "Parameters";
+
+/* Band tab: background daemon for auto-refresh (2026-10-14) */
+"Run in background" = "Run in background";
+"Background service" = "Background service";
+"Running" = "Running";
+"Starting" = "Starting";
+"Not available" = "Not available";
+"Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back." = "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back.";

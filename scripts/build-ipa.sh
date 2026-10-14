@@ -160,6 +160,35 @@ xcrun --sdk iphoneos clang \
 # 同上：zip 保留执行位，装到设备上才起得来。
 chmod 755 "$TOOL"
 
+# ── 频段自动刷新守护进程 ────────────────────────────────────────────────────
+#
+# 与上面那个工具同一个套路（自有 `main()`，clang 直编，不进 Xcode target），
+# 但有两点不同，都写在 `Tools/BandRefreshDaemon.m` 的文件头里：
+#
+#   1. 它是 **ObjC**，而且要**连带编进 `CommCenterBridge.m`** —— 读 RSRP 与刷 modem
+#      两个接口都在那份文件里，与其抄一份到守护进程里（两份实现迟早走偏，而它们的
+#      判定逻辑必须与 App 内那条路逐条对齐），不如直接链进来。
+#   2. 它签的是 **主 App 那份 entitlements**，不是 `SysProbeRootTool.entitlements`：
+#      只有前者带 `com.apple.CommCenter.fine-grained`，而它调的就是 CommCenter。
+#      签错的表现是「进程起来了、日志一行没有、RSRP 永远读不到」—— 因为 CommCenter
+#      对无权限的调用是**静默丢弃**，不报错也不抛异常。
+DAEMON_SRC="Tools/BandRefreshDaemon.m"
+DAEMON="$BUILD_DIR/Payload/$SCHEME.app/BandRefreshDaemon"
+[ -f "$DAEMON_SRC" ] || { echo "::error::$DAEMON_SRC is missing" >&2; exit 1; }
+
+echo "==> Building BandRefreshDaemon"
+xcrun --sdk iphoneos clang \
+  -arch arm64 \
+  -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  -miphoneos-version-min=16.2 \
+  -O2 -Wall \
+  -fobjc-arc \
+  -I Sources/DeviceControl \
+  -framework Foundation \
+  -framework CoreFoundation \
+  -o "$DAEMON" "$DAEMON_SRC" Sources/DeviceControl/CommCenterBridge.m
+chmod 755 "$DAEMON"
+
 # 链接器会把每个目标文件的绝对路径记进符号表（N_OSO），-file-prefix-map 覆盖不到，
 # 剥掉调试与本地符号即可去掉。dSYM 仍留在 DerivedData 里备用。
 xcrun strip -S -x "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME"
@@ -201,8 +230,12 @@ if ! command -v ldid >/dev/null 2>&1; then
   echo "==> ldid not found, installing"
   brew install ldid
 fi
+# BandRefreshDaemon 也在这一组：**必须用主 App 那份 entitlements**（含
+# com.apple.CommCenter.fine-grained），签成 RootTool 那份的话它读不到 RSRP，
+# 而且不会有任何报错 —— 见上面编译那一段的说明。
 for binary in "$BUILD_DIR/Payload/$SCHEME.app/$SCHEME" \
-              "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon"; do
+              "$BUILD_DIR/Payload/$SCHEME.app/ChargeLimiterDaemon" \
+              "$BUILD_DIR/Payload/$SCHEME.app/BandRefreshDaemon"; do
   ldid -S"$ENTITLEMENTS" "$binary"
 done
 ldid -S"$TOOL_ENTITLEMENTS" "$TOOL"
@@ -305,6 +338,32 @@ if [ ! -f "$app_dir/www/index.html" ]; then
   exit 1
 fi
 echo "  web root   : www/ ($(ls "$app_dir/www" | tr '\n' ' '))"
+
+# ── 频段自动刷新守护进程 ────────────────────────────────────────────────────
+#
+# 它的失败模式比充电守护进程更静默：进程照样起来、界面照样显示「后台运行中」，
+# 只是 RSRP 永远读不到、刷新永远不发生 —— 因为 CommCenter 对无权限的调用是
+# **丢弃而不是报错**。所以这里把三件事全部卡死：文件在、可执行、签的是带
+# CommCenter 的那份 entitlements。
+band_daemon="$app_dir/BandRefreshDaemon"
+if [ ! -f "$band_daemon" ]; then
+  echo "::error::BandRefreshDaemon is missing from the app bundle. The auto-refresh page would offer a 'background' switch that can never work." >&2
+  exit 1
+fi
+if [ ! -x "$band_daemon" ]; then
+  echo "::error::BandRefreshDaemon is in the bundle but not executable. posix_spawn would fail and the daemon would never start." >&2
+  exit 1
+fi
+band_entitlements="$(ldid -e "$band_daemon" 2>/dev/null || true)"
+if [ -z "$band_entitlements" ]; then
+  echo "::error::BandRefreshDaemon carries no entitlements. It would start but CommCenter would silently drop every call, so RSRP would never be read." >&2
+  exit 1
+fi
+if ! printf '%s' "$band_entitlements" | grep -q "com.apple.CommCenter.fine-grained"; then
+  echo "::error::BandRefreshDaemon is missing 'com.apple.CommCenter.fine-grained'. It was signed with the wrong entitlements file (must be Support/SysProbe.entitlements, not the RootTool one). RSRP reads would silently return nothing." >&2
+  exit 1
+fi
+echo "  band daemon: BandRefreshDaemon ($(wc -c < "$band_daemon" | tr -d ' ') bytes, executable, CommCenter ok)"
 
 # entitlements。`ldid -e` 打出来的就是签名里那份 plist。
 #

@@ -364,3 +364,39 @@
 "Refresh" = "刷新";
 "If something goes wrong" = "出问题时";
 "You have unsaved changes. Use the checkmark in the top right to save them." = "有未保存的修改。用右上角的对勾保存。";
+
+/* 频段分页：拆成两个分段，新增自动刷新（2026-10-14） */
+"Band lock" = "频段锁定";
+"Auto refresh" = "自动刷新";
+"Recent activity" = "最近动作";
+"Enabled" = "启用";
+"Log only (do not refresh)" = "仅记录日志（不执行刷新）";
+"Trigger when" = "触发条件";
+"State" = "状态";
+"Last refresh" = "上次刷新";
+"Idle" = "空闲";
+"Watching" = "监视中";
+"Triggered · %lld s left" = "已触发 · 还剩 %lld 秒";
+"Cooling down · %lld s left" = "冷却中 · 还剩 %lld 秒";
+"RSRP at or below" = "RSRP 低于或等于";
+"RSRP at or above" = "RSRP 高于或等于";
+"dry-run %@ dBm → would refresh" = "试运行 %@ dBm → 将执行刷新";
+"refreshed at %@ dBm" = "已于 %@ dBm 执行刷新";
+"refresh failed at %@ dBm" = "刷新失败（%@ dBm）";
+"Settings" = "设置";
+"Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands." = "刷新会让基带重载并重新注册网络。蜂窝服务会中断数秒，通话可能中断。它不会改动你锁定的频段。";
+"Only runs while this page is in the foreground — the app has no background modes." = "仅在本页处于前台时运行 —— 本 App 没有后台模式权限。";
+/* 服务小区标识（2026-10-14） */
+"Physical Cell ID" = "物理小区 ID";
+"Tracking Area Code" = "跟踪区码";
+"Location Area Code" = "位置区码";
+"Cell ID" = "基站 ID";
+"Parameters" = "参数";
+
+/* 频段分页：自动刷新的后台守护进程（2026-10-14） */
+"Run in background" = "后台运行";
+"Background service" = "后台服务";
+"Running" = "运行中";
+"Starting" = "启动中";
+"Not available" = "不可用";
+"Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back." = "运行在独立的 root 进程中，离开 App 后仍会继续工作。手机重启后它会停止 —— 打开一次 SysProbe 即可恢复。";

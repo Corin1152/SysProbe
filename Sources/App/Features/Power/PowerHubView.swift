@@ -21,6 +21,9 @@ struct PowerHubView: View {
 
     @EnvironmentObject private var monitor: PowerMonitor
 
+    /// 右上角齿轮的回调，由 `RootView` 给。
+    let openSettings: @MainActor () -> Void
+
     @State private var page: PowerSegment = .draw
 
     private var snapshot: PowerSnapshot { monitor.snapshot }
@@ -29,6 +32,7 @@ struct PowerHubView: View {
         PageHubScaffold(
             title: page.title,
             glow: glow,
+            openSettings: openSettings,
             header: {
                 Picker("Power", selection: $page) {
                     ForEach(PowerSegment.allCases) { segment in

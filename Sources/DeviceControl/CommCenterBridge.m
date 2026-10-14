@@ -46,6 +46,7 @@
 
 #import "CommCenterBridge.h"
 
+#import <CoreFoundation/CoreFoundation.h>
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -361,18 +362,28 @@ static id serviceDescriptor(int slot)
     }
 }
 
-/// 服务小区的频段号。
+/// 服务小区的那几个标识：频段号、PCI、TAC、基站 ID。
 ///
 /// `copyCellInfo:completion:` **只有异步版本**，所以这里用信号量把它等成同步的。
 /// 调用方在后台队列上（`BandService`），等的是那条队列，不是主线程。
 ///
 /// 超时（1 秒）就当没有：基带服务正在重启时这个回调可能一直不来，而这一行只是
 /// 「参考信息」，不值得让整页卡住。
-static NSNumber *servingBand(id client, id context)
+///
+/// 返回字典，缺哪一项就不放那一个键。调用方按「有没有键」决定那一行显不显示。
+///
+/// 键名取自上游 CellularInfo（`Controller/CoreTelephonyController.swift` 里那一串
+/// `kCTCellMonitor*` 注释）：
+///
+///   kCTCellMonitorBandInfo   频段号
+///   kCTCellMonitorPID        物理小区 ID（PCI）
+///   kCTCellMonitorTAC        跟踪区码（LTE/NR；2G/3G 那一栏它叫 LAC）
+///   kCTCellMonitorCellId     基站 ID
+static NSDictionary *servingCellFields(id client, id context)
 {
     SEL sel = NSSelectorFromString(@"copyCellInfo:completion:");
     if (![client respondsToSelector:sel]) {
-        return nil;
+        return @{};
     }
 
     __block id cellInfo = nil;
@@ -386,16 +397,16 @@ static NSNumber *servingBand(id client, id context)
     @try {
         send(client, sel, context, completion);
     } @catch (NSException *e) {
-        return nil;
+        return @{};
     }
 
     if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 1000 * NSEC_PER_MSEC)) != 0) {
-        return nil;
+        return @{};
     }
 
     NSArray *cells = [cellInfo valueForKey:@"legacyInfo"];
     if (![cells isKindOfClass:[NSArray class]] || cells.count == 0) {
-        return nil;
+        return @{};
     }
 
     // 优先服务小区；没有标记就退回第一条。
@@ -412,10 +423,26 @@ static NSNumber *servingBand(id client, id context)
     if (serving == nil) {
         serving = [cells firstObject];
     }
+    if (![serving isKindOfClass:[NSDictionary class]]) {
+        return @{};
+    }
 
-    id band = [serving objectForKey:@"kCTCellMonitorBandInfo"];
-    return [band isKindOfClass:[NSNumber class]] ? band : nil;
+    NSMutableDictionary *fields = [NSMutableDictionary dictionary];
+    // 值一律取 `NSNumber`。上游对这些键的取值也都是 `as? NSNumber` —— 字典里放的是
+    // 数字而不是字符串，所以按 NSNumber 收；其它类型一律当没读到，不猜。
+    void (^put)(NSString *, NSString *) = ^(NSString *outKey, NSString *cellKey) {
+        id value = [serving objectForKey:cellKey];
+        if ([value isKindOfClass:[NSNumber class]]) {
+            fields[outKey] = value;
+        }
+    };
+    put(@"band", @"kCTCellMonitorBandInfo");
+    put(@"pci", @"kCTCellMonitorPID");
+    put(@"tac", @"kCTCellMonitorTAC");
+    put(@"cellId", @"kCTCellMonitorCellId");
+    return fields;
 }
+
 
 /// 运营商配置文件里的 `CarrierName`。读不到返回 nil。
 static NSString *carrierName(id client, id context)
@@ -599,13 +626,122 @@ NSDictionary * _Nullable sysprobe_slot_info(int slot)
             }
         }
 
-        // 服务小区频段。放最后：它是唯一一个可能等满 1 秒的调用。
-        NSNumber *band = servingBand(client, context);
-        if (band != nil && band.integerValue > 0) {
+        // 服务小区那一组标识。放最后：它是唯一一个可能等满 1 秒的调用。
+        //
+        // 一次 `copyCellInfo` 把频段 / PCI / TAC / 基站 ID 全取回来 —— 它们本来就在
+        // 同一个服务小区字典里，分开取等于多等几次 1 秒。
+        NSDictionary *cellFields = servingCellFields(client, context);
+        NSNumber *band = [cellFields objectForKey:@"band"];
+        if ([band isKindOfClass:[NSNumber class]] && band.integerValue > 0) {
             info[@"band"] = band;
+        }
+        NSNumber *pci = [cellFields objectForKey:@"pci"];
+        if ([pci isKindOfClass:[NSNumber class]] && pci.integerValue >= 0) {
+            info[@"pci"] = pci;
+        }
+        NSNumber *tac = [cellFields objectForKey:@"tac"];
+        if ([tac isKindOfClass:[NSNumber class]] && tac.integerValue > 0) {
+            info[@"tac"] = tac;
+            // LTE/NR 的位置区码就是跟踪区码 —— 上游 CellularInfo 在 4G/5G 下也是
+            // 直接把 TAC 显示在 LAC 那一栏。2G/3G 时 `kCTCellMonitorTAC` 读不到，
+            // 界面那一栏于是整行不显示（见 `BandPanels`）。
+            info[@"lac"] = tac;
+        }
+        NSNumber *cellId = [cellFields objectForKey:@"cellId"];
+        if ([cellId isKindOfClass:[NSNumber class]] && cellId.integerValue > 0) {
+            info[@"cellId"] = cellId;
         }
 
         return info;
+    }
+}
+
+NSDictionary * sysprobe_signal_sync(int slot)
+{
+    @autoreleasepool {
+        NSMutableDictionary *info = [NSMutableDictionary dictionary];
+
+        id client = commCenterClient();
+        if (client == nil) {
+            return info;
+        }
+        // 信号挂在 descriptor 上，不在 context 上 —— 与 `sysprobe_slot_info` 同一条路。
+        id descriptor = serviceDescriptor(slot);
+        if (descriptor == nil) {
+            return info;
+        }
+
+        SEL sel = NSSelectorFromString(@"getSignalStrengthMeasurements:error:");
+        if (![client respondsToSelector:sel]) {
+            return info;
+        }
+        id (*send)(id, SEL, id, NSError **) = (id (*)(id, SEL, id, NSError **))objc_msgSend;
+        NSError *error = nil;
+        id measurements = nil;
+        @try {
+            measurements = send(client, sel, descriptor, &error);
+        } @catch (NSException *e) {
+            measurements = nil;
+        }
+        if (measurements == nil) {
+            return info;
+        }
+
+        NSNumber *rsrp = [measurements valueForKey:@"rsrp"];
+        NSNumber *snr = [measurements valueForKey:@"snr"];
+        // 哨兵判据与 `sysprobe_slot_info` 一致：**小于 0 才算真的读到了**。
+        // 少了这一句，0 会被当成「信号极好」，判定逻辑整个反过来。
+        if ([rsrp isKindOfClass:[NSNumber class]] && rsrp.integerValue < 0) {
+            info[@"rsrp"] = rsrp;
+        }
+        if ([snr isKindOfClass:[NSNumber class]]) {
+            info[@"snr"] = snr;
+        }
+        return info;
+    }
+}
+
+BOOL sysprobe_refresh_modem(void)
+{
+    @autoreleasepool {
+        // 先走一遍客户端初始化：CoreTelephony 的 dlopen 就是它在做的，
+        // 下面两个 dlsym 要的是同一个 handle。
+        (void)commCenterClient();
+        void *handle = gCoreTelephonyHandle != NULL ? gCoreTelephonyHandle : RTLD_DEFAULT;
+        if (handle == NULL) {
+            return NO;
+        }
+
+        // CTServerConnectionRef 在本工程里没有类型定义（`CTServerConnection` 是私有的
+        // 结构体），用 `void *` 接 —— 它只是被传给下面那个函数，不解引用。
+        void *(*create)(void *, void *, void *) =
+            (void *(*)(void *, void *, void *))dlsym(handle, "_CTServerConnectionCreate");
+        void (*resetModem)(void *, CFStringRef) =
+            (void (*)(void *, CFStringRef))dlsym(handle, "_CTServerConnectionResetModem");
+
+        // 上游对这两个符号是直接 extern 声明后链接的；这里没链接框架，只能 dlsym，
+        // 所以「符号不存在」必须自己挡掉 —— 挡掉之后是「什么都不做」，不是崩。
+        if (create == NULL || resetModem == NULL) {
+            return NO;
+        }
+
+        // 上游的调用方式：`_CTServerConnectionCreate(kCFAllocatorDefault, nil, nil)`。
+        // 第一个参数虽然在原型里是 allocator，但这里刻意传 NULL —— 与上游逐字一致。
+        void *connection = create(NULL, NULL, NULL);
+        if (connection == NULL) {
+            return NO;
+        }
+
+        // reason 字符串沿用上游的 "UserTriggeredReload"。
+        @try {
+            resetModem(connection, CFSTR("UserTriggeredReload"));
+        } @catch (NSException *e) {
+            return NO;
+        }
+
+        // 无权限时 CommCenter 会静默丢弃请求 —— 不报错也不抛异常。所以这里返回 YES
+        // 只代表「调用发出去了」，不代表 modem 真的重载了。判定要靠前后 RSRP 的变化。
+        return YES;
     }
 }
 

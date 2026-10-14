@@ -49,11 +49,44 @@ BOOL sysprobe_restore_default_bands(int slot);
 ///   `bars` / `maxBars`  信号格
 ///   `rat`          当前网络制式
 ///   `band`         服务小区的频段号
+///   `pci`          物理小区 ID（`kCTCellMonitorPID`）
+///   `tac`          跟踪区码（`kCTCellMonitorTAC`）
+///   `lac`          位置区码。LTE/NR 下与 `tac` 同值（上游 CellularInfo 就是这么显示的），
+///                  独立成一个键是为了让界面那一行的语义明确，不跟着制式改标题。
+///   `cellId`       基站 ID（`kCTCellMonitorCellId`）
 ///   `rsrp` / `snr` 参考信号接收功率 / 信噪比
 ///
 /// **会阻塞**：内部用信号量等 `copyCellInfo:` 那个异步回调，最长 1 秒。调用方要放到
 /// 后台队列上（`BandService` 就是这么做的）。
 NSDictionary * _Nullable sysprobe_slot_info(int slot);
+
+/// 一次只取信号强度，不取小区信息。
+///
+/// **刻意不碰 `copyCellInfo`**：那个回调最坏要等 1 秒（见 `sysprobe_slot_info` 的说明），
+/// 而这个函数是给**定时器轮询**用的 —— 2 秒一次地等一秒，会把调用方那条队列周期性压死。
+/// 所以它只走挂在 `CTServiceDescriptor` 上的 `getSignalStrengthMeasurements:error:`，
+/// 实测是毫秒级。
+///
+/// 返回 `@{@"rsrp": NSNumber, @"snr": NSNumber}`；读不到就返回**空字典**（不是 nil），
+/// 调用方按「有没有这个键」判断，不用区分「读失败」和「没有这一项」。
+///
+/// `rsrp` 沿用 `sysprobe_slot_info` 的哨兵判据：**小于 0 才算有效**，0 是「没读到」。
+NSDictionary * sysprobe_signal_sync(int slot);
+
+/// 刷新蜂窝网络信号：让 modem 重载并重新注册。
+///
+/// 上游 CellularInfo 的「刷新蜂窝网络信号」就是这一句
+///（`CoreTelephonyController.swift` 的 `refreshCellularConnection()`）：
+///
+///     _CTServerConnectionResetModem(connection, @"UserTriggeredReload")
+///
+/// 它**不是**杀掉 CommCenter（那是 `RootTool` 的 `restart-commcenter`，会连服务层一起重建）。
+/// 这里只让基带重新加载，CommCenter 进程不动，恢复更快；代价同样是**掉网数秒**。
+///
+/// 两个符号都是 CoreTelephony 的私有 C 函数，本工程没有链接 CoreTelephony，所以走
+/// `dlsym`（与文件里其它取数同一个套路）。无权限时 CommCenter 会**静默丢弃**请求 ——
+/// 不报错、不抛异常 —— 所以本函数返回 YES 只代表「调用发出去了」，不代表真的刷了。
+BOOL sysprobe_refresh_modem(void);
 
 /// 这个卡槽插着卡吗。
 ///

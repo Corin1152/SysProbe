@@ -1,36 +1,38 @@
 import SwiftUI
 
-/// 「维护」分页 —— 原来藏在右上角齿轮里的三页（维护 / 清理 / 频段）收成这一页的分段。
+/// 「维护」分页 —— 原来藏在右上角齿轮里的几页收成这一页的分段。
 ///
 /// ── 为什么搬出来 ────────────────────────────────────────────────────────────
 ///
-/// 它们本来就在齿轮里，问题是**没人找得到**：三行菜单挂在导航栏右上角，进去是盖满全屏的
-/// 一层，返回只能点左上角。其中「频段」是唯一会写坏系统状态的一页，却排在菜单第二行、
-/// 与「关于」这种纯信息页并列。搬到分页栏上之后它们一级可达，而齿轮没有内容可装 ——
-/// 整个删掉。
+/// 它们本来就在齿轮里，问题是**没人找得到**：几行菜单挂在导航栏右上角，进去是盖满全屏的
+/// 一层，返回只能点左上角。搬到分页栏上之后一级可达。
+///
+/// ── 2026-10-14：「频段」搬走了 ──────────────────────────────────────────────
+///
+/// 它与「维护 / 清理」不是一路：唯一会写基带、能把手机写进「无服务」的一页，
+/// 下面还多出一个「自动刷新」分段。现在它独占第 4 个分页（见 `BandHubView`），
+/// 这一页回到两个分段。「隐藏这一页」关掉的是**整个分页**（在 `RootView` 里判），
+/// 不是这里的某一格。
 ///
 /// ── 分段内容的约定 ──────────────────────────────────────────────────────────
 ///
-/// 三个分段**各自带滚动容器**（维护是 `Form`，清理与频段是 `ScrollView`），
+/// 两个分段**各自带滚动容器**（维护是 `Form`，清理是 `ScrollView`），
 /// 所以外壳用 `PageHubScaffold` 而不是 `PageScaffold`。理由见 `PageHubScaffold` 的说明。
 struct MaintenanceHubView: View {
 
-    @State private var page: MaintenanceSegment = .maintenance
+    /// 右上角齿轮的回调，由 `RootView` 给。
+    let openSettings: @MainActor () -> Void
 
-    /// 「频段」那一项是否出现。与 `BandPanels` 读的是同一个键 ——
-    /// 频段页里的「隐藏这一页」写的就是它。
-    ///
-    /// 关掉之后**没有地方能再打开**，这是故意的：一个能随手关掉又能随手打开的开关
-    /// 挡不住误触。见 `BandPanels` 里第 4 层警告的说明。
-    @AppStorage("sysprobe.showBandEditor") private var showBandEditor = true
+    @State private var page: MaintenanceSegment = .maintenance
 
     var body: some View {
         PageHubScaffold(
             title: page.title,
             glow: .mwAccent,
+            openSettings: openSettings,
             header: {
                 Picker("Maintenance", selection: $page) {
-                    ForEach(visibleSegments) { segment in
+                    ForEach(MaintenanceSegment.allCases) { segment in
                         segmentLabel(segment).tag(segment)
                     }
                 }
@@ -41,24 +43,9 @@ struct MaintenanceHubView: View {
                 switch page {
                 case .maintenance: MaintenancePanels()
                 case .clean: CleanPanels()
-                case .bands: BandPanels()
                 }
             }
         )
-        // 频段页里的「隐藏这一页」把开关关掉之后，分段栏里就没有它了 ——
-        // 但选中态还停在它上面，`Picker` 会渲染成「三个里一个都没选」。
-        // 这里把它挪回维护：开关一关，用户眼前立刻就是维护页，不会看到一段空档。
-        .onChange(of: showBandEditor) { visible in
-            if !visible, page == .bands {
-                page = .maintenance
-            }
-        }
-    }
-
-    private var visibleSegments: [MaintenanceSegment] {
-        showBandEditor
-            ? MaintenanceSegment.allCases
-            : MaintenanceSegment.allCases.filter { $0 != .bands }
     }
 
     /// 分段标签。「频段」那一项多带一个盾牌图标 —— 它和「清理」只隔一次点击，
@@ -77,16 +64,13 @@ struct MaintenanceHubView: View {
     }
 }
 
-/// 「维护」页的三个分段。顺序是明确要求的：维护 → 清理 → 频段。
-///
-/// 频段排最后不是随意的：它风险最高，不该紧挨着「清理」那种点一下就好的动作。
+/// 「维护」页的两个分段。2026-10-14 起「频段」不再是这里的一格 —— 它搬去了
+/// 第 4 个分页（见 `BandHubView`）。
 enum MaintenanceSegment: Int, CaseIterable, Identifiable {
     /// 重启设备 / 注销 / 关温控 / 网络唤醒 / 语言。
     case maintenance
     /// 磁盘缓存扫描与清理。
     case clean
-    /// 基带频段读写 —— 全 App 唯一会写坏系统状态的一页。
-    case bands
 
     var id: Int { rawValue }
 
@@ -94,14 +78,16 @@ enum MaintenanceSegment: Int, CaseIterable, Identifiable {
         switch self {
         case .maintenance: return "Maintenance"
         case .clean: return "Clean"
-        case .bands: return "Bands"
         }
     }
 
-    /// 只有频段带记号。
+    /// 分段标签上的图标。现在两个都没有 —— 带记号的那一个是「频段」，
+    /// 它已经搬到自己的分页上去了。
+    ///
+    /// 这个字段留着是因为 `segmentLabel` 的写法：用 `Label` 而不是把符号塞进文字里
+    /// （`Label` 在分段控件里可能只渲染文字，退化了就是纯文字，不会出问题）。
     var icon: String? {
         switch self {
-        case .bands: return "exclamationmark.shield.fill"
         case .maintenance, .clean: return nil
         }
     }

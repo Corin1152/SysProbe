@@ -54,7 +54,11 @@ struct BandPanels: View {
     @AppStorage("sysprobe.bandEntryTipsDone") private var entryTipsDone = false
     /// 第 2 层：保存前是否还要确认。
     @AppStorage("sysprobe.bandSaveConfirm") private var saveConfirm = true
-    /// 第 4 层：这一项是否还出现在齿轮菜单里。
+    /// 第 4 层：这一页是否还出现。
+    ///
+    /// 2026-10-14：它控制的已经是**整个「频段」分页**（见 `RootView.tabs`），
+    /// 不再是「维护」页里的一格 —— 频段搬出来独占第 4 个分页之后，关掉就等于
+    /// 把底部分页栏那一项收走。
     @AppStorage("sysprobe.showBandEditor") private var showBandEditor = true
 
     @State private var showEntryTips = false
@@ -168,10 +172,9 @@ struct BandPanels: View {
                 // 第 4 层：关掉入口。**没有地方能再打开** —— 这是故意的，
                 // 一个能随手关掉又能随手打开的开关挡不住误触。
                 //
-                // 2026-10-11：这里以前还调一次 `dismiss()`（那时整页是
-                // `fullScreenCover` 推出来的）。现在它是「维护」页里的一个分段，
-                // 没有可 dismiss 的东西 —— 关掉开关之后由 `MaintenanceHubView`
-                // 的 `onChange` 把选中态挪回「维护」，分段栏里那一项随之消失。
+                // 2026-10-14：关掉之后是整个「频段」分页从底部分页栏消失 ——
+                // 由 `RootView` 的 `onChange` 把选中态挪回「维护」，
+                // 否则分页栏会显示成「一个都没选」。
                 showBandEditor = false
             }
         } message: {
@@ -243,6 +246,22 @@ struct BandPanels: View {
                 }
                 if let snr = info?.snr {
                     infoRow("SNR", String(format: "%.1f dB", snr))
+                }
+                // 小区标识。与「服务频段」来自同一次 `copyCellInfo` —— 上游 CellularInfo
+                // 「卡 1 → 射频」那一栏显示的就是这三个值。
+                if let pci = info?.pci {
+                    infoRow("Physical Cell ID", String(pci))
+                }
+                if let tac = info?.tac {
+                    infoRow("Tracking Area Code", String(tac))
+                }
+                if let lac = info?.lac {
+                    // LTE/NR 下它与 TAC 同值（桥接层就是这么填的）。2G/3G 时那一个键
+                    // 不出现，这一行也就整行不显示。
+                    infoRow("Location Area Code", String(lac))
+                }
+                if let cellId = info?.cellId {
+                    infoRow("Cell ID", String(cellId))
                 }
             }
         }

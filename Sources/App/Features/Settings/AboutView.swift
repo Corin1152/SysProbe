@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 「关于」分页。版本号 + 诊断信息。原来是齿轮菜单里的第四页。
+/// 「关于」。版本号 + 诊断信息。
 ///
-/// 2026-10-11 起它是底部分页栏的第 4 项 —— 齿轮删掉之后，这一页必须自己带
-/// `NavigationStack`（以前那一层是 `SettingsDestinationHost` 给的）。
+/// 2026-10-11 起它是底部分页栏的第 4 项；**2026-10-14 起回到右上角齿轮里**
+/// （第 4 个分页让给了「频段」）—— 由 `RootView` 以 `.sheet` 弹出，所以右上角
+/// 多一个「完成」。导航栈仍然自己带：以前那一层是 `SettingsDestinationHost` 给的。
 ///
 /// 标题保持 `.inline`：这一页是 `Form`（设置式列表），大标题在它上面会显得空。
 /// 也顺带与「电源」「维护」两个带分段控件的分页保持一致 —— 四个分页里只有
@@ -20,6 +21,11 @@ import SwiftUI
 struct AboutView: View {
     @EnvironmentObject private var monitor: PowerMonitor
     @EnvironmentObject private var charge: ChargeControlService
+    /// 作为弹层出现时的关闭动作。
+    ///
+    /// 它**不在**分页栏里时才有意义 —— 两种情况共用一个视图，多这一个按钮在分页
+    /// 里不会有副作用（那时 `dismiss` 是空操作）。
+    @Environment(\.dismiss) private var dismiss
 
     /// 维护工具能不能用。与维护页 / 清理页各自跑一次毫秒级自检 ——
     /// 不为共用一行诊断引入跨页状态。
@@ -47,6 +53,12 @@ struct AboutView: View {
             }
             .navigationTitle("About")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .tint(.mwAccent)
+                }
+            }
         }
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），放到
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。

@@ -30,6 +30,12 @@ final class AppState: ObservableObject {
 
     @Published var selectedTab = 0
 
+    /// 右上角齿轮的「关于」弹层是否展开。
+    ///
+    /// 2026-10-14：第 4 个分页让给了「频段」，「关于」回到齿轮里。这个标志位与
+    /// 0.0.30 之前那个是同一个 —— 那时它装的是设置面板，现在只剩关于。
+    @Published var showingSettings = false
+
     init() {
         // `AppFont` 与 `Strings.text` 读的是 `AppLanguage.current` 这个全局，
         // 而它得在第一帧之前就位 —— 见 `SysProbeApp.init` 里同一句话。
