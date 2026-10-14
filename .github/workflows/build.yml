@@ -17,14 +17,18 @@ permissions:
 jobs:
   ipa:
     name: Unsigned ipa
-    # 显式写 macos-15 而不是 macos-latest（2026-10-14）。
+    # 必须用 macos-latest（= macos-26 镜像），**不能用 macos-15**（2026-10-14 实测）。
     #
-    # macos-latest 现在指向最新的 macos-26 镜像，那个池子小：同一份配置在 13:17
-    # 只排了 7 秒就拿到 runner，到 15:00 之后同一标签排了 25 分钟仍未被分配、
-    # 最终被 GitHub 侧取消（job 的 runner_name 为空 = 从来没分到机器）。
-    # macos-15 是长期 GA 的镜像，池子大得多，而且同样带 Xcode 26（本仓库要
-    # Swift 6.2，见下面 `Check toolchain` 一步）。
-    runs-on: macos-15
+    # 原因不是排队，是编译器的版本差：macos-15 镜像最高只装到 Xcode 26.3，而
+    # `MemoryOptimizer.swift` 里那句「后台队列回主 actor 发布进度」
+    # (`Task { @MainActor in self?.phase = … }`) 在 26.3 下会报
+    #     error: sending 'self' risks causing data races
+    # 而 26.6（macos-26）放行 —— 26.6 开了 `NonisolatedNonsendingByDefault`，
+    # 那条路径的隔离推断不一样。同一份代码在 13:17 的 macos-latest 上是构建成功的。
+    #
+    # 所以这里锁 macos-latest，**不要**为了「排队快」改成 macos-15：那会撞上上面那条错误，
+    # 而且报错位置在完全无关的文件里，很容易误判成并发代码写错了。
+    runs-on: macos-latest
     permissions:
       contents: write
 
@@ -52,6 +56,22 @@ jobs:
           echo "Swift $found (need $required or newer)"
           if [ "$(printf '%s\n%s\n' "$required" "$found" | sort -V | head -1)" != "$required" ]; then
             echo "::error::Swift $found is too old. This project needs Swift $required or newer; pin a runner image that ships it."
+            exit 1
+          fi
+
+          # Xcode 版本也要拦（2026-10-14 加）。
+          #
+          # macos-15 镜像最高只到 Xcode 26.3，而 26.3 会给
+          # `MemoryOptimizer.swift` 的 `Task { @MainActor in self?.phase = … }`
+          # 报 `error: sending 'self' risks causing data races`；26.6 放行
+          # （26.6 开了 NonisolatedNonsendingByDefault，隔离推断不同）。
+          # 报错位置在一个跟改动完全无关的文件里，极难一眼定位 —— 所以在选完 Xcode、
+          # 开始编译之前就把它挡掉，并直接说清楚该换镜像。
+          required_xcode=26.6
+          found_xcode=$(xcodebuild -version | sed -n 's/^Xcode \([0-9][0-9.]*\).*/\1/p' | head -1)
+          echo "Xcode $found_xcode (need $required_xcode or newer)"
+          if [ "$(printf '%s\n%s\n' "$required_xcode" "$found_xcode" | sort -V | head -1)" != "$required_xcode" ]; then
+            echo "::error::Xcode $found_xcode is too old. This project needs Xcode $required_xcode or newer; pin a runner image that ships it (macos-latest does, macos-15 does not)."
             exit 1
           fi
 
