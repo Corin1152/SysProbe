@@ -431,3 +431,7 @@
 "Sleeping" = "休眠";
 "Stopped" = "已停止";
 "Zombie" = "僵尸";
+/* 进程分页 · 分组与资源列（2026-10-15 阶段二） */
+"User Apps" = "用户应用";
+"Per-process CPU and memory are unavailable." = "单个进程的 CPU 与内存读不到。";
+"The private API was blocked, so only names and PIDs are shown." = "私有接口被拦下，因此只显示名称与 PID。";

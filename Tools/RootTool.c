@@ -50,8 +50,11 @@
 //
 
 #include <dirent.h>
+// `dlopen` / `dlsym` —— 取 libproc 那两个私有符号用，见「进程列表」那一节。
+#include <dlfcn.h>
 #include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -704,32 +707,181 @@ static int do_thermal_set(int disabled) {
 //
 //      proc-list <report.json>
 //
-//  ── 为什么这一节只用 `kinfo_proc` ──────────────────────────────────────────
+//  ── 三层信息来源 ──────────────────────────────────────────────────────────
 //
-//  进程表本身走 `sysctl(KERN_PROC_ALL)`，与上面的 `process_pid_by_name` 是同一个
-//  调用 —— 那是**公开接口**，本工具已经在真机上用它跑通了 respring 与
-//  restart-commcenter。所以这一段不需要任何新增权限，也不需要 libproc。
+//  1. **进程表**：`sysctl(KERN_PROC_ALL)` + `kinfo_proc` —— 公开接口，与上面的
+//     `process_pid_by_name` 是同一个调用（respring / restart-commcenter 已在
+//     真机上跑通）。拿 pid / ppid / 属主 / 状态 / 进程名。**零权限**。
+//  2. **可执行路径**：`proc_pidpath`（私有 API）。用来把「进程名」翻译成
+//     「应用名」，以及判断这个进程属于用户安装的 App 还是系统自带。
+//  3. **资源计数**：`proc_pidinfo(PROC_PIDTASKINFO)`（私有 API）。拿 CPU 累计
+//     时间与常驻内存。
 //
-//  ── CPU 与内存占用**刻意不在这一版里** ─────────────────────────────────────
+//  ── 第 2、3 层要 `task_for_pid-allow` ──────────────────────────────────────
 //
-//  那两个字段拿不到：`kinfo_proc` 里根本没有资源计数，要拿只能去调 libproc 的
-//  `proc_pidinfo` / `proc_pid_rusage`（私有 API，公开 SDK 无原型），而它们对
-//  **非自身进程**是否放行取决于 task port 权限 —— 本工具目前没有
-//  `task_for_pid-allow`。这一条必须先真机验证过再上，在那之前界面把这两列
-// 显示成「—」，不编数字。
+//  这两层都是 libproc 的私有接口，对**非自身进程**调用时由内核按 task port
+//  权限放行。本工具带着 `platform-application` + `no-sandbox` + uid 0，再加上
+//  `Support/SysProbeRootTool.entitlements` 里的 `task_for_pid-allow`。
+//
+//  **拿不到不等于功能坏**：每一次调用都单独判返回值，失败的进程那一格留空
+//  （`cpuNanos` / `residentBytes` 为 0，`name` 退回进程名），报告顶部的
+//  `resolved` 字段说明这一趟有多少个进程真的读到了资源计数 —— 界面据此决定
+//  是显示数字还是显示「—」，而不是把 0 当成「占用 0」摆出去。
 //
 //  ── 已知的信息损失（是接口的硬限制，不是这里的 bug）──────────────────────
 //
 //  `p_comm` 是 `char[MAXCOMLEN + 1]`，iOS 上 `MAXCOMLEN` 是 16，所以**超过 16
-//  字符的进程名会被内核截断**。要拿完整可执行路径得走 `proc_pidpath`，
-//  同样在待验证那一档里。
+//  字符的进程名会被内核截断**。`proc_pidpath` 那条路拿到的路径不受这个限制。
 //
 //  ── 与 App 的通信 ─────────────────────────────────────────────────────────
 //
 //  与 clean-* 同一套：App 把自己 tmp 目录里的一个路径传进来，这里写完 JSON、
 //  `chmod 0644`（报告属主是 root，不放开权限 App 读不到）再退出，App 读完自己删。
 
-/// 一个进程条目。字段全部来自 `kinfo_proc`。
+// ── libproc：私有 API，走 dlsym 取符号 ───────────────────────────────────────
+//
+//  公开 SDK 里既没有 `libproc.h`，也没有对应的 .tbd，所以**不能直接声明原型
+//  就去调用** —— 那样链接期解析不到符号，得靠 `-undefined dynamic_lookup`
+//  兜，等于把错误推迟到运行时，还更隐蔽。
+//
+//  符号本身在 `/usr/lib/libproc.dylib` 里，而那个库是 dyld 共享缓存的一部分，
+//  所以 `dlopen` + `dlsym` 拿得到；拿不到就安静降级（那一层数据留空），
+//  而不是让整个命令失败。
+
+/// `proc_pidpath(pid, buffer, buffersize)`：可执行文件的绝对路径。
+/// 返回写进缓冲区的字节数，失败返回 -1。
+typedef int (*sysprobe_proc_pidpath_fn)(int, void *, uint32_t);
+
+/// `proc_pidinfo(pid, flavor, arg, buffer, buffersize)`。返回写入字节数。
+typedef int (*sysprobe_proc_pidinfo_fn)(int, int, uint64_t, void *, int);
+
+/// `PROC_PIDTASKINFO` 的 flavor 号。数字写死是刻意的：它属于内核 ABI，
+/// 不会变，而 `<sys/proc_info.h>` 在 iOS SDK 里的暴露程度不保证。
+#define SYSPROBE_PROC_PIDTASKINFO 4
+
+/// `struct proc_taskinfo` 按内核 ABI 自己定义 —— 同样为了不依赖
+/// `<sys/proc_info.h>`。**字段顺序与宽度必须与内核一致**：`proc_pidinfo` 是
+/// 按 `buffersize` 往这块内存里直接写的，差一个字段就读到隔壁去了。
+struct sysprobe_proc_taskinfo {
+    uint64_t pti_virtual_size;
+    uint64_t pti_resident_size;
+    uint64_t pti_total_user;
+    uint64_t pti_total_system;
+    uint64_t pti_threads_user;
+    uint64_t pti_threads_system;
+    int32_t  pti_policy;
+    int32_t  pti_faults;
+    int32_t  pti_pageins;
+    int32_t  pti_cow_faults;
+    int32_t  pti_messages_sent;
+    int32_t  pti_messages_received;
+    int32_t  pti_syscalls_mach;
+    int32_t  pti_syscalls_unix;
+    int32_t  pti_csw;
+    int32_t  pti_threadnum;
+    int32_t  pti_numrunning;
+    int32_t  pti_priority;
+};
+
+/// 路径缓冲区。iOS 的 `PATH_MAX` 是 1024，可执行路径都在几百字节以内。
+#define SYSPROBE_PROC_PATH_MAX 1024
+
+/// 取 `proc_pidpath`。取不到返回 NULL（调用方降级）。
+static sysprobe_proc_pidpath_fn proc_pidpath_sym(void) {
+    static sysprobe_proc_pidpath_fn fn = NULL;
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        // 先问已经加载的镜像 —— libproc 很可能已经被别的系统库带进来了。
+        fn = (sysprobe_proc_pidpath_fn)dlsym(RTLD_DEFAULT, "proc_pidpath");
+        if (fn == NULL) {
+            void *handle = dlopen("/usr/lib/libproc.dylib", RTLD_LAZY);
+            if (handle != NULL) {
+                fn = (sysprobe_proc_pidpath_fn)dlsym(handle, "proc_pidpath");
+            }
+        }
+    }
+    return fn;
+}
+
+/// 取 `proc_pidinfo`。同上。
+static sysprobe_proc_pidinfo_fn proc_pidinfo_sym(void) {
+    static sysprobe_proc_pidinfo_fn fn = NULL;
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        fn = (sysprobe_proc_pidinfo_fn)dlsym(RTLD_DEFAULT, "proc_pidinfo");
+        if (fn == NULL) {
+            void *handle = dlopen("/usr/lib/libproc.dylib", RTLD_LAZY);
+            if (handle != NULL) {
+                fn = (sysprobe_proc_pidinfo_fn)dlsym(handle, "proc_pidinfo");
+            }
+        }
+    }
+    return fn;
+}
+
+/// 从可执行路径里切出 `.app` 包本身的路径长度（不含结尾斜杠），切不出返回 0。
+///
+///      /private/var/containers/Bundle/Application/<UUID>/WeChat.app/WeChat
+///      └──────────────── 返回这一段 ────────────────────────────────────┘
+///
+/// 取**第一个** `.app/` 而不是最后一个：扩展进程的路径长这样 ——
+/// `Some.app/PlugIns/Ext.appex/Ext`，要的是最外层那个 `Some.app`，
+/// 而 `.appex` 的结尾不是 `.app`，所以第一个 `.app/` 正好落在外层。
+static size_t proc_app_bundle_length(const char *exePath) {
+    const char *hit = strstr(exePath, ".app/");
+    if (hit != NULL) {
+        return (size_t)(hit - exePath) + 4;   // 含 ".app"
+    }
+    size_t len = strlen(exePath);
+    if (len >= 4 && strcmp(exePath + len - 4, ".app") == 0) {
+        return len;
+    }
+    return 0;
+}
+
+/// 读 bundle 的显示名（走本地化，中文环境下就是中文名）。成功返回 1。
+///
+/// 用 `CFBundleCreate` 而不是自己解析 Info.plist：它对同一个 URL 有**内部缓存**，
+/// 而这一趟里同一个 .app 会被多个进程命中（一个 App 通常带着若干扩展进程），
+/// 缓存把「每个进程读一次 plist」压成「每个 bundle 读一次」。那一步是这一趟里
+/// 唯一的文件系统开销，值得。
+static int proc_bundle_display_name(const char *bundlePath, char *out, size_t outSize) {
+    CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, bundlePath,
+                                                       kCFStringEncodingUTF8);
+    if (pathString == NULL) {
+        return 0;
+    }
+    CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString,
+                                                 kCFURLPOSIXPathStyle, true);
+    CFRelease(pathString);
+    if (url == NULL) {
+        return 0;
+    }
+
+    CFBundleRef bundle = CFBundleCreate(kCFAllocatorDefault, url);
+    CFRelease(url);
+    if (bundle == NULL) {
+        return 0;   // 不是 bundle（或读不出来）—— 调用方保留进程名。
+    }
+
+    int ok = 0;
+    CFStringRef name = CFBundleGetDisplayName(bundle);
+    if (name == NULL) {
+        name = CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleNameKey);
+    }
+    // 名字过长（或含转不出来的字符）时 `CFStringGetCString` 返回 false ——
+    // 那时保留进程名，不写一个截断的名字出去。
+    if (name != NULL &&
+        CFStringGetCString(name, out, (CFIndex)outSize, kCFStringEncodingUTF8)) {
+        ok = 1;
+    }
+    CFRelease(bundle);
+    return ok;
+}
+
+/// 一个进程条目。
 typedef struct {
     int pid;
     int ppid;
@@ -742,6 +894,21 @@ typedef struct {
     double started;
     /// 进程名（内核口径，见文件头那段「已知的信息损失」）。
     char comm[MAXCOMLEN + 1];
+    /// 显示名 —— 从 `.app` 里读出来的应用名。取不到时与 `comm` 相同。
+    ///
+    /// 128 字节：应用名远短于此，留足是为了万一 `CFBundleGetDisplayName`
+    /// 返回一长串时不会在 `CFStringGetCString` 那里失败。
+    char name[128];
+    /// 1 = 用户安装的 App（可执行文件在 Bundle 容器里），0 = 系统自带。
+    int userApp;
+    /// CPU 累计时间（用户态 + 系统态，纳秒）。
+    ///
+    /// **这是累计值，不是占用率** —— 差分由 App 侧做。本工具每次都是一次性的
+    /// 进程，留不住上一次的读数，而占用率恰恰只能由两次读数求差得到。
+    /// 读不到时为 0。
+    uint64_t cpuNanos;
+    /// 常驻内存（字节，`pti_resident_size`）。读不到时为 0。
+    uint64_t residentBytes;
 } proc_entry;
 
 /// 按 pid 升序。`KERN_PROC_ALL` 返回的本就是按 pid 排的，这里再排一次是为了
@@ -752,8 +919,12 @@ static int proc_compare_pid(const void *a, const void *b) {
     return (pa > pb) - (pa < pb);
 }
 
-/// 采集进程表。成功返回条目数（`*outEntries` 由调用方 `free`），失败返回 -1。
-static int proc_collect(proc_entry **outEntries) {
+/// 采集进程表。
+///
+/// 成功返回条目数（`*outEntries` 由调用方 `free`），失败返回 -1。
+/// `*outResolved` 是这一趟里真的读到资源计数的进程数 —— 报告顶部那个统计，
+/// 界面据此决定是显示数字还是显示「—」。
+static int proc_collect(proc_entry **outEntries, int *outResolved) {
     int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
     size_t size = 0;
 
@@ -781,6 +952,12 @@ static int proc_collect(proc_entry **outEntries) {
         return -1;
     }
 
+    // 两个符号取一次，循环里不再重复 dlsym。取不到就是 NULL ——
+    // 后面每一次调用都判空，整段降级而不是失败。
+    sysprobe_proc_pidpath_fn pidpath = proc_pidpath_sym();
+    sysprobe_proc_pidinfo_fn pidinfo = proc_pidinfo_sym();
+    int resolved = 0;
+
     int kept = 0;
     for (size_t i = 0; i < count; i++) {
         pid_t pid = procs[i].kp_proc.p_pid;
@@ -807,6 +984,50 @@ static int proc_collect(proc_entry **outEntries) {
         memset(entries[kept].comm, 0, sizeof(entries[kept].comm));
         memcpy(entries[kept].comm, procs[i].kp_proc.p_comm,
                sizeof(entries[kept].comm) - 1);
+
+        // ── 显示名与分组 ──
+        //
+        // 显示名先按进程名兜底。取不到 .app 的进程（系统守护进程）就一直用这个名字，
+        // 那是**正确结果**而不是失败：`logd` 本来就叫 `logd`。
+        snprintf(entries[kept].name, sizeof(entries[kept].name), "%s", entries[kept].comm);
+        entries[kept].userApp = 0;
+        entries[kept].cpuNanos = 0;
+        entries[kept].residentBytes = 0;
+
+        if (pidpath != NULL) {
+            char exePath[SYSPROBE_PROC_PATH_MAX];
+            if (pidpath((int)pid, exePath, (uint32_t)sizeof(exePath)) > 0) {
+                // 用户装的 App 可执行文件都在 Bundle 容器里；系统自带进程在
+                // `/usr`、`/System`、`/Applications` 等处。
+                // 用**子串**匹配而不是前缀：`/var/…` 与 `/private/var/…` 两种
+                // 写法在真机上都会出现（`/var` 是指向 `/private/var` 的符号链接）。
+                if (strstr(exePath, "/var/containers/Bundle/Application/") != NULL) {
+                    entries[kept].userApp = 1;
+                }
+
+                size_t bundleLen = proc_app_bundle_length(exePath);
+                if (bundleLen > 0 && bundleLen < sizeof(exePath)) {
+                    char bundlePath[SYSPROBE_PROC_PATH_MAX];
+                    memcpy(bundlePath, exePath, bundleLen);
+                    bundlePath[bundleLen] = '\0';
+                    proc_bundle_display_name(bundlePath, entries[kept].name,
+                                             sizeof(entries[kept].name));
+                }
+            }
+        }
+
+        // ── 资源计数 ──
+        if (pidinfo != NULL) {
+            struct sysprobe_proc_taskinfo info;
+            memset(&info, 0, sizeof(info));
+            if (pidinfo((int)pid, SYSPROBE_PROC_PIDTASKINFO, 0, &info,
+                        (int)sizeof(info)) > 0) {
+                entries[kept].cpuNanos = info.pti_total_user + info.pti_total_system;
+                entries[kept].residentBytes = info.pti_resident_size;
+                resolved++;
+            }
+        }
+
         kept++;
     }
     free(procs);
@@ -816,30 +1037,39 @@ static int proc_collect(proc_entry **outEntries) {
     }
 
     *outEntries = entries;
+    *outResolved = resolved;
     return kept;
 }
 
 /// 写报告。返回 0 成功，-1 写不出来。
-static int proc_write_report(const char *path, const proc_entry *entries, int count) {
+static int proc_write_report(const char *path, const proc_entry *entries, int count,
+                             int resolved) {
     FILE *f = fopen(path, "w");
     if (f == NULL) {
         return -1;
     }
 
-    fprintf(f, "{\"count\":%d,\"processes\":[", count);
+    // `resolved` 摆在最前面：界面靠它判断「资源计数这一趟到底通没通」，
+    // 而不是去猜 —— 把 0 当成「占用 0」是这一页最容易犯的错。
+    fprintf(f, "{\"count\":%d,\"resolved\":%d,\"processes\":[", count, resolved);
     for (int i = 0; i < count; i++) {
         if (i > 0) {
             fputc(',', f);
         }
         fprintf(f,
-                "{\"pid\":%d,\"ppid\":%d,\"uid\":%u,\"status\":%d,\"started\":%.3f,\"comm\":",
-                entries[i].pid, entries[i].ppid, entries[i].uid,
-                entries[i].status, entries[i].started);
+                "{\"pid\":%d,\"ppid\":%d,\"uid\":%u,\"status\":%d,\"started\":%.3f,"
+                "\"userApp\":%d,\"cpuNanos\":%llu,\"residentBytes\":%llu,\"comm\":",
+                entries[i].pid, entries[i].ppid, entries[i].uid, entries[i].status,
+                entries[i].started, entries[i].userApp,
+                (unsigned long long)entries[i].cpuNanos,
+                (unsigned long long)entries[i].residentBytes);
         // 复用存储清理那一节的转义函数。它本来就是通用的 JSON 字符串转义，
         // 只是名字带了个 `clean_` 前缀（前向声明在文件上方）。进程名来自内核的
         // `p_comm`，正常是 ASCII，但同样按「可能不是合法 UTF-8」处理 ——
         // 一个坏字节会让 App 侧的 `JSONDecoder` 拒掉**整份**报告。
         clean_json_string(f, entries[i].comm);
+        fputs(",\"name\":", f);
+        clean_json_string(f, entries[i].name);
         fputc('}', f);
     }
     fputs("]}", f);
@@ -854,18 +1084,27 @@ static int proc_write_report(const char *path, const proc_entry *entries, int co
 /// `proc-list <report.json>`
 static int do_proc_list(const char *reportPath) {
     proc_entry *entries = NULL;
-    int count = proc_collect(&entries);
+    int resolved = 0;
+    int count = proc_collect(&entries, &resolved);
     if (count < 0) {
         fprintf(stderr, "proc-list: sysctl(KERN_PROC_ALL) failed (%s)\n", strerror(errno));
         return SYSPROBE_EXIT_FAILED;
     }
 
-    int written = proc_write_report(reportPath, entries, count);
+    int written = proc_write_report(reportPath, entries, count, resolved);
     free(entries);
 
     if (written != 0) {
         fprintf(stderr, "proc-list: cannot write %s (%s)\n", reportPath, strerror(errno));
         return SYSPROBE_EXIT_FAILED;
+    }
+
+    // 资源计数一个都没读到，说明 libproc 那条路被权限拦住了。
+    // **不影响退出码** —— 进程列表本身是好的，界面该照常显示，
+    // 只是 CPU / 内存两列留空。写一行 stderr，抓日志时一眼能看到。
+    if (resolved == 0) {
+        fprintf(stderr, "proc-list: 0/%d processes resolved resource usage"
+                        " (libproc blocked or unavailable)\n", count);
     }
     return SYSPROBE_EXIT_OK;
 }

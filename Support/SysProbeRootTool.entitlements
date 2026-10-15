@@ -97,5 +97,39 @@
 	<true/>
 	<key>com.apple.private.MobileContainerManager.allowed</key>
 	<true/>
+
+	<!-- ── task port：进程页要读「别的进程」的路径与资源计数 ─────────────────── -->
+
+	<!--
+	  这一条是 2026-10-15 补的，为「进程」分页的第二层与第三层信息：
+
+	    · `proc_pidpath(pid, …)`      —— 可执行文件路径（用来翻译应用名、判分组）
+	    · `proc_pidinfo(pid, PROC_PIDTASKINFO, …)` —— CPU 累计时间 + 常驻内存
+
+	  两者都是 libproc 的私有接口，对**非自身进程**调用时内核按 task port 权限放行。
+	  uid 0 不够 —— 内核查的是「能不能拿到这个进程的 task port」，那由这条
+	  entitlement 决定，与 euid 是两条独立的门。Helium（同一台设备上、同样是
+	  TrollStore 侧载的应用）就是带这条跑起来的，所以这不是纸面推测。
+
+	  ── 为什么这一条比上面几条更需要想清楚 ────────────────────────────────
+
+	  task port 是「可以读写对方地址空间」的能力，是这一份清单里权限最高的一条。
+	  上面几条（`no-sandbox` / `no-container` / 容器读取）都只是「放宽对自己那层
+	  限制」，而这一条是**跨进程**的。之所以仍然加：
+
+	    1. 本工具已经是 root + 脱沙箱，越权面早就打开了 —— 没有这条它也能
+	       `kill` 任意进程、`reboot` 设备。它挡住的从来不是「能干什么」，
+	       而是「读不读得到资源计数」；
+	    2. 工具**不接受来自 App 的 pid 参数**：`proc-list` 只遍历内核给的整张
+	       进程表，调用点固定，App 侧没有让工具去读任意 pid 的入口。
+	       这一页又是只读的（没有「结束进程」，见 `ProcessPanels.swift`）；
+	    3. 拿不到这条时功能是**降级**而不是崩：每一次 libproc 调用都单独判返回值，
+	       失败的那一格留空，报告顶部的 `resolved` 说明通没通。
+
+	  若将来要收回这一条：删掉它即可，`proc-list` 会照常出进程表，
+	  只是 CPU / 内存两列全部显示「—」（`resolved` 为 0）。
+	-->
+	<key>task_for_pid-allow</key>
+	<true/>
 </dict>
 </plist>

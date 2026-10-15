@@ -2,18 +2,24 @@ import SwiftUI
 
 /// 第 5 个分页 —— 进程列表。
 ///
-/// 对应 Windows 任务管理器的「进程」页：名称 / PID / 属主 / 状态。
+/// 对应 Windows 任务管理器的「进程」页：名称 / CPU / 内存 / PID / 状态。
 ///
 /// ── 这一页能显示什么、不能显示什么 ──────────────────────────────────────────
 ///
-/// **能**：进程名、PID、属主（root / mobile / 系统专用 uid）、运行状态、
-/// 以及页头的**全局** CPU 与内存占用（那两项来自 `HardwareMonitor` 的 Mach 调用，
+/// **能**：应用名（从 `.app` 包里读的显示名，不是内核那个被截断的进程名）、
+/// CPU 占用率、常驻内存、PID、属主（root / mobile / 系统专用 uid）、运行状态，
+/// 以及页头的**整机** CPU 与内存占用（那两项来自 `HardwareMonitor` 的 Mach 调用，
 /// 与进程列表无关，但摆在同一页上才读得通）。
 ///
-/// **不能**：单个进程的 CPU 与内存。`kinfo_proc` 里没有资源计数，要拿得走
-/// `proc_pidinfo` / `proc_pid_rusage`（私有 API）并依赖 task port 权限 ——
-/// 那条路要先在真机上验证，详见 `Tools/RootTool.c` 里 `proc-list` 那一节。
-/// 所以这一版**没有**「CPU」「内存」两列，而不是摆两列全是 0 的假数据。
+/// **可能读不到**：CPU 与内存两列走的是 `proc_pidinfo`（私有 API），需要
+/// `task_for_pid-allow`。真机上万一被拦，那两列整列显示「—」，并在页头说明原因 ——
+/// 而不是把 0 当成「占用 0」摆出去。判据是 `ProcessMonitor.resolvedCount`。
+///
+/// ── 分组 ────────────────────────────────────────────────────────────────────
+///
+/// 分成「用户应用」与「系统」两组，判据是 C 侧给的 `userApp`（可执行文件在不在
+/// Bundle 容器里）。这台设备上三百多个进程里用户 App 只占十几个，混在一起时
+/// 想找自己装的 App 得翻很久；分开之后两组各自按 pid 升序，各自好找。
 ///
 /// ── 刻意不做的 ──────────────────────────────────────────────────────────────
 ///
@@ -24,7 +30,8 @@ import SwiftUI
 /// ── 采样开销与生命周期 ──────────────────────────────────────────────────────
 ///
 /// 每一拍都要起一个 root 子进程（见 `ProcessMonitor` 类型头），所以**只在页面可见时
-/// 采样**：`onAppear` 起、`onDisappear` 停。用户没停在这一页时一拍都不跑。
+/// 采样**：`onAppear` 起、`onDisappear` 停。切到别的分页、或 App 退到后台，
+/// 一拍都不跑。
 struct ProcessPanels: View {
 
     /// 右上角齿轮的回调，由 `RootView` 给。
@@ -52,8 +59,16 @@ struct ProcessPanels: View {
                 // `ForEach` 直接挂在外层 `LazyVStack`（`PageScaffold` 里的那个）下，
                 // 每一行才是独立的懒加载元素。把它整个包进一个 `Panel` 会让
                 // LazyVStack 只看到一个子视图，于是几百行**全部**立刻建出来。
-                ForEach(filtered) { entry in
-                    ProcessRow(entry: entry)
+                //
+                // 分组标题也是这个 LazyVStack 的兄弟节点，而不是套在组外面 ——
+                // 套一层 `Section` 或 `VStack` 会重新把组内所有行变成「一次性建出来」。
+                if !userApps.isEmpty {
+                    groupHeader("User Apps", count: userApps.count)
+                    ForEach(userApps) { row(for: $0) }
+                }
+                if !systemProcesses.isEmpty {
+                    groupHeader("System", count: systemProcesses.count)
+                    ForEach(systemProcesses) { row(for: $0) }
                 }
 
                 if filtered.isEmpty {
@@ -67,18 +82,55 @@ struct ProcessPanels: View {
         .onDisappear { monitor.pause() }
     }
 
-    // MARK: 筛选
+    // MARK: 筛选与分组
 
-    /// 按进程名（不区分大小写）或 pid 精确匹配筛选。
+    /// 按显示名 / 进程名（不区分大小写）或 pid 精确匹配筛选。
+    ///
+    /// 三个都搜：用户记得住的是应用名（"微信"），排查问题时手里拿的是进程名
+    /// （`backboardd`）或 pid。只搜一个会让人以为「搜不到就是没有」。
     private var filtered: [ProcessEntry] {
         let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return monitor.processes }
         return monitor.processes.filter {
-            $0.comm.localizedCaseInsensitiveContains(needle) || String($0.pid) == needle
+            $0.displayName.localizedCaseInsensitiveContains(needle)
+                || $0.comm.localizedCaseInsensitiveContains(needle)
+                || String($0.pid) == needle
         }
     }
 
+    /// 用户安装的 App（含它们的扩展进程）。
+    private var userApps: [ProcessEntry] {
+        filtered.filter(\.isUserApp)
+    }
+
+    /// 系统自带的进程。**是「非用户 App」而不是「uid == 0」** ——
+    /// 系统那一组里绝大多数是各自的专用 uid（`_securityd` 之类），
+    /// 按 uid 判会把它们全漏掉。
+    private var systemProcesses: [ProcessEntry] {
+        filtered.filter { !$0.isUserApp }
+    }
+
     // MARK: 版式
+
+    private func groupHeader(_ title: LocalizedStringKey, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(AppFont.text(12, weight: .semibold))
+                .foregroundStyle(Color.mwMuted)
+            Text(verbatim: "\(count)")
+                .font(AppFont.mono(11))
+                .foregroundStyle(Color.mwMuted.opacity(0.75))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 6)
+    }
+
+    private func row(for entry: ProcessEntry) -> ProcessRow {
+        ProcessRow(entry: entry,
+                   cpuShare: monitor.cpuShare[entry.pid],
+                   resourceAvailable: monitor.resolvedCount > 0)
+    }
 
     private var searchField: some View {
         HStack(spacing: 8) {
@@ -159,7 +211,7 @@ struct ProcessPanels: View {
 
 // MARK: - 概览
 
-/// 页头：进程数 + **全局** CPU / 内存 + 最近一次采样的状态。
+/// 页头：进程数 + **整机** CPU / 内存 + 最近一次采样的状态。
 ///
 /// 单独一个类型只为一件事：让 `HardwareMonitor` 每秒一次的发布只把**这一块**
 /// 重算一遍，而不是整页（几百行）跟着重算。与 `RootView` 里把
@@ -188,8 +240,27 @@ private struct ProcessOverviewPanel: View {
                 }
 
                 statusRow
+
+                // 只在「列表有内容、但资源计数一个都没读到」时出现。这一条是
+                // 阶段二（CPU / 内存两列）的唯一失败形态，必须说出来 ——
+                // 否则用户看到整列「—」会以为是这一页坏了，而其实是权限被拦。
+                if !monitor.processes.isEmpty && monitor.resolvedCount == 0 {
+                    unavailableNotice
+                }
             }
         }
+    }
+
+    private var unavailableNotice: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Per-process CPU and memory are unavailable.")
+                .font(AppFont.text(11, weight: .medium))
+                .foregroundStyle(Color.mwMuted)
+            Text("The private API was blocked, so only names and PIDs are shown.")
+                .font(AppFont.text(10))
+                .foregroundStyle(Color.mwMuted.opacity(0.8))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 状态行：说明列表是新的、旧的，还是压根没读到。
@@ -238,43 +309,74 @@ private struct ProcessOverviewPanel: View {
 
 // MARK: - 行
 
-/// 一行进程。色点表属主，右侧是状态与 pid。
+/// 一行进程。两行版式：上行是应用名与 CPU 占用，下行是进程名 / pid / 状态与内存。
 ///
-/// 这一版**没有** CPU / 内存两列 —— 那两项的数据还没有可信来源（见
-/// `Tools/RootTool.c` 里 `proc-list` 那一节的说明）。宁可少两列，
-/// 也不摆两列永远是「—」或永远是 0 的占位。
+/// ── 为什么是两行 ────────────────────────────────────────────────────────────
+///
+/// 单行要同时塞下「应用名 + CPU% + 内存 + pid + 状态」，在 iPhone 宽度上必然有一项
+/// 被压成省略号。而这五项里**应用名**是要认的、**CPU 与内存**是要比的，
+/// 都不该让位。拆成两行之后主次分明：上行认人，下行对账。
 private struct ProcessRow: View {
 
     let entry: ProcessEntry
+    /// 0…1 的整机口径占用率。`nil` = 这一拍没有基线（刚出现的进程），
+    /// 或者整条 libproc 路不通。
+    let cpuShare: Double?
+    /// 这一趟里有没有任何一个进程读到了资源计数。`false` 时两列一起显示「—」，
+    /// 不再逐个判 —— 那种情况下逐个数是 0 的进程会被误显示成「0% / 0 KB」。
+    let resourceAvailable: Bool
 
     private var owner: ProcessOwner { ProcessOwner(uid: entry.uid) }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Circle()
                 .fill(ownerTint)
                 .frame(width: 6, height: 6)
+                // 让色点与上行文字的中线对齐，而不是贴在行顶。
+                .padding(.top, 5)
 
-            Text(entry.comm)
-                .font(AppFont.text(13))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
-                // 进程名的区分度常在尾部（`...Service` / `...Daemon`），
-                // 截中间比截尾巴更容易认出来。
-                .truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.displayName)
+                    .font(AppFont.text(13, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    // 应用名的区分度常在尾部（`…Pro` / `…Lite`），
+                    // 截中间比截尾巴更容易认出来。
+                    .truncationMode(.middle)
+
+                HStack(spacing: 5) {
+                    if entry.showsCommSeparately {
+                        Text(verbatim: entry.comm)
+                            .font(AppFont.mono(10))
+                            .foregroundStyle(Color.mwMuted)
+                            .lineLimit(1)
+                        Text(verbatim: "·")
+                            .font(AppFont.text(10))
+                            .foregroundStyle(Color.mwMuted.opacity(0.7))
+                    }
+                    Text(verbatim: "\(entry.pid)")
+                        .font(AppFont.mono(10))
+                        .foregroundStyle(Color.mwMuted)
+                    Text(ProcessState(raw: entry.status).title)
+                        .font(AppFont.text(10))
+                        .foregroundStyle(Color.mwMuted)
+                        .lineLimit(1)
+                }
+            }
 
             Spacer(minLength: 6)
 
-            Text(ProcessState(raw: entry.status).title)
-                .font(AppFont.text(10))
-                .foregroundStyle(Color.mwMuted)
-                .lineLimit(1)
-                .frame(width: 46, alignment: .trailing)
-
-            Text(verbatim: "\(entry.pid)")
-                .font(AppFont.mono(12))
-                .foregroundStyle(Color.mwMuted)
-                .frame(width: 42, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(verbatim: cpuText)
+                    .font(AppFont.mono(12))
+                    .foregroundStyle(cpuTint)
+                    .frame(width: 46, alignment: .trailing)
+                Text(verbatim: memoryText)
+                    .font(AppFont.mono(11))
+                    .foregroundStyle(Color.mwMuted)
+                    .frame(width: 58, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -287,6 +389,42 @@ private struct ProcessRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.mwCardStroke, lineWidth: 1)
         )
+    }
+
+    // MARK: 数值
+
+    private var cpuText: String {
+        guard resourceAvailable, let share = cpuShare else { return "—" }
+        let percent = share * 100
+        // 低于 0.05% 的一律并成 0%：那种量级在四位宽的列里没有意义，
+        // 而 "0.0%" 看起来像「读不到」，与真正的「—」混淆。
+        if percent < 0.05 { return "0%" }
+        if percent >= 10 { return "\(Int(percent.rounded()))%" }
+        return String(format: "%.1f%%", percent)
+    }
+
+    /// CPU 越高越显眼：≥70% 用警示色，≥25% 用强调色，其余用正文色。
+    /// 这一页的主要用途就是「找出谁在吃 CPU」，全列一个颜色等于没给。
+    private var cpuTint: Color {
+        guard resourceAvailable, let share = cpuShare else { return .mwMuted }
+        if share >= 0.70 { return .mwLoss }
+        if share >= 0.25 { return .mwAccent }
+        return .primary
+    }
+
+    private var memoryText: String {
+        guard resourceAvailable, entry.hasResourceData else { return "—" }
+        return Self.formatBytes(entry.residentBytes)
+    }
+
+    /// 内存的紧凑写法。自己算而不用 `ByteCountFormatter`：那东西每行一次调用，
+    /// 几百行滚动时是实打实的开销，而这里只需要三档。
+    private static func formatBytes(_ bytes: UInt64) -> String {
+        let kb = Double(bytes) / 1024
+        if kb < 1024 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024
+        if mb < 1024 { return String(format: "%.0f MB", mb) }
+        return String(format: "%.2f GB", mb / 1024)
     }
 
     /// 属主的颜色。root 用警示色 —— 那是这一页上唯一值得一眼认出来的类别

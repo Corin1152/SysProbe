@@ -149,7 +149,14 @@ TOOL="$BUILD_DIR/Payload/$SCHEME.app/SysProbeRootTool"
 
 echo "==> Building SysProbeRootTool"
 # `-framework CoreFoundation` 是给「关温控」那一组用的：它要按原格式读、改、写回
-# launchd 的 disabled.plist（二进制 plist），用 CFPropertyList 是唯一稳的做法。
+# launchd 的 disabled.plist（二进制 plist），用 CFPropertyList 是唯一稳的做法；
+# 进程列表那一节读 `.app` 的 Info.plist（`CFBundleGetDisplayName`）也靠它。
+#
+# `dlopen` / `dlsym`（取 libproc 那两个私有符号）**不需要额外的 `-ldl`** ——
+# 它们在 libSystem 里，clang 默认就链。真正要小心的是另一头：那两个符号在公开
+# SDK 里既没有头文件也没有 .tbd，所以**不能声明原型直接调用**（链接期解析不到，
+# 得靠 `-undefined dynamic_lookup` 兜，等于把错误推迟到运行时）。走 dlsym 之后
+# 编译器不再需要它们的符号，链接这一关是干净的。
 xcrun --sdk iphoneos clang \
   -arch arm64 \
   -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
@@ -388,6 +395,18 @@ for target in "$main_binary" "$daemon"; do
   done
   echo "  entitlements: $(basename "$target") ok"
 done
+
+# RootTool 也查一遍，但**只警告不失败**。它这条 entitlements 影响的是「进程页能不能
+# 读单个进程的 CPU / 内存、能不能把进程名翻成应用名」—— 丢了不会让任何既有功能坏掉，
+# 那一页会整列显示「—」并在页头说明原因（`ProcessMonitor.resolvedCount == 0`）。
+# 所以它不该拦住构建，但必须留下痕迹：否则「改了 entitlements 却没生效」要等到
+# 真机上翻到那一页才会被发现，而那时离改动已经过去很久了。
+tool_entitlements="$(ldid -e "$TOOL" 2>/dev/null || true)"
+if printf '%s' "$tool_entitlements" | grep -q "task_for_pid-allow"; then
+  echo "  entitlements: SysProbeRootTool ok (task_for_pid-allow)"
+else
+  echo "::warning::SysProbeRootTool is missing 'task_for_pid-allow'. The Processes page will still list processes, but per-process CPU / memory will read as '—' on device."
+fi
 
 # 扩展（负一屏）也必须有 entitlements —— 否则它读不到共享指标文件、自己采样，
 # 负一屏就会和主 App / Statusbar 显示不一样的数。同样是静默失败：界面照常显示，

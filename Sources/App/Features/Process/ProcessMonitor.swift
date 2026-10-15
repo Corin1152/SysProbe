@@ -13,13 +13,19 @@ import Combine
 //  的 `daemon-kill` 那段注释里记着实测结论 —— 「uid 501 查不了 root 进程，
 //  `kill(pid,0)` 只会拿到 EPERM」。进程表同理，只能由 root 子进程去读。
 //
-//  ── 这一版只有「身份」，没有「资源」 ────────────────────────────────────────
+//  ── 三层信息，逐层降级 ─────────────────────────────────────────────────────
 //
-//  `proc-list` 目前只报进程名 / PID / PPID / 属主 / 状态 / 启动时间 —— 全部来自
-//  `sysctl(KERN_PROC_ALL)` 的 `kinfo_proc`，那是公开接口，零新增权限。
-//  **CPU 与内存两列是空的**：它们要 `proc_pidinfo` / `proc_pid_rusage`（私有 API）
-//  且取决于 task port 权限，得先在真机上验证过才敢上。界面上这两列显示「—」，
-//  不编数字 —— 详见 `RootTool.c` 里 `proc-list` 那一节的文件头说明。
+//  1. **进程表**：`sysctl(KERN_PROC_ALL)` 的 `kinfo_proc`。公开接口，**零新增权限**
+//     —— pid / ppid / 属主 / 状态 / 启动时间 / 进程名。
+//  2. **可执行路径**：`proc_pidpath`（私有 API，要 `task_for_pid-allow`）。用来把
+//     「进程名」翻成「应用名」，以及判断这个进程属于用户装的 App 还是系统自带。
+//  3. **资源计数**：`proc_pidinfo(PROC_PIDTASKINFO)`（私有 API，同上）。拿 CPU
+//     累计时间与常驻内存。
+//
+//  第 2、3 层**可能整条不通**（权限被拦、库不在）。那种情况下这一页仍然是一个
+//  可用的进程查看器：名字退回进程名、分组全落进「系统」、CPU 与内存显示「—」。
+//  报告顶部的 `resolved` 字段就是给这件事用的 —— 它是「这一趟有几个进程真的读到
+//  了资源计数」，界面靠它区分「读不到」与「占用 0」，**绝不把 0 当数字摆出去**。
 // ══════════════════════════════════════════════════════════════════════════════
 
 // MARK: - 模型
@@ -45,14 +51,72 @@ nonisolated struct ProcessEntry: Identifiable, Hashable, Sendable, Decodable {
     /// **可能是 0** —— `kinfo_proc.p_starttime` 在部分机型 / 系统版本上不被内核
     /// 填充。界面据此显示「—」，而不是把 1970 年摆出来。
     let started: Double
+    /// 1 = 用户安装的 App（可执行文件在 Bundle 容器里），0 = 系统自带。
+    ///
+    /// 判据在 C 侧：可执行路径里含 `/var/containers/Bundle/Application/`。
+    let userApp: Int
+    /// CPU **累计**时间（用户态 + 系统态，纳秒）。读不到时为 0。
+    ///
+    /// 这是累计值而不是占用率 —— 差分在 `ProcessMonitor.updateCPUShare` 里做，
+    /// 因为工具每次都是一次性进程，留不住上一次的读数。
+    let cpuNanos: UInt64
+    /// 常驻内存（字节）。读不到时为 0。
+    let residentBytes: UInt64
     /// 内核口径的进程名。
     ///
     /// `p_comm` 是 `char[MAXCOMLEN + 1]`，iOS 上 `MAXCOMLEN` 是 16，所以**超过
-    /// 16 字符的名字会被内核截断**。这是接口的硬限制：完整可执行路径要走
-    /// `proc_pidpath`（私有 API），同样在待验证那一档里。
+    /// 16 字符的名字会被内核截断**。这是接口的硬限制 —— 完整名字走
+    /// `proc_pidpath`（第 2 层），截断问题在那里不存在。
     let comm: String
+    /// 从 `.app` 包里读出来的显示名（走本地化，中文环境下就是中文名）。
+    /// 取不到时与 `comm` 相同；工具太旧、字段缺失时是空串。
+    let name: String
 
     var id: Int { pid }
+
+    var isUserApp: Bool { userApp == 1 }
+
+    /// 界面上该显示的名字。`name` 为空（字段缺失）时退回 `comm` ——
+    /// 与 C 侧「取不到显示名就保留进程名」是同一条规则，只是兜在两端各一层。
+    var displayName: String {
+        if !name.isEmpty { return name }
+        return comm.isEmpty ? "—" : comm
+    }
+
+    /// 显示名与进程名不同时才值得把进程名也摆出来。
+    ///
+    /// 典型场景：一个 App 带着若干扩展进程，显示名都是主 App 名，
+    /// 这时进程名（`…Widget` / `…Keyboard`）才是区分它们的唯一线索。
+    var showsCommSeparately: Bool {
+        !comm.isEmpty && comm != displayName
+    }
+
+    /// 这一条的资源计数是不是真的读到了。
+    ///
+    /// 用常驻内存判断而不是 `cpuNanos`：刚起来的进程 CPU 累计时间可以是 0
+    /// （那是真实读数），而常驻内存不可能是 0 —— 任何活着的进程都有代码段。
+    var hasResourceData: Bool { residentBytes > 0 }
+
+    // 手写解码而不是靠合成：**一个字段缺失就让整份报告解不出来**是这一页最
+    // 典型的故障形态（工具与 App 不同步、报告被截断）。除了 `pid` 之外全给
+    // 默认值，让列表至少能显示出来。
+    private enum CodingKeys: String, CodingKey {
+        case pid, ppid, uid, status, started, userApp, cpuNanos, residentBytes, comm, name
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pid = try c.decode(Int.self, forKey: .pid)
+        ppid = c.decodeIfPresent(Int.self, forKey: .ppid) ?? 0
+        uid = c.decodeIfPresent(Int.self, forKey: .uid) ?? 0
+        status = c.decodeIfPresent(Int.self, forKey: .status) ?? 0
+        started = c.decodeIfPresent(Double.self, forKey: .started) ?? 0
+        userApp = c.decodeIfPresent(Int.self, forKey: .userApp) ?? 0
+        cpuNanos = c.decodeIfPresent(UInt64.self, forKey: .cpuNanos) ?? 0
+        residentBytes = c.decodeIfPresent(UInt64.self, forKey: .residentBytes) ?? 0
+        comm = c.decodeIfPresent(String.self, forKey: .comm) ?? ""
+        name = c.decodeIfPresent(String.self, forKey: .name) ?? ""
+    }
 }
 
 /// 进程的运行状态。取值是 `kinfo_proc.p_stat` 的原始编码。
@@ -102,7 +166,26 @@ nonisolated struct ProcessListReport: Decodable, Sendable {
     /// 工具报的条目数。与 `processes.count` 应当一致；不一致说明报告被截断了，
     /// 那种情况下 `JSONDecoder` 通常已经先一步失败，所以这里只留作诊断。
     let count: Int
+    /// 这一趟里真的读到资源计数的进程数。0 = libproc 那条路整条不通，
+    /// 界面据此把 CPU / 内存两列显示成「—」。
+    let resolved: Int
     let processes: [ProcessEntry]
+
+    private enum CodingKeys: String, CodingKey { case count, resolved, processes }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        processes = try c.decode([ProcessEntry].self, forKey: .processes)
+        count = c.decodeIfPresent(Int.self, forKey: .count) ?? processes.count
+        resolved = c.decodeIfPresent(Int.self, forKey: .resolved) ?? 0
+    }
+}
+
+/// 一次采样的结果。比裸数组多带一个 `resolved` —— 界面要它来判断资源那两列
+/// 该显示数字还是「—」。
+nonisolated struct ProcessSample: Sendable {
+    let entries: [ProcessEntry]
+    let resolved: Int
 }
 
 // MARK: - 采样
@@ -115,8 +198,10 @@ nonisolated enum ProcessSampler {
 
     /// 一次采样的等待预算。
     ///
-    /// 这一趟只做一次 `sysctl` 加一次写文件，正常在几十毫秒内返回。给 3 秒是留足
-    /// 余量 —— 设备被压住时 `sysctl` 也可能变慢，而那个 1 秒的自检预算
+    /// 这一趟要遍历进程表、对每个进程调两次 libproc、读若干 `.app` 的 Info.plist
+    /// （`CFBundleCreate` 有内部缓存，同一个 bundle 只读一次），再写一份几十 KB 的
+    /// JSON。真机上几百个进程，正常在几十到一两百毫秒内返回。给 3 秒是留足余量 ——
+    /// 设备被压住时这些调用都会变慢，而那个 1 秒的自检预算
     /// （`sysprobe_spawn_root_tool_sync`）在这种活上会把正常干活误判成超时。
     private static let timeoutMs: Int32 = 3_000
 
@@ -124,7 +209,7 @@ nonisolated enum ProcessSampler {
     ///
     /// 任何一步失败都返回 `nil` —— 调用方把它当「这一拍没拿到」处理，
     /// **保留上一拍的数据**，而不是把列表清空（那会让界面在偶发失败时闪一下空白）。
-    static func sample() -> [ProcessEntry]? {
+    static func sample() -> ProcessSample? {
         guard let toolPath = DeviceActions.toolPath else { return nil }
         let reportPath = makeReportPath()
 
@@ -145,7 +230,7 @@ nonisolated enum ProcessSampler {
         }
         removeReport(reportPath)
 
-        return report.processes
+        return ProcessSample(entries: report.processes, resolved: report.resolved)
     }
 
     /// 与 `Tools/RootTool.c` 的退出码 enum 对齐：0 = 成功。
@@ -170,18 +255,22 @@ nonisolated enum ProcessSampler {
 
 /// 「进程」分页的采样器。
 ///
-/// ── 为什么是 3 秒，不是 1 秒 ────────────────────────────────────────────────
+/// ── 每一拍的开销 ────────────────────────────────────────────────────────────
 ///
-/// 每一拍都要 `posix_spawn` 一个 root 子进程：遍历进程表（这台设备上几百条）、
-/// 写一份几十 KB 的 JSON、再由 App 读回来并 `JSONDecoder` 解一遍。按 1 Hz 算，
-/// 那是「每秒起一个特权进程」，而进程列表本来就不是每秒都在变的东西。
-/// 3 秒是开销与新鲜度之间的折中；要立刻看最新的，页面上有手动刷新。
+/// 每一拍都要 `posix_spawn` 一个 root 子进程：遍历进程表（这台设备上三百多条）、
+/// 对每个进程调 libproc、写一份几十 KB 的 JSON、再由 App 读回来并 `JSONDecoder`
+/// 解一遍。按 1 Hz 算，那是「每秒起一个特权进程」。
 ///
 /// ── 只在页面可见时采样 ─────────────────────────────────────────────────────
 ///
-/// `start()` / `pause()` 由页面的 `onAppear` / `onDisappear` 驱动。
-/// 用户没停在这一页时，一拍都不跑 —— 这是这一页与硬件页最大的不同：
-/// 那边采一次是两次 Mach 调用（几百微秒），这边要起进程。
+/// `start()` / `pause()` 由页面的 `onAppear` / `onDisappear` 驱动，`refresh()`
+/// 自己还有一道 `isVisible` 闸门。**切到别的分页、或 App 退到后台，一拍都不跑。**
+/// 这是这一页与硬件页最大的不同：那边采一次是两次 Mach 调用（几百微秒），
+/// 这边要起进程。
+///
+/// 页面可见期间按 `interval` 自动刷新 —— 不是为了「实时」（进程表本来就不怎么变），
+/// 而是因为 CPU 占用率**只能由两次读数求差**得到（见 `updateCPUShare`）。
+/// 停在页面上不动时，3 秒的节奏刚好让那两列是活的。
 @MainActor
 final class ProcessMonitor: ObservableObject {
 
@@ -198,14 +287,32 @@ final class ProcessMonitor: ObservableObject {
     @Published private(set) var lastAttemptFailed = false
     /// 这一拍正在跑。手动刷新按钮据此显示进度。
     @Published private(set) var isSampling = false
+    /// 最近一拍里读到资源计数的进程数。0 = 整条 libproc 路不通。
+    @Published private(set) var resolvedCount = 0
+    /// 每个进程的 CPU 占用率（0…1，**整机口径**：所有核加起来是 100%）。
+    ///
+    /// 只有「这一拍与上一拍之间」有基线的进程才在里面 —— 刚出现的进程不在，
+    /// 界面显示「—」。整机口径与 Windows 任务管理器一致：四核机器上跑满一个核
+    /// 是 25%，不是 100%。
+    @Published private(set) var cpuShare: [Int: Double] = [:]
 
     private var ticker: AnyCancellable?
     /// 上一拍还没回来时置位，用来**丢拍**而不是让任务在队列上堆积。
     private var samplingInFlight = false
+    /// 页面当前是否可见。`refresh()` 的第一道闸门 —— 定时器万一流失，
+    /// 这一条也能保证不会在别的分页上偷偷起特权进程。
+    private var isVisible = false
+    /// 上一拍的 CPU 累计时间，按 pid 索引。
+    ///
+    /// **切走不清空**：再回来时用几秒前的读数做基线，第一拍就能给出占用率，
+    /// 而不是先空三秒。间隔过大时会在 `updateCPUShare` 里主动丢掉（见那里的说明）。
+    private var previousCPUNanos: [Int: UInt64] = [:]
+    private var previousSampleTime: Date?
 
     /// 开始采样。已经在跑就什么都不做（幂等）—— 与 `HardwareMonitor.start` 一致，
     /// `onAppear` 与 `scenePhase` 两条路径都会调它。
     func start() {
+        isVisible = true
         guard ticker == nil else { return }
         refresh()
         // 与 `HardwareMonitor` / `PowerMonitor` 同样的理由：挂在 `.default` 模式上的
@@ -219,14 +326,19 @@ final class ProcessMonitor: ObservableObject {
     }
 
     func pause() {
+        isVisible = false
         ticker?.cancel()
         ticker = nil
     }
 
     /// 跑一拍。手动刷新与定时器都走这里。
     func refresh() {
+        // 页面不在前台就什么都不做。定时器在 `pause()` 里已经取消了，这一条是
+        // 兜底：任何路径（未来的 scenePhase、别的调用方）都不会绕过它去起特权进程。
+        guard isVisible else { return }
+
         // 上一拍还没回来就丢这一拍。采样本身是几十毫秒级，3 秒的节奏远宽于它；
-        // 但设备被压住时 `sysctl` 也会变慢，那时丢一拍远好过让任务堆积 ——
+        // 但设备被压住时遍历进程表也会变慢，那时丢一拍远好过让任务堆积 ——
         // 堆积既让延迟越滚越大，刷出来的又都是过期数据。
         guard !samplingInFlight else { return }
         samplingInFlight = true
@@ -252,8 +364,13 @@ final class ProcessMonitor: ObservableObject {
             }
 
             if let result {
-                self.processes = result
-                self.lastUpdated = .now
+                let now = Date()
+                self.processes = result.entries
+                self.resolvedCount = result.resolved
+                // 先更新列表再算占用率：`updateCPUShare` 内部会把这拍的读数存成
+                // 下一拍的基线，所以两件事的先后顺序只影响这一帧显示什么。
+                self.updateCPUShare(with: result.entries, at: now)
+                self.lastUpdated = now
                 self.lastAttemptFailed = false
             } else {
                 self.lastAttemptFailed = true
@@ -261,5 +378,64 @@ final class ProcessMonitor: ObservableObject {
             self.samplingInFlight = false
             self.isSampling = false
         }
+    }
+
+    /// 用两次采样的 CPU 累计时间差算占用率。
+    ///
+    /// ── 为什么差分必须在 App 侧做 ────────────────────────────────────────────
+    ///
+    /// `proc_pidinfo` 给的 `pti_total_user` / `pti_total_system` 是**进程自启动以来
+    /// 的累计值**，不是占用率。要变成占用率只能「两次读数求差 ÷ 中间经过的墙钟时间」，
+    /// 而工具每次都是一次性进程 —— 它退出时那次读数就没了，留不住基线。
+    ///
+    /// ── 分母为什么乘核数 ────────────────────────────────────────────────────
+    ///
+    /// 一个进程的 CPU 时间在多个核上可以并行累加，所以「一个核跑满」时
+    /// `delta / elapsed` 是 1 而不是 1/N。乘上核数之后口径变成「整机 CPU 的占比」，
+    /// 与 Windows 任务管理器一致（四核机器上跑满一核 = 25%），几列相加也才有意义。
+    ///
+    /// ── 两种间隔都要丢掉 ────────────────────────────────────────────────────
+    ///
+    /// · 太短（< 0.25 s）：差分会被调度噪声放大，随手连点两下刷新能刷出 100%；
+    /// · 太长（> 120 s）：算出来的是「这段时间的平均占用」，与「此刻占用」不是
+    ///   一回事，摆在任务管理器式的界面里会误导。
+    ///
+    /// 两种情况下都清空 `cpuShare`（那两列显示「—」），但**基线照常更新** ——
+    /// 所以下一拍（3 秒后）就有数了，不需要用户做任何事。
+    private func updateCPUShare(with entries: [ProcessEntry], at now: Date) {
+        let previousTime = previousSampleTime
+        let previous = previousCPUNanos
+
+        // 先换基线，再算这一拍 —— 这样中途 `return` 的那些分支也不会让基线卡住。
+        var baseline: [Int: UInt64] = [:]
+        baseline.reserveCapacity(entries.count)
+        for entry in entries {
+            baseline[entry.pid] = entry.cpuNanos
+        }
+        previousCPUNanos = baseline
+        previousSampleTime = now
+
+        guard let previousTime else {
+            cpuShare = [:]
+            return
+        }
+
+        let elapsed = now.timeIntervalSince(previousTime)
+        guard elapsed > 0.25, elapsed < 120 else {
+            cpuShare = [:]
+            return
+        }
+
+        let budget = elapsed * 1_000_000_000
+            * Double(ProcessInfo.processInfo.activeProcessorCount)
+        var shares: [Int: Double] = [:]
+        shares.reserveCapacity(entries.count)
+        for entry in entries {
+            // 没有基线（刚出现的进程）、或累计时间倒退（pid 复用、计数器重置）
+            // 就跳过 —— 那两列显示「—」，不编一个数字出来。
+            guard let before = previous[entry.pid], entry.cpuNanos > before else { continue }
+            shares[entry.pid] = min(1, Double(entry.cpuNanos - before) / budget)
+        }
+        cpuShare = shares
     }
 }
