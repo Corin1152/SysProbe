@@ -304,17 +304,23 @@ entitlement**。
 
 ## 存储清理
 
-维护分页 →「清理」分段。磁盘缓存扫描与清理。
+硬件页 →「存储」卡片的下半截。磁盘缓存扫描与清理。
 
 | 清理范围 | 实际做的事 |
 |---|---|
 | **系统缓存** | 清空 `/var/mobile/Library/Caches` 的**内容**，顶层条目按排除名单过滤 |
 | **日志** | 清空 `/var/mobile/Library/Logs`、`/var/mobile/Library/Preferences/Logs` |
 | **临时文件** | 清空 `/var/tmp` |
-| **系统更新包** | 清空 `/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate`，以及更早期的 `/var/mobile/Library/SoftwareUpdate`。两个路径都不存在就是 0（没下载过更新的设备） |
 | **应用缓存** | 遍历 `/var/mobile/Containers/Data/Application`，按容器 MCM 元数据里的真实 bundle id 聚合，逐个清 `Library/Caches`、`tmp`、`Library/Logs`、`Library/Saved Application State` |
 
-「一键清理全部」= 以上五项之和，再减去被保护的应用（见下）。
+**没有「系统更新包」这一项**（2026-10-15 撤掉）。它原本清的是
+`/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate` 与更早期的
+`/var/mobile/Library/SoftwareUpdate`，收益是「其他」占用里最大的一块 —— 但这一页
+的定位是清缓存，而更新包是**系统的下载内容**：删掉它等于替用户取消一次已经下好的
+系统更新。界面上的按钮、`StorageCleanScope.update`、以及工具侧那两个目录的检索
+一起撤掉了；`scripts/build-ipa.sh` 留了一条**反向**断言盯着它别被顺手加回来。
+
+「一键清理全部」= 以上四项之和，再减去被保护的应用（见下）。
 
 ### 三条刻意收窄的边界
 
