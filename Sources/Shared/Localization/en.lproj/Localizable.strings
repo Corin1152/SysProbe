@@ -418,3 +418,16 @@
 "paused · Wi-Fi connected" = "paused · Wi-Fi connected";
 "resumed · Wi-Fi disconnected" = "resumed · Wi-Fi disconnected";
 "While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well." = "While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well.";
+
+/* 进程分页（2026-10-15） */
+"Processes" = "Processes";
+"Overview" = "Overview";
+"Filter" = "Filter";
+"Reading…" = "Reading…";
+"Could not read the process list." = "Could not read the process list.";
+"No process matches “%@”." = "No process matches “%@”.";
+"Showing %lld of %lld" = "Showing %lld of %lld";
+"Last update failed — showing earlier data." = "Last update failed — showing earlier data.";
+"Sleeping" = "Sleeping";
+"Stopped" = "Stopped";
+"Zombie" = "Zombie";

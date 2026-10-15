@@ -418,3 +418,16 @@
 "paused · Wi-Fi connected" = "已暂停 · 已连接 Wi-Fi";
 "resumed · Wi-Fi disconnected" = "已恢复 · Wi-Fi 已断开";
 "While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well." = "手机连着 Wi-Fi 时，计时与刷新都会暂停；Wi-Fi 断开后自动恢复。后台模式下同样生效。";
+
+/* 进程分页（2026-10-15） */
+"Processes" = "进程";
+"Overview" = "概览";
+"Filter" = "筛选";
+"Reading…" = "读取中…";
+"Could not read the process list." = "读不到进程列表。";
+"No process matches “%@”." = "没有匹配“%@”的进程。";
+"Showing %lld of %lld" = "显示 %lld / %lld";
+"Last update failed — showing earlier data." = "上次更新失败 —— 显示的是更早的数据。";
+"Sleeping" = "休眠";
+"Stopped" = "已停止";
+"Zombie" = "僵尸";

@@ -84,6 +84,14 @@ struct RootView: View {
     ///
     /// 「频段」分页受 `sysprobe.showBandEditor` 控制：频段页里的「隐藏这一页」
     /// 把开关关掉之后整个分页消失（原来它是消失一个分段）。
+    ///
+    /// ── 2026-10-15：新增第 5 个分页「进程」 ──────────────────────────────────
+    ///
+    /// 进程列表（名称 / PID / 属主 / 状态），对应 Windows 任务管理器的「进程」页。
+    /// 它是**只读**的一页 —— 没有「结束进程」，理由见 `ProcessPanels` 类型头。
+    ///
+    /// 排在最后而不是插在中间：前四个分页的顺序是用户已经用熟的东西，
+    /// 新加的一页放尾巴上，谁的肌肉记忆都不动。
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
             HardwareView(openSettings: openSettings)
@@ -100,6 +108,9 @@ struct RootView: View {
                     .tabItem { Label("Bands", systemImage: "antenna.radiowaves.left.and.right") }
                     .tag(3)
             }
+            ProcessPanels(openSettings: openSettings)
+                .tabItem { Label("Processes", systemImage: "list.bullet.rectangle") }
+                .tag(4)
         }
         .tint(.mwAccent)
         .id(app.language)

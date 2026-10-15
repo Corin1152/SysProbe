@@ -14,6 +14,7 @@
 //      thermal-enable     把那个键删掉
 //      clean-scan         存储清理：扫描各目录与应用容器的缓存大小，写 JSON 报告
 //      clean-run          存储清理：按范围清空对应目录的内容，写 JSON 报告
+//      proc-list          进程列表：列出当前进程（名称 / PID / 属主 / 状态），写 JSON 报告
 //
 //  ── 为什么是独立二进制，而不是把这几行写进 App ──────────────────────────
 //
@@ -108,6 +109,11 @@ enum {
     /// 「没开」和「读不出来」，而这两种情况下该显示的东西完全不同。
     SYSPROBE_EXIT_THERMAL_ENABLED = 5,
 };
+
+/// `clean_json_string` 的定义在下面的「JSON 报告」区（clean-* 那一节）。
+/// 进程列表那一节排在它前面，但要用同一份字符串转义，所以在这里先声明一次 ——
+/// 定义与调用都在同一个文件里，签名一致，不是跨模块依赖。
+static void clean_json_string(FILE *f, const char *s);
 
 /// 自检：确认这个进程真的是 uid 0。
 ///
@@ -687,6 +693,173 @@ static int do_thermal_set(int disabled) {
     }
     if (now != disabled) {
         fprintf(stderr, "thermal: read-back mismatch (wanted %d, got %d)\n", disabled, now);
+        return SYSPROBE_EXIT_FAILED;
+    }
+    return SYSPROBE_EXIT_OK;
+}
+
+// ── 进程列表（proc-list）─────────────────────────────────────────────────────
+//
+//  给 App 的「进程」分页用：列出当前系统里的进程，写成 JSON 报告。
+//
+//      proc-list <report.json>
+//
+//  ── 为什么这一节只用 `kinfo_proc` ──────────────────────────────────────────
+//
+//  进程表本身走 `sysctl(KERN_PROC_ALL)`，与上面的 `process_pid_by_name` 是同一个
+//  调用 —— 那是**公开接口**，本工具已经在真机上用它跑通了 respring 与
+//  restart-commcenter。所以这一段不需要任何新增权限，也不需要 libproc。
+//
+//  ── CPU 与内存占用**刻意不在这一版里** ─────────────────────────────────────
+//
+//  那两个字段拿不到：`kinfo_proc` 里根本没有资源计数，要拿只能去调 libproc 的
+//  `proc_pidinfo` / `proc_pid_rusage`（私有 API，公开 SDK 无原型），而它们对
+//  **非自身进程**是否放行取决于 task port 权限 —— 本工具目前没有
+//  `task_for_pid-allow`。这一条必须先真机验证过再上，在那之前界面把这两列
+// 显示成「—」，不编数字。
+//
+//  ── 已知的信息损失（是接口的硬限制，不是这里的 bug）──────────────────────
+//
+//  `p_comm` 是 `char[MAXCOMLEN + 1]`，iOS 上 `MAXCOMLEN` 是 16，所以**超过 16
+//  字符的进程名会被内核截断**。要拿完整可执行路径得走 `proc_pidpath`，
+//  同样在待验证那一档里。
+//
+//  ── 与 App 的通信 ─────────────────────────────────────────────────────────
+//
+//  与 clean-* 同一套：App 把自己 tmp 目录里的一个路径传进来，这里写完 JSON、
+//  `chmod 0644`（报告属主是 root，不放开权限 App 读不到）再退出，App 读完自己删。
+
+/// 一个进程条目。字段全部来自 `kinfo_proc`。
+typedef struct {
+    int pid;
+    int ppid;
+    unsigned int uid;
+    /// `p_stat` 的原始取值（1…5）。**不做成字符串**：那些 `SIDL` / `SRUN` 宏
+    /// 在 iOS 公开 SDK 里不一定可见，而这几个数字是内核 ABI 的一部分，
+    /// 让 App 侧去映射成文案更稳。
+    int status;
+    /// 启动时刻，epoch 秒。
+    double started;
+    /// 进程名（内核口径，见文件头那段「已知的信息损失」）。
+    char comm[MAXCOMLEN + 1];
+} proc_entry;
+
+/// 按 pid 升序。`KERN_PROC_ALL` 返回的本就是按 pid 排的，这里再排一次是为了
+/// 让顺序成为**本工具承诺的一部分** —— 界面按 pid 分组显示时不必再自己排。
+static int proc_compare_pid(const void *a, const void *b) {
+    int pa = ((const proc_entry *)a)->pid;
+    int pb = ((const proc_entry *)b)->pid;
+    return (pa > pb) - (pa < pb);
+}
+
+/// 采集进程表。成功返回条目数（`*outEntries` 由调用方 `free`），失败返回 -1。
+static int proc_collect(proc_entry **outEntries) {
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0 || size == 0) {
+        return -1;
+    }
+
+    // 与 `process_pid_by_name` 同样的余量：两次 `sysctl` 之间进程数只会变多，
+    // 内核会用 ENOMEM 拒绝一个恰好装不下的缓冲区。
+    size += size / 8 + 1024;
+
+    struct kinfo_proc *procs = malloc(size);
+    if (procs == NULL) {
+        return -1;
+    }
+    if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) {
+        free(procs);
+        return -1;
+    }
+
+    size_t count = size / sizeof(struct kinfo_proc);
+    proc_entry *entries = calloc(count == 0 ? 1 : count, sizeof(proc_entry));
+    if (entries == NULL) {
+        free(procs);
+        return -1;
+    }
+
+    int kept = 0;
+    for (size_t i = 0; i < count; i++) {
+        pid_t pid = procs[i].kp_proc.p_pid;
+        // pid 0 是内核的 swapper，没有对应的用户态实体；负值不可能出现，
+        // 一并挡掉免得界面拿到一个没法显示的 pid。
+        if (pid <= 0) {
+            continue;
+        }
+
+        entries[kept].pid = (int)pid;
+        entries[kept].ppid = (int)procs[i].kp_proc.p_ppid;
+        entries[kept].uid = (unsigned int)procs[i].kp_eproc.e_ucred.cr_uid;
+        entries[kept].status = (int)procs[i].kp_proc.p_stat;
+        entries[kept].started = (double)procs[i].kp_proc.p_starttime.tv_sec
+                              + (double)procs[i].kp_proc.p_starttime.tv_usec / 1e6;
+
+        // `p_comm` 是定长数组，**不保证**以 NUL 结尾（名字正好占满 16 字符时）。
+        // 先整段清零再按上限拷，读出去才是一个安全的 C 字符串。
+        memset(entries[kept].comm, 0, sizeof(entries[kept].comm));
+        memcpy(entries[kept].comm, procs[i].kp_proc.p_comm,
+               sizeof(entries[kept].comm) - 1);
+        kept++;
+    }
+    free(procs);
+
+    if (kept > 1) {
+        qsort(entries, (size_t)kept, sizeof(proc_entry), proc_compare_pid);
+    }
+
+    *outEntries = entries;
+    return kept;
+}
+
+/// 写报告。返回 0 成功，-1 写不出来。
+static int proc_write_report(const char *path, const proc_entry *entries, int count) {
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return -1;
+    }
+
+    fprintf(f, "{\"count\":%d,\"processes\":[", count);
+    for (int i = 0; i < count; i++) {
+        if (i > 0) {
+            fputc(',', f);
+        }
+        fprintf(f,
+                "{\"pid\":%d,\"ppid\":%d,\"uid\":%u,\"status\":%d,\"started\":%.3f,\"comm\":",
+                entries[i].pid, entries[i].ppid, entries[i].uid,
+                entries[i].status, entries[i].started);
+        // 复用存储清理那一节的转义函数。它本来就是通用的 JSON 字符串转义，
+        // 只是名字带了个 `clean_` 前缀（前向声明在文件上方）。进程名来自内核的
+        // `p_comm`，正常是 ASCII，但同样按「可能不是合法 UTF-8」处理 ——
+        // 一个坏字节会让 App 侧的 `JSONDecoder` 拒掉**整份**报告。
+        clean_json_string(f, entries[i].comm);
+        fputc('}', f);
+    }
+    fputs("]}", f);
+
+    fclose(f);
+    // 与 clean-* 同一句话：文件是 root 建的，默认权限下 App（mobile）读不到，
+    // 而那不会报错 —— App 只是拿到一份解析失败的报告，看起来像「功能坏了」。
+    chmod(path, 0644);
+    return 0;
+}
+
+/// `proc-list <report.json>`
+static int do_proc_list(const char *reportPath) {
+    proc_entry *entries = NULL;
+    int count = proc_collect(&entries);
+    if (count < 0) {
+        fprintf(stderr, "proc-list: sysctl(KERN_PROC_ALL) failed (%s)\n", strerror(errno));
+        return SYSPROBE_EXIT_FAILED;
+    }
+
+    int written = proc_write_report(reportPath, entries, count);
+    free(entries);
+
+    if (written != 0) {
+        fprintf(stderr, "proc-list: cannot write %s (%s)\n", reportPath, strerror(errno));
         return SYSPROBE_EXIT_FAILED;
     }
     return SYSPROBE_EXIT_OK;
@@ -1889,12 +2062,21 @@ int main(int argc, char *argv[]) {
                             argc >= 5 ? argv[4] : NULL,
                             argc >= 6 ? argv[5] : NULL);
     }
+    // 与 clean-* 同一种形状：自带一个报告路径参数，所以放在「argc == 2」之前。
+    if (argc >= 2 && strcmp(argv[1], "proc-list") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "usage: %s proc-list <report.json>\n", argv[0]);
+            return SYSPROBE_EXIT_USAGE;
+        }
+        return do_proc_list(argv[2]);
+    }
 
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s check|reboot|respring|restart-commcenter"
                 "|thermal-status|thermal-disable|thermal-enable|daemon-kill"
-                "|clean-scan <report>|clean-run <scope> <report> [bundleId] [excludeCsv]\n",
+                "|clean-scan <report>|clean-run <scope> <report> [bundleId] [excludeCsv]"
+                "|proc-list <report>\n",
                 argv[0]);
         return SYSPROBE_EXIT_USAGE;
     }

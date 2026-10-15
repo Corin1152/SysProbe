@@ -179,52 +179,47 @@ struct ChargeControlPanels: View {
         }
     }
 
-    /// 电池：实时读数（电量 / 健康度 / 温度）+ 静态参数（循环次数 / 容量 / 电压电流）。
+    /// 电池：健康度 + 静态参数（循环次数 / 容量 / 电压电流）。
     ///
     /// 2026-10-11 由两张卡片合并成一张 —— 它们说的是同一个东西的两面，
-    /// 中间一条分隔线比两张卡片各带一个标题更省地方。原来的标题「电池参数」
-    /// 随之取消，那几行读数本身就是自解释的。
+    /// 中间一条分隔线比两张卡片各带一个标题更省地方。
+    ///
+    /// ── 2026-10-15：三项实时读数收掉了两项，第三项换了样式 ──────────────────
+    ///
+    /// **「电量」与「温度」整条去掉**（连同它们的进度条）：
+    ///
+    ///   · 电量在这一页的第一屏就有（`DashboardPanels` 的环形读数），「充电控制」
+    ///     分段里也另有一条；同一页画三次是重复；
+    ///   · 温度同理 —— 功率页有专门的温度读数与曲线，而这里那条进度条的刻度
+    ///     （0…50 °C）本来就是拍出来的，读不出精确值。
+    ///
+    /// **「健康度」保留，但换成与下面几行同一种样式**（`ValueRow`：标题 + 数值，
+    /// 不带进度条）。它是个缓慢变化的静态指标，画成进度条会让人以为它每秒都在动；
+    /// 换成普通行之后颜色也回到与其余各行一致的正文色，不再单独用强调色。
+    ///
+    /// 三行 `BarRow` 换成一行 `ValueRow` 之后，整张卡只剩一种行样式 ——
+    /// 中间那条分隔线也就没有存在的理由了，一并去掉。
     private var batteryPanel: some View {
         Panel("Battery", systemImage: "battery.100",
               trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
-            VStack(spacing: 14) {
-                BarRow(title: Text("Charge level"),
-                       detail: Self.percent(battery.currentCapacity),
-                       fraction: Double(battery.currentCapacity ?? 0) / 100,
-                       tint: .mwBattery)
-                BarRow(title: Text("Health"),
-                       detail: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—",
-                       fraction: (battery.healthPercent ?? 0) / 100,
-                       tint: .mwAccent)
-                BarRow(title: Text("Temperature"),
-                       detail: battery.temperature.map { String(format: "%.1f °C", $0) } ?? "—",
-                       // 0…50 °C 铺满整条。再热也不会到 50，而 0…40 会把日常读数挤在右半边。
-                       fraction: (battery.temperature ?? 0) / 50,
-                       tint: battery.temperature.map { Color.mwTemperature($0) } ?? .mwMuted)
-
-                Divider().overlay(Color.mwCardStroke)
-
-                VStack(spacing: 10) {
-                    ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
-                    ValueRow(title: "Design capacity",
-                             value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
-                    ValueRow(title: "Full charge capacity",
-                             value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
-                    ValueRow(title: "Current",
-                             value: battery.amperage.map { "\($0) mA" } ?? "—")
-                    // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
-                    ValueRow(title: "Boot voltage",
-                             value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                    ValueRow(title: "Voltage",
-                             value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                    ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
-                }
+            VStack(spacing: 10) {
+                ValueRow(title: "Health",
+                         value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—")
+                ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
+                ValueRow(title: "Design capacity",
+                         value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
+                ValueRow(title: "Full charge capacity",
+                         value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
+                ValueRow(title: "Current",
+                         value: battery.amperage.map { "\($0) mA" } ?? "—")
+                // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
+                ValueRow(title: "Boot voltage",
+                         value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                ValueRow(title: "Voltage",
+                         value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
             }
         }
-    }
-
-    private static func percent(_ value: Int?) -> String {
-        value.map { "\($0)%" } ?? "—"
     }
 
     /// 原版的下拉项。1 秒是给「看着它动」用的，30 秒是给「装兜里省电」用的。
