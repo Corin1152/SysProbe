@@ -791,7 +791,12 @@ static int proc_collect(proc_entry **outEntries) {
         }
 
         entries[kept].pid = (int)pid;
-        entries[kept].ppid = (int)procs[i].kp_proc.p_ppid;
+        // 父进程 pid 在 `kp_eproc` 里，**不在 `kp_proc`** —— `struct extern_proc`
+        // 根本没有 `p_ppid` 这个成员。写 `kp_proc.p_ppid` 在 CI 上是硬编译错误：
+        //     error: no member named 'p_ppid' in 'struct extern_proc'
+        // pid / stat / comm / starttime 都在 `kp_proc`，只有 ppid 与属主跨到了
+        // `kp_eproc`，这一处不对称很容易记反。
+        entries[kept].ppid = (int)procs[i].kp_eproc.e_ppid;
         entries[kept].uid = (unsigned int)procs[i].kp_eproc.e_ucred.cr_uid;
         entries[kept].status = (int)procs[i].kp_proc.p_stat;
         entries[kept].started = (double)procs[i].kp_proc.p_starttime.tv_sec
