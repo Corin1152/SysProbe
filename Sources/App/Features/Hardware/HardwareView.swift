@@ -32,6 +32,12 @@ struct HardwareView: View {
     /// 留出余量。其余卡片（设备/CPU/存储）列数少，维持 18 不动。
     fileprivate static let memoryValueSize: CGFloat = 15
 
+    /// 设备卡片专用的一档（2026-10-15）。比 `valueSize` 再小两号：
+    /// 那张卡片把「机型 / 系统 / 内核」并成了三格一行，列宽只有 100 pt 上下，
+    /// 18 pt 的 `iPhone17,2` 会把格子撑爆。16 pt 是「三格放得下」与
+    /// 「与别的卡片读起来还是一档」之间的折中。
+    fileprivate static let deviceValueSize: CGFloat = 16
+
     var body: some View {
         PageScaffold("Hardware", glow: .mwAccent, openSettings: openSettings) {
             DeviceCard()
@@ -60,6 +66,16 @@ struct HardwareView: View {
     /// 设备卡片：机型 / 系统 / 内核 / 运行时长 / 物理内存。
     ///
     /// 这一组里**只有「运行时长」是每秒变的**，其余四项出厂就定死。
+    ///
+    /// ── 2026-10-15：三行压成两行 ────────────────────────────────────────────
+    ///
+    /// 原来「机型」独占一行、「系统 / 内核」一行、「运行时长 / 物理内存」一行 ——
+    /// 五项读数用掉三行的高度，而这张卡片在这一页最上面，答的又只是「这台设备是
+    /// 什么」这种扫一眼就够的问题，不该比下面几张更占地方。
+    ///
+    /// 压法是把三个**短标识**并成一行：`iPhone17,2` / `26.1` / `24.0.0` 三格
+    /// 并排放得下（见 `deviceValueSize` 那一段的取舍）。行距同时从 12 收到 10 ——
+    /// 这一页别的卡片是 12，差 2 pt 看不出来，省下来的却是实打实的。
     private struct DeviceCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
 
@@ -68,21 +84,25 @@ struct HardwareView: View {
         var body: some View {
             let snap = hardware.snapshot
             Panel("Device", systemImage: "iphone") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Metric(caption: "Model",
-                           value: snap.system.modelIdentifier,
-                           size: HardwareView.valueSize)
-                    HStack(spacing: 14) {
-                        Metric(caption: "System", value: snap.system.systemVersion, size: HardwareView.valueSize)
-                        Metric(caption: "Kernel", value: snap.system.kernelVersion, size: HardwareView.valueSize)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Metric(caption: "Model",
+                               value: snap.system.modelIdentifier,
+                               size: HardwareView.deviceValueSize)
+                        Metric(caption: "System",
+                               value: snap.system.systemVersion,
+                               size: HardwareView.deviceValueSize)
+                        Metric(caption: "Kernel",
+                               value: snap.system.kernelVersion,
+                               size: HardwareView.deviceValueSize)
                     }
-                    HStack(spacing: 14) {
+                    HStack(alignment: .top, spacing: 12) {
                         Metric(caption: "Uptime",
                                value: Formatting.duration(snap.system.uptime),
-                               size: HardwareView.valueSize)
+                               size: HardwareView.deviceValueSize)
                         Metric(caption: "Physical memory",
                                value: Formatting.bytes(snap.system.physicalMemory),
-                               size: HardwareView.valueSize)
+                               size: HardwareView.deviceValueSize)
                     }
                 }
             }

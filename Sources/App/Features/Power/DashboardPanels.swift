@@ -39,7 +39,6 @@ struct DashboardPanels: View {
             if monitor.thermalState.isThrottling { throttleBanner }
             batteryPanel
             powerPathPanel
-            connectionPanel
         }
     }
 
@@ -220,15 +219,28 @@ struct DashboardPanels: View {
 
     private var battery: BatteryInfo { charge.battery }
 
-    // MARK: Power path（2026-10-15：广播档位并进来了）
+    // MARK: Power path（2026-10-15：广播档位与「线缆与连接」都并进来了）
 
-    /// 供电路径 + 当前协商到的档位，**一张卡片**。
+    /// 供电路径 + 线缆与连接 + 当前协商到的档位，**一张卡片**。
     ///
-    /// ── 为什么把「广播档位」并进来 ────────────────────────────────────────────
+    /// ── 2026-10-14：为什么把「广播档位」并进来 ────────────────────────────────
     ///
     /// 两张卡片答的是同一个问题的两半：这张说「进来多少、存下多少、路上丢了多少」，
     /// 档位那张说「充电器允许进来多少」。分开摆的时候，读的人要自己在脑子里把
     /// 「17 W 的档位」和「实际进来 14 W」对上 —— 而这两件事本来就该挨着看。
+    ///
+    /// ── 2026-10-15：为什么把「线缆与连接」也并进来，以及为什么常驻 ─────────────
+    ///
+    /// 那张卡片（`Cable and connection`）说的是**这条链路本身好不好**：通路电阻、
+    /// 压降、路上丢了多少、取用了多少。它与上面四格是同一件事的两端 ——
+    /// 一端是「进来多少」，一端是「为什么少了」。三张卡片说同一件事，收成一张。
+    ///
+    /// **整块内容现在常驻。** 原来它在未插充电器时画的是一句
+    /// 「Plug in a charger to measure the path.」，等于把卡片变成一条提示；
+    /// 现在读数照画，取不到的那一格显示「—」（`Metric` 对占位符有专门的处理：
+    /// 字号缩到 0.7、颜色压灰，读起来就是「读不到」而不是「是 0」）。
+    /// 只有一种情况仍然给整块提示：**无线充电** —— 那没有线缆、也没有输入电流
+    /// 传感器，是物理上测不了，与「没插电」不是一回事。
     ///
     /// ── 为什么档位只显示命中的那一档 ──────────────────────────────────────────
     ///
@@ -239,6 +251,10 @@ struct DashboardPanels: View {
     ///
     /// 完整档位表不是没有价值 —— 它回答的是「这个充电器还能给多少」，
     /// 但那是个「换充电器之前」的问题，不是这一页主读数旁边该摆的东西。
+    ///
+    /// 这一行同样常驻：**没插充电器时它显示 `—` 与 `0 W`**（不是整块消失）。
+    /// 0 W 是准确的 —— 没有合同，这一档能给的就是 0；左边留 `—` 而不是
+    /// 「0.0 V × 0.00 A」，因为那会被读成「充电器报了一个 0 V 的档位」。
     private var powerPathPanel: some View {
         Panel("Power path", systemImage: "arrow.triangle.branch",
               // 百分号先落成 `String` 再插值，于是键是 `%@ of adapter` 而不是
@@ -249,6 +265,8 @@ struct DashboardPanels: View {
                   return Text("\(percent) of adapter")
               }) {
             VStack(spacing: 12) {
+                // ── 第一段：这一秒的电 ─────────────────────────────────────────
+                //
                 // 四项读数在未插电时都按 **0** 显示，而不是「—」。
                 //
                 // 「—」在四格并排的面板里显得像「这一格坏了」；而 0 W / 0 % 是准确的
@@ -280,20 +298,81 @@ struct DashboardPanels: View {
                               systemImage: "wave.3.right")
                 }
 
-                // 一条分隔线把「这一秒的电」和「谈成的合同」分开。上面四格是读数
-                // （会动），下面这一行是协商结果（插着的时候基本不动）——
+                // ── 第二段：线缆与连接（2026-10-15 从同名卡片并进来）──────────────
+                //
+                // 分隔线在这里是必需的：上面四格是「进来多少」，这四格是
+                // 「路上怎么了」，字号与灰度完全一样，不加线会被读成同一个读数组的
+                // 续行。下面档位那一段同理。
+                Divider().overlay(Color.mwCardStroke)
+
+                // 四格读数在未插电时：**能算的报 0，算不了的报「—」**。
+                //
+                //   · 压降、路上损耗、取用量三项都正比于电流 —— 没电流就是 0，
+                //     这是准确读数；
+                //   · **通路电阻与电流无关**，0 mΩ 会被读成「这条线是理想导线」，
+                //     是错的。所以那一格没测到就是「—」。
+                HStack(alignment: .top, spacing: 10) {
+                    Metric(caption: "Path resistance",
+                           value: resistance.map { String(format: "%.0f", $0.milliohms) } ?? "—",
+                           unit: resistance == nil ? nil : "mΩ",
+                           tint: resistance.map { resistanceTint($0.milliohms) } ?? .primary,
+                           footnote: resistance.map {
+                               $0.fitted ? Text("fitted over the whole contract")
+                                         : Text("from one sample")
+                           },
+                           size: 22)
+                    Metric(caption: "Voltage drop",
+                           value: voltageDropText,
+                           unit: "V",
+                           tint: isSagging ? .mwDanger : .primary,
+                           // Copy with a measurement inside it, so the sentence
+                           // is extracted and the number is not.
+                           footnote: snapshot.usbInputVoltage.map { Text("\(String(format: "%.2f V", $0)) at the port") },
+                           size: 22)
+                }
+                HStack(alignment: .top, spacing: 10) {
+                    Metric(caption: "Lost in the path",
+                           value: pathLossText,
+                           unit: "W",
+                           tint: .mwLoss,
+                           footnote: Text("at the current draw"),
+                           size: 22)
+                    Metric(caption: "Taking",
+                           value: inputCurrentText,
+                           unit: "%",
+                           tint: (snapshot.inputCurrentUtilisation ?? 1) < 0.6 ? .mwLoss : .primary,
+                           footnote: Text("of the current on offer"),
+                           size: 22)
+                }
+                if snapshot.isWirelessInput || snapshot.adapterIsWireless {
+                    EmptyNote(text: "Wireless charging has no cable and no input-current sensor, so there is nothing to measure.",
+                              systemImage: "wave.3.right")
+                }
+
+                // ── 第三段：谈成的合同（常驻，未插电时 0）─────────────────────────
+                //
+                // 上面两段是读数（会动），这一段是协商结果（插着的时候基本不动）——
                 // 放在一起而不加线的话，读的人会以为它也每秒在跳。
                 Divider().overlay(Color.mwCardStroke)
 
-                if !plugged {
-                    EmptyNote(text: "Plug in a charger to read the profile it negotiates.",
-                              systemImage: "powerplug")
-                } else if let profile = snapshot.negotiatedProfile {
-                    negotiatedRow(profile)
-                } else {
-                    EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
-                }
+                negotiatedSection
             }
+        }
+    }
+
+    /// 谈成的合同那一段。三种状态，**都不留空**：
+    ///
+    ///   · 有协商结果 → `negotiatedRow(profile)`；
+    ///   · 插着电但充电器没广播档位表（旧式 USB-A、部分无线充电板）→ 一句说明；
+    ///   · 没插充电器 → `negotiatedRow(nil)`，即 `—` 与 `0 W`。
+    @ViewBuilder
+    private var negotiatedSection: some View {
+        if let profile = snapshot.negotiatedProfile {
+            negotiatedRow(profile)
+        } else if plugged {
+            EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
+        } else {
+            negotiatedRow(nil)
         }
     }
 
@@ -306,12 +385,17 @@ struct DashboardPanels: View {
     /// 版式改成两段：左边是这一档的**形状**（电压 × 电流，充电器说的），
     /// 右边是它的**乘积**（瓦特，这一档能给出多少）。左右对齐之后，
     /// 「17 W」和上面「From charger 14.2 W」的差就是这一档还剩多少没用上。
-    private func negotiatedRow(_ profile: PDProfile) -> some View {
+    ///
+    /// `profile` 为 `nil`（没插充电器）时画的是同一个版式的空档：左边 `—`、
+    /// 右边 `0 W`。**保留这一行而不是整块换掉**，是因为它在这一页的位置本身
+    /// 就是信息（「这一档现在能给多少」）—— 整块消失会让卡片矮一截，
+    /// 插拔充电器时高度跟着跳。
+    private func negotiatedRow(_ profile: PDProfile?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(verbatim: profile.label)
+            Text(verbatim: profile?.label ?? "—")
                 .mwMono(size: 13, weight: .semibold)
             Spacer(minLength: 8)
-            Text(String(format: "%.0f W", profile.watts))
+            Text(String(format: "%.0f W", profile?.watts ?? 0))
                 .mwReadout(size: 16, weight: .semibold)
                 .foregroundStyle(Color.mwAccent)
         }
@@ -323,14 +407,41 @@ struct DashboardPanels: View {
         )
     }
 
+    /// 压降。未插电时是准确的 0.00 V（没电流就没有压降）；插着但读不到才报「—」。
+    private var voltageDropText: String {
+        if let drop = snapshot.inputVoltageDropVolts { return String(format: "%.2f", drop) }
+        return plugged ? "—" : "0.00"
+    }
+
+    /// 路上丢掉的功率 = I²R。电阻或电流任一项读不到就没得算 ——
+    /// 未插电时电流本来就是 0，所以直接报 0。
+    private var pathLossText: String {
+        guard let resistance, let current = snapshot.usbInputCurrent else {
+            return plugged ? "—" : "0"
+        }
+        return Formatting.watts(resistance.milliohms / 1000 * current * current)
+    }
+
+    /// 取用了充电器「能给的电流」的百分之多少。
+    private var inputCurrentText: String {
+        if let utilisation = snapshot.inputCurrentUtilisation {
+            return String(format: "%.0f", utilisation * 100)
+        }
+        return plugged ? "—" : "0"
+    }
+
     private var efficiencyTint: Color {
         guard let efficiency = snapshot.conversionEfficiency else { return .primary }
         return efficiency >= 85 ? .mwBattery : (efficiency >= 70 ? .mwLoss : .mwDanger)
     }
 
-    // MARK: Connection（2026-10-14 从「适配器」分段迁入）
+    // MARK: 线缆的读数（2026-10-15：从「Cable and connection」卡片迁入）
 
-    /// What the cable and the two plugs are costing.
+    /// The resistance to show, and whether it came from the fit or from one sample.
+    /// The fit wins when it exists: it needs no reference voltage, so it is the
+    /// better number whenever the current has moved enough to produce one.
+    ///
+    /// ── 为什么两种测法都要有 ────────────────────────────────────────────────
     ///
     /// The cable itself cannot be identified from the phone: while charging the
     /// phone is the sink, so it is the charger that reads the cable's e-marker, and
@@ -345,77 +456,8 @@ struct DashboardPanels: View {
     ///   figure that is a ceiling rather than a reading.
     ///
     /// The bad-cable case is exactly where the fit goes quiet: a collapsed rail pins
-    /// the current, so there is nothing to fit a slope to. Hence both, with the panel
-    /// saying which one it is showing.
-    private var connectionPanel: some View {
-        Panel("Cable and connection", systemImage: "cable.connector.horizontal",
-              trailing: monitor.pathResistance.map { Text("\($0.sampleCount) samples") }) {
-            if !plugged {
-                EmptyNote(text: "Plug in a charger to measure the path.",
-                          systemImage: "powerplug")
-            } else if let resistance {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Metric(caption: "Path resistance",
-                               value: String(format: "%.0f", resistance.milliohms),
-                               unit: "mΩ",
-                               tint: resistanceTint(resistance.milliohms),
-                               footnote: resistance.fitted
-                                   ? Text("fitted over the whole contract")
-                                   : Text("from one sample"),
-                               size: 22)
-                        Metric(caption: "Voltage drop",
-                               value: snapshot.inputVoltageDropVolts.map { String(format: "%.2f", $0) } ?? "—",
-                               unit: "V",
-                               tint: isSagging ? .mwDanger : .primary,
-                               // Copy with a measurement inside it, so the sentence
-                               // is extracted and the number is not.
-                               footnote: snapshot.usbInputVoltage.map { Text("\(String(format: "%.2f V", $0)) at the port") },
-                               size: 22)
-                    }
-                    HStack(alignment: .top, spacing: 10) {
-                        Metric(caption: "Lost in the path",
-                               value: snapshot.usbInputCurrent.map {
-                                   Formatting.watts(resistance.milliohms / 1000 * $0 * $0)
-                               } ?? "—",
-                               unit: "W",
-                               tint: .mwLoss,
-                               footnote: Text("at the current draw"),
-                               size: 22)
-                        Metric(caption: "Taking",
-                               value: snapshot.inputCurrentUtilisation.map { String(format: "%.0f", $0 * 100) } ?? "—",
-                               unit: "%",
-                               tint: (snapshot.inputCurrentUtilisation ?? 1) < 0.6 ? .mwLoss : .primary,
-                               footnote: Text("of the current on offer"),
-                               size: 22)
-                    }
-                    // 这里原本还有两段解释文字：`resistanceVerdict(...)`（按阻值分档给
-                    // 一句「正常 / 偏高」的判词）与 `provenance`（这个数字是拟合出来的
-                    // 还是单次采样算的）。2026-10-11 按要求去掉 —— 四行读数本身已经把
-                    // 「通路电阻 / 压降 / 损失 / 占用量」说清楚了，下面再堆三小段灰字
-                    // 只会把卡片拉长。
-                    //
-                    // 2026-10-14 又去掉了卡片顶部那段压降告警（`sagBanner`）：它是
-                    // 一整块红底长句，而「压降偏低」这件事下面那个读数已经用变色表达
-                    // 了，两者叠在一起是同一个信号的两次广播。
-                    //
-                    // 唯一损失的是「这个数是拟合的还是单次采样的」这个出处提示，
-                    // 它仍然在「通路电阻」那个读数的脚注里（`fitted over the whole
-                    // contract` / `from one sample`），只是不再展开解释。
-                }
-            } else if snapshot.isWirelessInput || snapshot.adapterIsWireless {
-                EmptyNote(text: "Wireless charging has no cable and no input-current sensor, so there is nothing to measure.",
-                          systemImage: "wave.3.right")
-            } else {
-                EmptyNote(text: "Waiting for the phone to draw enough to measure a drop. Below about 150 mA there is nothing to divide.",
-                          systemImage: "chart.xyaxis.line")
-            }
-        }
-    }
-
-    /// The resistance to show, and whether it came from the fit or from one sample.
-    /// The fit wins when it exists: it needs no reference voltage, so it is the
-    /// better number whenever the current has moved enough to produce one.
+    /// the current, so there is nothing to fit a slope to. Hence both, with the
+    /// readout's footnote saying which one it is showing.
     private var resistance: (milliohms: Double, fitted: Bool)? {
         if let estimate = monitor.pathResistance { return (estimate.milliohms, true) }
         if let single = snapshot.inputPathMilliohms { return (single, false) }

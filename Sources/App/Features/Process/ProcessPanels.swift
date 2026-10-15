@@ -434,12 +434,26 @@ private struct ProcessOverviewPanel: View {
             Button {
                 monitor.refresh()
             } label: {
-                if monitor.isSampling {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .font(AppFont.text(13, weight: .semibold))
+                // ── 2026-10-15：两个状态必须占同一块地方 ────────────────────────
+                //
+                // 这里原来是 `if isSampling { ProgressView } else { Image }` 直接
+                // 二选一。`ProgressView(.mini)` 与 13 pt 的 `arrow.clockwise` 高度
+                // 不一样（差 2–3 pt），于是**每一拍采样开始与结束时这一行的高度都会
+                // 变一次** —— 它下面的列表跟着上下跳一格。自动刷新开着时就是每秒跳
+                // 两次，正是用户报的那个现象。
+                //
+                // 修法不是把两者调成一样高（那要猜 `ProgressView` 的内部尺寸，
+                // 换个系统版本就失效），而是给这一格**写死**一个 frame：
+                // `ZStack` 让两个状态叠在同一个位置上，谁都不撑开谁。
+                ZStack {
+                    if monitor.isSampling {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(AppFont.text(13, weight: .semibold))
+                    }
                 }
+                .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.mwAccent)

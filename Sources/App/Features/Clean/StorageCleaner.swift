@@ -32,7 +32,7 @@ nonisolated struct StorageScanReport: Codable {
     }
 
     let categories: [String: Category]
-    /// 四类目录各自的预览样本，键与 `categories` 相同（`system` / `logs` / `temp` / `update`），
+    /// 三类目录各自的预览样本，键与 `categories` 相同（`system` / `logs` / `temp`），
     /// 每类按大小降序、最多 6 条 —— 工具侧已经排好序并截断，这里不再处理。
     ///
     /// 可选：旧版工具没有这个键，缺了只该少一块预览，不该让整次扫描判成失败。
@@ -59,6 +59,16 @@ nonisolated struct StorageCleanReport: Codable {
 
 /// 「存储清理」的范围。rawValue 直接作为工具子命令的 scope 参数，
 /// 两边的拼写必须一致（CI 的构建断言只保证子命令在、不保证拼写对）。
+///
+/// ── 2026-10-15：`update`（系统更新包）整个去掉了 ────────────────────────────
+///
+/// 它原来是这里的一类：查 OTA 更新包的落盘目录（`/var/mobile/Library/Assets/
+/// com_apple_MobileAsset_SoftwareUpdate` 与旧系统的 `/var/mobile/Library/
+/// SoftwareUpdate`），收益是「其他」占用里最大的一块。
+///
+/// 按要求撤掉了 —— 这一页的定位是清缓存，而更新包是**系统的下载内容**：删掉它
+/// 等于替用户取消一次已经下好的系统更新。按钮、界面分支、扫描报告里的字段，
+/// 以及 `Tools/RootTool.c` 侧那两个目录的检索一起去掉，扫描不再去遍历它们。
 nonisolated enum StorageCleanScope: String {
     /// `/var/mobile/Library/Caches` 的内容（顶层有排除名单，见 RootTool.c）。
     case system
@@ -66,10 +76,6 @@ nonisolated enum StorageCleanScope: String {
     case logs
     /// `/var/tmp` 的内容。
     case temp
-    /// 系统更新包。工具查两个候选路径，哪个存在清哪个：
-    /// `/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate`（现行）与
-    /// `/var/mobile/Library/SoftwareUpdate`（旧系统）。都没有就是 0。
-    case update
     /// 所有应用容器的可清目录（`Library/Caches` / `tmp` / `Library/Logs` /
     /// `Library/Saved Application State`）。
     case apps
@@ -104,11 +110,9 @@ nonisolated struct StorageScanResult {
     let systemBytes: Int64
     let logsBytes: Int64
     let tempBytes: Int64
-    /// 系统更新包。没下载过更新的设备恒为 0 —— 那是正常状态，不是「扫描没扫到」。
-    let updateBytes: Int64
     /// 按缓存大小降序，工具已经排好。
     let apps: [AppCache]
-    /// 四类目录的预览条目，键是 `StorageCleanScope` 的 rawValue。
+    /// 三类目录的预览条目，键是 `StorageCleanScope` 的 rawValue。
     /// 工具没给（旧版本）时是空字典，取出来就是空数组。
     let previews: [String: [Preview]]
 
@@ -121,12 +125,12 @@ nonisolated struct StorageScanResult {
         previews[scope.rawValue] ?? []
     }
 
-    /// 界面上「可清理」的口径：四类目录 + 未被保护的应用缓存。
+    /// 界面上「可清理」的口径：三类目录 + 未被保护的应用缓存。
     ///
     /// **扣掉 `protected` 里的应用**，而不是用原始合计 —— 按钮上写多少就该删多少，
     /// 否则用户按完发现少了一块，会以为清理没跑全。
     func cleanableBytes(protecting protected: Set<String>) -> Int64 {
-        systemBytes + logsBytes + tempBytes + updateBytes
+        systemBytes + logsBytes + tempBytes
             + apps.reduce(Int64(0)) { $0 + (protected.contains($1.bundle) ? 0 : $1.bytes) }
     }
 
@@ -190,7 +194,6 @@ nonisolated enum StorageCleaner {
             systemBytes: report.categories["system"]?.bytes ?? 0,
             logsBytes: report.categories["logs"]?.bytes ?? 0,
             tempBytes: report.categories["temp"]?.bytes ?? 0,
-            updateBytes: report.categories["update"]?.bytes ?? 0,
             apps: report.apps
                 .filter { $0.bytes > 0 }
                 .map { entry in

@@ -82,39 +82,52 @@ struct Panel<Content: View>: View {
     /// "12 sensors" is copy, an `iPhone17,2` or a `4.8 W` reading is not. Keeping
     /// this a `Text` puts that choice at the call site, where it is knowable.
     var trailing: Text?
+    /// 折叠开关。`nil`（默认）= 这张卡片不可折叠，行为与以前完全一样。
+    ///
+    /// ── 2026-10-15 新增 ────────────────────────────────────────────────────
+    ///
+    /// 给了 `Binding` 之后，**整行标题变成开合按钮**，标题左侧多一个会转 90° 的
+    /// 小三角 —— 与频段页的 4G 卡片（`BandPanels.bandPanel`）、进程页的分组标题
+    /// （`ProcessPanels.groupHeader`）是同一个手法，读的人一眼能连上。
+    ///
+    /// 做成 `Panel` 的参数而不是在调用点自绘卡片：这几处折叠卡片的外壳完全一样
+    /// （`Theme.cardPadding` + `Color.mwCard` + `strokeBorder`），复制一份的话
+    /// 圆角、描边、内边距迟早会长歪。
+    var expanded: Binding<Bool>?
     @ViewBuilder var content: () -> Content
 
     init(_ title: LocalizedStringKey? = nil,
          systemImage: String? = nil,
          trailing: Text? = nil,
+         expanded: Binding<Bool>? = nil,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.systemImage = systemImage
         self.trailing = trailing
+        self.expanded = expanded
         self.content = content
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if title != nil || trailing != nil {
-                HStack(spacing: 6) {
-                    if let systemImage {
-                        Image(systemName: systemImage)
-                            .font(AppFont.text(11, weight: .bold))
-                            .foregroundStyle(Color.mwMuted)
+                if let expanded {
+                    Button {
+                        expanded.wrappedValue.toggle()
+                    } label: {
+                        header(isExpanded: expanded.wrappedValue, collapsible: true)
                     }
-                    if let title {
-                        Text(title).mwCaption()
-                    }
-                    Spacer(minLength: 8)
-                    if let trailing {
-                        trailing
-                            .mwMono(size: 11)
-                            .foregroundStyle(Color.mwMuted)
-                    }
+                    // `.plain`：标题不是「一行里的一个动作」，它是这一整块的开合
+                    // 开关，不该带按钮的高亮底色。
+                    .buttonStyle(.plain)
+                } else {
+                    header(isExpanded: true, collapsible: false)
                 }
             }
-            content()
+            // `nil` 当展开处理：不可折叠的卡片内容永远画。
+            if expanded?.wrappedValue ?? true {
+                content()
+            }
         }
         .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +139,36 @@ struct Panel<Content: View>: View {
             RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                 .strokeBorder(Color.mwCardStroke, lineWidth: 1)
         )
+    }
+
+    /// 标题行。可折叠时整行都是命中区域（`.contentShape`）—— 这一行除了文字
+    /// 没有别的东西，而手指按得中比看得清更难。
+    private func header(isExpanded: Bool, collapsible: Bool) -> some View {
+        HStack(spacing: 6) {
+            if collapsible {
+                Image(systemName: "chevron.right")
+                    .font(AppFont.text(11, weight: .bold))
+                    .foregroundStyle(Color.mwAccent)
+                    // 90° 而不是换成另一个符号：同一个图形转过去，读的人一眼能连上
+                    // 是「同一个东西换了姿态」。
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(AppFont.text(11, weight: .bold))
+                    .foregroundStyle(Color.mwMuted)
+            }
+            if let title {
+                Text(title).mwCaption()
+            }
+            Spacer(minLength: 8)
+            if let trailing {
+                trailing
+                    .mwMono(size: 11)
+                    .foregroundStyle(Color.mwMuted)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -152,6 +195,12 @@ struct Metric: View {
                 Text(value)
                     .mwReadout(size: isPlaceholder ? size * 0.7 : size)
                     .foregroundStyle(isPlaceholder ? Color.mwMuted.opacity(0.55) : tint)
+                    // 读数永远不换行。设备卡片把「机型 / 系统 / 内核」并成一行之后，
+                    // 每格只剩约 100 pt —— `iPhone17,2` 在 16 pt 下刚好压线，
+                    // 换个长一点的机型就会折成两行，而那一格一折，整张卡片就长一截。
+                    // 缩到 0.7 还放不下才截断，比换行诚实。
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 if let unit {
                     Text(unit)
                         .font(AppFont.text(size * 0.48, weight: .medium))

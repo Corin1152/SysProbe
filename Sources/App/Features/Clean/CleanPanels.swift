@@ -151,47 +151,69 @@ struct CleanSection: View {
         .padding(.bottom, 2)
     }
 
-    /// 一列全宽大按钮。顺序与上游一致：扫描 → 各分项 → 一键清理全部（红色）。
+    /// 一列全宽大按钮。
+    ///
+    /// ── 2026-10-15：扫描与「一键清理全部」合并成同一个按钮 ────────────────────
+    ///
+    /// 原来顶部是「扫描 / 重新扫描」，底部是红色的「一键清理全部」，两个按钮分居
+    /// 列表两端。按要求合成一个：**没扫过时它是「扫描」，扫过之后它是「全部清理」**
+    /// —— 它坐在原来「扫描」那个位置（列表最上面），因为未扫描时整个页面只有它
+    /// 一个动作，位置不该变。
+    ///
+    /// 「重新扫描」这个入口**因此没有了**。可以接受：清理跑完会自动重扫一次
+    /// （见 `performClean`），所以数字不会长期陈旧；而它本来要解决的问题
+    /// ——「扫完想再扫一遍」—— 在合并之后没有独立的动作可点了。这是这次合并的
+    /// 代价，不是遗漏。
+    ///
+    /// ── 2026-10-15：分项里去掉「清理系统更新包」────────────────────────────
+    ///
+    /// 那一项（`StorageCleanScope.update`）查的是 OTA 更新包的落盘目录，收益是
+    /// 「其他」占用里最大的一块 —— 但这一页的定位是清缓存，而更新包是**系统的
+    /// 下载内容**，删掉它等于替用户取消一次已经下好的系统更新。按钮撤掉的同时
+    /// 把工具侧那两个目录的检索也去掉了（见 `Tools/RootTool.c` 的 `clean-*`
+    /// 一节），扫描不再去遍历它们。
     ///
     /// 每个按钮**自带金额**（`detail`），因为「清哪个更划算」是用户按按钮前唯一
-    /// 想知道的事 —— 上游也是把大小写在标题里。区别是这里不做「清理应用缓存」
-    /// 之外的合并：上游那一个按钮清全部应用，这里也保留，另加「日志」一项
-    /// （上游把日志并进了系统缓存）。
+    /// 想知道的事。
     private var actionButtons: some View {
         VStack(spacing: 10) {
-            bigButton(title: Strings.text(scan == nil ? "Scan" : "Rescan"),
-                      detail: nil,
-                      icon: "magnifyingglass",
-                      busy: isScanning,
-                      enabled: toolReady == true && !isScanning && !isCleaning) {
-                Task { await runScan() }
-            }
-
-            ForEach(detailScopes, id: \.rawValue) { scope in
-                bigButton(title: title(for: scope),
-                          detail: bytesText(for: scope),
-                          icon: icon(for: scope),
-                          busy: false,
-                          enabled: toolReady == true && scan != nil && !isCleaning) {
-                    request(.category(scope))
+            if let scan {
+                bigButton(title: Strings.text("Clean All"),
+                          detail: bytesLabel(cleanableBytes(scan)),
+                          icon: "paintbrush.fill",
+                          busy: isCleaning,
+                          // 走到这个分支就说明已经有扫描结果了，不必再判
+                          // `scan != nil`（下面几项同理）。
+                          enabled: toolReady == true && !isCleaning,
+                          destructive: true) {
+                    request(.all)
                 }
-            }
 
-            bigButton(title: Strings.text("Clean app caches"),
-                      detail: appBytesText,
-                      icon: "square.grid.2x2",
-                      busy: false,
-                      enabled: toolReady == true && scan != nil && !isCleaning) {
-                request(.category(.apps))
-            }
+                ForEach(detailScopes, id: \.rawValue) { scope in
+                    bigButton(title: title(for: scope),
+                              detail: bytesText(for: scope),
+                              icon: icon(for: scope),
+                              busy: false,
+                              enabled: toolReady == true && !isCleaning) {
+                        request(.category(scope))
+                    }
+                }
 
-            bigButton(title: Strings.text("Clean All"),
-                      detail: totalBytesText,
-                      icon: "paintbrush.fill",
-                      busy: isCleaning,
-                      enabled: toolReady == true && scan != nil && !isCleaning,
-                      destructive: true) {
-                request(.all)
+                bigButton(title: Strings.text("Clean app caches"),
+                          detail: appBytesText,
+                          icon: "square.grid.2x2",
+                          busy: false,
+                          enabled: toolReady == true && !isCleaning) {
+                    request(.category(.apps))
+                }
+            } else {
+                bigButton(title: Strings.text("Scan"),
+                          detail: nil,
+                          icon: "magnifyingglass",
+                          busy: isScanning,
+                          enabled: toolReady == true && !isScanning && !isCleaning) {
+                    Task { await runScan() }
+                }
             }
         }
     }
@@ -248,15 +270,15 @@ struct CleanSection: View {
         .disabled(!enabled)
     }
 
-    /// 分项里出现的四类目录。照片缓存与下载目录是评估时砍掉的，别加回来。
-    private let detailScopes: [StorageCleanScope] = [.system, .logs, .temp, .update]
+    /// 分项里出现的三类目录。**2026-10-15 去掉了 `.update`**（系统更新包）——
+    /// 理由见 `actionButtons` 上那一段。照片缓存与下载目录是评估时砍掉的，别加回来。
+    private let detailScopes: [StorageCleanScope] = [.system, .logs, .temp]
 
     private func icon(for scope: StorageCleanScope) -> String {
         switch scope {
         case .system: return "shippingbox"
         case .logs: return "doc.text"
         case .temp: return "clock.arrow.circlepath"
-        case .update: return "arrow.down.circle"
         default: return "folder"
         }
     }
@@ -278,7 +300,6 @@ struct CleanSection: View {
         case .system: bytes = scan.systemBytes
         case .logs: bytes = scan.logsBytes
         case .temp: bytes = scan.tempBytes
-        case .update: bytes = scan.updateBytes
         default: bytes = 0
         }
         return bytesLabel(bytes)
@@ -289,7 +310,6 @@ struct CleanSection: View {
         case .system: return Strings.text("Clean system cache")
         case .logs: return Strings.text("Clean logs")
         case .temp: return Strings.text("Clean temp files")
-        case .update: return Strings.text("Clean update files")
         default: return scope.rawValue
         }
     }
@@ -301,13 +321,12 @@ struct CleanSection: View {
         case .system: return Strings.text("System cache")
         case .logs: return Strings.text("Logs")
         case .temp: return Strings.text("Temp files")
-        case .update: return Strings.text("Update files")
         default: return scope.rawValue
         }
     }
 
-    /// 本次实际能清掉的字节数：四类目录 + 未被保护的应用缓存。
-    /// 顶部「可清理」与两个大按钮共用这一个口径。
+    /// 本次实际能清掉的字节数：三类目录 + 未被保护的应用缓存。
+    /// 顶部「可清理」与「全部清理」那个大按钮共用这一个口径。
     private func cleanableBytes(_ scan: StorageScanResult) -> Int64 {
         scan.cleanableBytes(protecting: protectedBundles)
     }
@@ -319,11 +338,6 @@ struct CleanSection: View {
             .filter { !protectedBundles.contains($0.bundle) }
             .reduce(Int64(0)) { $0 + $1.bytes }
         return bytesLabel(total)
-    }
-
-    private var totalBytesText: String? {
-        guard let scan else { return nil }
-        return bytesLabel(cleanableBytes(scan))
     }
 
     /// 页脚说明。**没有工具状态那一行**（2026-10-14 去掉）——
@@ -595,7 +609,6 @@ struct CleanSection: View {
         case .category(.system): return Strings.text("Delete the system cache?")
         case .category(.logs): return Strings.text("Delete the logs?")
         case .category(.temp): return Strings.text("Delete the temporary files?")
-        case .category(.update): return Strings.text("Delete the update files?")
         case .category(.apps): return Strings.text("Delete every app's cache?")
         case .app(_, let name): return Strings.text("Delete the cache of %@?", name)
         case .none, .category(.app), .category(.all):
@@ -610,15 +623,13 @@ struct CleanSection: View {
     private var confirmMessage: String {
         switch pendingClean {
         case .all:
-            return Strings.text("The contents of the system cache, the logs, the temporary files, the update files and every app's cache directory are deleted. Everything here is regenerated by the system and the apps as needed.")
+            return Strings.text("The contents of the system cache, the logs, the temporary files and every app's cache directory are deleted. Everything here is regenerated by the system and the apps as needed.")
         case .category(.system):
             return Strings.text("The contents of the system cache directory are deleted. A small set of critical system items — location learning, Siri, iCloud sync state — is kept.")
         case .category(.logs):
             return Strings.text("The contents of the system log directories are deleted.")
         case .category(.temp):
             return Strings.text("The contents of /var/tmp are deleted.")
-        case .category(.update):
-            return Strings.text("Downloaded system update files are deleted. The system downloads an update again the next time one is offered.")
         case .category(.apps):
             return Strings.text("Every app's cache directory is emptied. Apps rebuild their caches as needed; if one is running, restart it afterwards.")
         case .app(_, _):

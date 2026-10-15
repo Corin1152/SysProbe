@@ -99,8 +99,21 @@ struct BandPanels: View {
     @State private var showRestartConfirm = false
 
     /// 操作结果横幅。成功与失败共用一条 —— 同一时刻只会有一个结果。
+    ///
+    /// ── 2026-10-15：它现在会自动消失 ────────────────────────────────────────
+    ///
+    /// 原来它挂上就一直在。最明显的是重启蜂窝服务：按下之后页面顶部那句
+    /// 「Cellular service is restarting.」会常驻，网络早就回来了也不走 ——
+    /// 用户唯一能让它消失的办法是切一次卡槽（那会清 `banner`）或者退出页面。
+    /// 一条**结果**通知不该有这种生命周期，何况这句话在网络恢复之后本身就是错的。
+    ///
+    /// 现在每次挂横幅都排一个 5 秒后的收尾，用 `bannerToken` 认领：这 5 秒里
+    /// 又出了新的、或用户自己动了界面把它清掉，旧的那次收尾就作废 ——
+    /// 否则「先保存、再重启」时前一条的定时器会把后一条提前抹掉。
     @State private var banner: String?
     @State private var bannerIsError = false
+    /// 当前这条横幅的序号。见 `showBanner`。
+    @State private var bannerToken = 0
 
     /// 频段网格：4 列。和原版一样 —— 一屏能扫完一个制式，不用滚。
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
@@ -192,7 +205,7 @@ struct BandPanels: View {
             // 上一张卡的对象，不重读就没得写。
             selection = [:]
             hasUnsavedChanges = false
-            banner = nil
+            dismissBanner()
             service.load(slot: newSlot)
         }
         .alert("Before you continue", isPresented: $showEntryTips) {
@@ -647,6 +660,37 @@ struct BandPanels: View {
         }
     }
 
+    // MARK: - 横幅的挂与收
+
+    /// 挂一条结果横幅，**并在 5 秒后自动收起**。
+    ///
+    /// 5 秒是「够读完一句」与「不碍事」之间的折中：这几条文案都只有一行
+    /// （"Band settings saved." / "Cellular service is restarting." 之类），
+    /// 扫一眼就够；而重启蜂窝服务那一条尤其不该久留 —— 它说的是「正在重启」，
+    /// 网络一回来这句话就是错的。
+    ///
+    /// 失败也走 5 秒：那条文案（"Could not restart the cellular service."）同样
+    /// 只是一次动作的回执，而真正的失败原因在别处（关于页的 Root tool 那一行）。
+    private func showBanner(_ text: String, isError: Bool) {
+        banner = text
+        bannerIsError = isError
+        let token = bannerToken &+ 1
+        bannerToken = token
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            // 这 5 秒里又出过新横幅（或它已被别处清掉）就什么都不做。
+            guard bannerToken == token else { return }
+            banner = nil
+        }
+    }
+
+    /// 主动收起横幅（用户改了勾选、换了卡槽）。**递增序号**，让在途的那次延迟
+    /// 收尾作废 —— 不然它可能在 5 秒后把一条刚挂上的新横幅抹掉。
+    private func dismissBanner() {
+        bannerToken = bannerToken &+ 1
+        banner = nil
+    }
+
     // MARK: - 编辑
 
     private func toggle(_ rat: RadioAccessTechnology, _ value: Int) {
@@ -658,13 +702,15 @@ struct BandPanels: View {
         }
         selection[rat] = set
         hasUnsavedChanges = true
-        banner = nil
+        // 用户已经开始改了，上一次动作的回执就不再成立 —— 连同它那个在途的
+        // 定时器一起作废（见 `dismissBanner`）。
+        dismissBanner()
     }
 
     private func setAll(_ rat: RadioAccessTechnology, in bands: [Band], on: Bool) {
         selection[rat] = on ? Set(bands.map(\.number)) : []
         hasUnsavedChanges = true
-        banner = nil
+        dismissBanner()
     }
 
     /// 把刚从 Modem 读回来的 active 灌进界面状态。
@@ -686,10 +732,10 @@ struct BandPanels: View {
         // 只提交界面上画出来的制式（现在就是 4G）。没画出来的 3G / 2G 由桥接层
         // 从原对象里原样带回去 —— 不展示不等于禁用。
         let ok = service.write(selection: selection, only: visibleRats, slot: service.slot)
-        banner = ok
+        showBanner(ok
             ? Strings.text("Band settings saved.")
-            : Strings.text("Could not write the band settings. Nothing was changed.")
-        bannerIsError = !ok
+            : Strings.text("Could not write the band settings. Nothing was changed."),
+            isError: !ok)
         // 无论成没成都重读一次：失败时界面回到 Modem 的真实状态，
         // 而不是停在一个「看起来改了、其实没改」的勾选上。
         hasUnsavedChanges = false
@@ -698,19 +744,19 @@ struct BandPanels: View {
 
     private func restoreDefault() {
         let ok = service.restoreDefault(slot: service.slot)
-        banner = ok
+        showBanner(ok
             ? Strings.text("Default band settings restored.")
-            : Strings.text("Could not restore the default band settings.")
-        bannerIsError = !ok
+            : Strings.text("Could not restore the default band settings."),
+            isError: !ok)
         hasUnsavedChanges = false
         service.load(slot: service.slot)
     }
 
     private func restartCellular() {
         let ok = DeviceActions.restartCommCenter()
-        banner = ok
+        showBanner(ok
             ? Strings.text("Cellular service is restarting.")
-            : Strings.text("Could not restart the cellular service.")
-        bannerIsError = !ok
+            : Strings.text("Could not restart the cellular service."),
+            isError: !ok)
     }
 }

@@ -1198,16 +1198,18 @@ static int do_proc_list(const char *reportPath) {
 /// 应用安装容器根。显示名与图标路径从这里来（读各 .app 的 Info.plist）。
 #define CLEAN_BUNDLE_CONTAINERS "/var/containers/Bundle/Application"
 
-/// 系统更新包（OTA）的落盘位置。
+/// 系统更新包（OTA）那一类**已经整个去掉**（2026-10-15）。
 ///
-/// iOS 12 起由 MobileAsset 框架下载到这里；**已下载但未安装**的更新包动辄几百 MB
-/// 到数 GB，是「其他」占用里最大的一块，也是同类工具（iCleaner / Geranium）收益最高的
-/// 一项。第二个宏是更早期 iOS 的位置，两代实现哪个存在清哪个。
+/// 这里原来有两个宏：`CLEAN_UPDATE_DIR`（`/var/mobile/Library/Assets/
+/// com_apple_MobileAsset_SoftwareUpdate`，iOS 12 起由 MobileAsset 框架下载到这里）
+/// 与 `CLEAN_UPDATE_DIR_LEGACY`（`/var/mobile/Library/SoftwareUpdate`，更早的系统）。
+/// 它们支撑着扫描里的 `update` 一类、`clean-run update` 这个 scope，以及
+/// `clean_empty_update` 那条清理路径。
 ///
-/// **存在才处理**：没下载过更新的设备上这两个路径根本不存在 —— 扫描要报 0，
-/// 清理要静默跳过，两者都不能把它当错误。
-#define CLEAN_UPDATE_DIR "/var/mobile/Library/Assets/com_apple_MobileAsset_SoftwareUpdate"
-#define CLEAN_UPDATE_DIR_LEGACY "/var/mobile/Library/SoftwareUpdate"
+/// 按要求撤掉了 —— 这一页的定位是清缓存，而更新包是**系统的下载内容**：删掉它
+/// 等于替用户取消一次已经下好的系统更新。扫描不再遍历那两个目录（少一次几百 MB
+/// 量级的递归统计），报告里也没有 `update` 这个键了。App 侧同步见
+/// `StorageCleaner.StorageCleanScope`。
 
 /// 容器根的元数据文件与键名。键名必须是字面量才能用 `CFSTR`。
 #define CLEAN_MCM_PLIST ".com.apple.mobile_container_manager.metadata.plist"
@@ -1437,11 +1439,6 @@ static uint64_t clean_measure_container(const char *container) {
     return total;
 }
 
-/// 系统更新包的可清理量。两个候选路径哪个存在算哪个 —— 都不存在就是 0。
-static uint64_t clean_measure_update(void) {
-    return clean_measure(CLEAN_UPDATE_DIR, 0) + clean_measure(CLEAN_UPDATE_DIR_LEGACY, 0);
-}
-
 /// 递归删除 `path` 整棵子树，把字节数记进 `ctx->freed`。
 /// 只被 `clean_empty_dir` 调在入口目录**之下** —— 顶层入口目录本身永远保留。
 static void clean_remove_tree(const char *path, clean_context *ctx, int depth) {
@@ -1540,13 +1537,6 @@ static void clean_empty_container(const char *container, clean_context *ctx) {
         }
         clean_empty_dir(path, ctx, 0);
     }
-}
-
-/// 清空系统更新包目录的内容。与其它类别一样：只删内容、保留目录本身；
-/// 目录不存在就静默跳过 —— 没下载过更新的设备就是这种情况，不是错误。
-static void clean_empty_update(clean_context *ctx) {
-    clean_empty_dir(CLEAN_UPDATE_DIR, ctx, 0);
-    clean_empty_dir(CLEAN_UPDATE_DIR_LEGACY, ctx, 0);
 }
 
 /// `excludeCsv` 是逗号分隔的 bundle id 列表；命中返回 1。
@@ -2027,19 +2017,17 @@ static void clean_json_samples(FILE *f, const char *name, const clean_sample_lis
     fputc(']', f);
 }
 
-/// 一次扫描的四类目录结果 + 各自的预览样本。
+/// 一次扫描的三类目录结果 + 各自的预览样本。
 ///
-/// 打成结构体而不是继续加形参：这一版多了一类（`update`）和四组样本，
-/// 逐个平铺成参数已经到 11 个，调用点读不出谁是谁。
+/// 打成结构体而不是继续加形参：逐个平铺成参数已经到 9 个，调用点读不出谁是谁。
+/// （原来是四类，`update` 那一类 2026-10-15 去掉了 —— 见上面那段说明。）
 typedef struct {
     uint64_t system;
     uint64_t logs;
     uint64_t temp;
-    uint64_t update;
     clean_sample_list systemSamples;
     clean_sample_list logsSamples;
     clean_sample_list tempSamples;
-    clean_sample_list updateSamples;
 } clean_scan_totals;
 
 static int clean_write_scan_report(const char *path,
@@ -2057,16 +2045,12 @@ static int clean_write_scan_report(const char *path,
     clean_json_category(f, "logs", totals->logs);
     fputc(',', f);
     clean_json_category(f, "temp", totals->temp);
-    fputc(',', f);
-    clean_json_category(f, "update", totals->update);
     fputs("},\"samples\":{", f);
     clean_json_samples(f, "system", &totals->systemSamples);
     fputc(',', f);
     clean_json_samples(f, "logs", &totals->logsSamples);
     fputc(',', f);
     clean_json_samples(f, "temp", &totals->tempSamples);
-    fputc(',', f);
-    clean_json_samples(f, "update", &totals->updateSamples);
     fputs("},\"apps\":[", f);
     for (int i = 0; i < appCount; i++) {
         if (i > 0) {
@@ -2165,23 +2149,19 @@ static int do_clean_scan(const char *reportPath) {
     uint64_t system = clean_measure_system();
     uint64_t logs = clean_measure(CLEAN_LOGS_DIR_1, 0) + clean_measure(CLEAN_LOGS_DIR_2, 0);
     uint64_t temp = clean_measure(CLEAN_TEMP_DIR, 0);
-    uint64_t update = clean_measure_update();
 
-    // 四类目录的字节数 + 各自的预览样本。`memset` 顺带把样本的 count 清成 0。
+    // 三类目录的字节数 + 各自的预览样本。`memset` 顺带把样本的 count 清成 0。
     clean_scan_totals totals;
     memset(&totals, 0, sizeof(totals));
     totals.system = system;
     totals.logs = logs;
     totals.temp = temp;
-    totals.update = update;
     // 预览的口径必须与统计、与真删三处一致：系统缓存要过滤排除名单，
     // 日志有两个目录、要合并成一组样本，其余原样。
     clean_collect_samples(CLEAN_SYSTEM_CACHE_DIR, 1, &totals.systemSamples);
     clean_collect_samples(CLEAN_LOGS_DIR_1, 0, &totals.logsSamples);
     clean_collect_samples(CLEAN_LOGS_DIR_2, 0, &totals.logsSamples);
     clean_collect_samples(CLEAN_TEMP_DIR, 0, &totals.tempSamples);
-    clean_collect_samples(CLEAN_UPDATE_DIR, 0, &totals.updateSamples);
-    clean_collect_samples(CLEAN_UPDATE_DIR_LEGACY, 0, &totals.updateSamples);
 
     // 诊断计数。栈上分配（约 350 字节），随报告一起回传。
     clean_app_diagnostics diag;
@@ -2266,9 +2246,11 @@ static void clean_run_apps(const char *bundleId, const char *excludeCsv, clean_c
 
 /// `clean-run <scope> <report.json> [bundleId] [excludeCsv]`。
 ///
-/// scope：`system` / `logs` / `temp` / `update` / `apps` / `app` / `all`。
+/// scope：`system` / `logs` / `temp` / `apps` / `app` / `all`。
 /// `app` 必须带 bundleId，只清那一个应用；`apps` 清全部应用。
 /// `excludeCsv` 是逗号分隔的 bundle id 排除名单，只影响「全部应用」那一部分。
+///
+/// （原来的 `update` 那一类 2026-10-15 去掉了，见文件上方那段说明。）
 ///
 /// 清理是**尽力而为**：个别文件正被占用删不掉记进报告的 errors，不影响退出码 ——
 /// 「删掉了绝大部分」对用户是一次成功的清理，报成失败反而会诱导反复重试。
@@ -2290,9 +2272,8 @@ static int do_clean_run(const char *scope, const char *reportPath,
     const int doSystem = isAll || strcmp(scope, "system") == 0;
     const int doLogs = isAll || strcmp(scope, "logs") == 0;
     const int doTemp = isAll || strcmp(scope, "temp") == 0;
-    const int doUpdate = isAll || strcmp(scope, "update") == 0;
     const int doApps = isAll || strcmp(scope, "apps") == 0;
-    if (!doSystem && !doLogs && !doTemp && !doUpdate && !doApps && !isSingleApp) {
+    if (!doSystem && !doLogs && !doTemp && !doApps && !isSingleApp) {
         return SYSPROBE_EXIT_USAGE;
     }
     if (isSingleApp && bundleId == NULL) {
@@ -2312,9 +2293,6 @@ static int do_clean_run(const char *scope, const char *reportPath,
     }
     if (doTemp) {
         clean_empty_dir(CLEAN_TEMP_DIR, &ctx, 0);
-    }
-    if (doUpdate) {
-        clean_empty_update(&ctx);
     }
     if (doApps || isSingleApp) {
         // 排除名单只在全量清理时传下去；点名清单个应用时它不生效。
@@ -2339,7 +2317,7 @@ int main(int argc, char *argv[]) {
     if (argc >= 2 && strcmp(argv[1], "clean-run") == 0) {
         if (argc < 4 || argc > 6) {
             fprintf(stderr,
-                    "usage: %s clean-run <system|logs|temp|update|apps|app|all> <report.json>"
+                    "usage: %s clean-run <system|logs|temp|apps|app|all> <report.json>"
                     " [bundleId] [excludeCsv]\n",
                     argv[0]);
             return SYSPROBE_EXIT_USAGE;

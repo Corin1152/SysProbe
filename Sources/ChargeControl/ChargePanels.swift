@@ -54,6 +54,17 @@ import SwiftUI
 struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
 
+    /// 「容量阈值」与「温度控制」两张卡片的折叠开关（2026-10-15 新增）。
+    ///
+    /// **默认展开。** 与频段页的 4G 卡片（默认折叠）刻意不同：那边一张卡就是
+    /// 24 个可点的格子，展开的代价是「一屏全被它占掉」；而这两张卡的内容 ——
+    /// 两个阈值滑块 —— 正是「充电控制」这一段存在的理由，默认收起会让人以为
+    /// 它们没了。折叠是给「已经配好、不想每次滚过去」的人用的。
+    ///
+    /// 不持久化：与频段页、进程页的折叠一致，折叠是一次浏览里的临时姿态。
+    @State private var thresholdsExpanded = true
+    @State private var temperatureExpanded = true
+
     var body: some View {
         Group {
             ChargeServiceNote()
@@ -127,7 +138,12 @@ struct ChargeControlPanels: View {
     }
 
     private var thresholdsPanel: some View {
-        Panel("Capacity thresholds", systemImage: "battery.50") {
+        Panel("Capacity thresholds", systemImage: "battery.50",
+              // 收起时在标题行右侧补一个「当前区间」—— 不然收起之后这一张什么都不
+              // 说，而「我设的是多少」正是收起状态下唯一还想知道的事。展开时不重复：
+              // 内容里那两个滑块自己就带着值。
+              trailing: thresholdsExpanded ? nil : Text(verbatim: "\(charge.config.chargeBelow)–\(charge.config.chargeAbove)%"),
+              expanded: $thresholdsExpanded) {
             VStack(spacing: 16) {
                 ThresholdSlider(title: "Start charging below",
                                 value: charge.config.chargeBelow,
@@ -146,7 +162,13 @@ struct ChargeControlPanels: View {
     }
 
     private var temperaturePanel: some View {
-        Panel("Temperature control", systemImage: "thermometer.medium") {
+        Panel("Temperature control", systemImage: "thermometer.medium",
+              // 与上面那张同一个写法：摘要只在收起时出现。区间写成
+              // 「恢复阈值–停止阈值」，与卡片里两个滑块的自上而下顺序相反 ——
+              // 摘要读的是**区间**（低到高），而滑块排的是**动作顺序**
+              // （先定上限，再定下限）。两者不冲突，各自都对。
+              trailing: temperatureExpanded ? nil : Text(verbatim: "\(charge.config.temperatureBelow)–\(charge.config.temperatureAbove)°"),
+              expanded: $temperatureExpanded) {
             VStack(spacing: 16) {
                 // 这里原本还有一个「温度控制」开关，2026-10-11 按要求删掉了 ——
                 // 它并入「基础」卡片里的「启用」总开关：总开关打开就等于温度控制生效。
