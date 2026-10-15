@@ -204,6 +204,12 @@ struct MonitorLifecycle: View {
                 monitor.start()
                 hardware.start()
                 charge.start()
+                // 设备名兜底：本地读不到真名时借 root 工具读一次。
+                //
+                // **必须放在这里，而不是 `HardwareMonitor.start()`** —— 那条路要
+                // `DeviceActions`，而它只编进主 App target；放进 `Shared` 里会让
+                // 负一屏当场编不过（本轮踩过，见 `overrideDeviceName` 的注释）。
+                Task { await resolveDeviceNameIfNeeded() }
             }
             // iOS 16: the two-parameter `onChange(of:initial:)` is iOS 17-only, so the
             // first run is done explicitly in `onAppear`.
@@ -223,6 +229,23 @@ struct MonitorLifecycle: View {
                     break
                 }
             }
+    }
+
+    /// 把设备名那一格从通用名换成用户起的真名。
+    ///
+    /// 只在本地读到**通用名**（`iPhone` / `iPad`）时才跑：entitlement 一旦生效、
+    /// 或者设备本来就不叫这两个名字，这条路就自动不再触发。用户真把设备命名为
+    /// "iPhone" 时也只是多起一次子进程，读到的是同一个值 —— 无害。
+    ///
+    /// `DeviceActions.deviceName()` 是阻塞调用（起子进程并等它），所以丢 detached；
+    /// 写回时已在主 actor 上（`body` 的 `Task` 继承 `MonitorLifecycle` 的隔离域）。
+    private func resolveDeviceNameIfNeeded() async {
+        let local = hardware.snapshot.system.deviceName
+        guard local == "iPhone" || local == "iPad" else { return }
+        let name = await Task.detached(priority: .utility) {
+            DeviceActions.deviceName()
+        }.value
+        if let name { hardware.overrideDeviceName(name) }
     }
 }
 

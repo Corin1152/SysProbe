@@ -238,22 +238,9 @@ final class HardwareMonitor: ObservableObject {
         first.system = Self.readSystem()
         snapshot = first
 
-        // ── 设备名兜底（2026-10-15）─────────────────────────────────────────────
-        //
-        // 本地那条路（`UIDevice.current.name` 与 MobileGestalt）在 iOS 16+ 上都要
-        // `com.apple.developer.device-information.user-assigned-device-name`
-        // 这个 entitlement，拿不到就**一律给通用名** "iPhone" / "iPad"。
-        //
-        // **只在读到通用名时才借 root 工具**：权限一旦生效（或者设备本来就
-        // 不叫这两个名字）这条路就自动不再触发，不会白起一次子进程。
-        // 用户真把设备命名为 "iPhone" 时也只是多跑一次，读到的是同一个值。
-        //
-        // 不 await：这一格晚一拍（1 秒）再变成真名是可以接受的，而
-        // `start()` 不该被一次子进程卡住。
-        let localName = Self.systemIdentity.deviceName
-        if localName == "iPhone" || localName == "iPad" {
-            Task { await Self.resolveDeviceName() }
-        }
+        // 设备名**不在这里兜底**：那条路要 `DeviceActions.deviceName()`，而那个
+        // 类型只编进主 App target，本类型在负一屏也要用（详见
+        // `overrideDeviceName`）。由主 App 的 `MonitorLifecycle` 在启动时注入。
 
         // 与 `PowerMonitor.start` 同样的理由：挂在 `.default` 模式上的 `Timer` 会在
         // 滚动期间自动让路，`Task.sleep` 不会。详见那边的注释。
@@ -597,19 +584,28 @@ final class HardwareMonitor: ObservableObject {
         return stats
     }
 
-    /// 起一次 root 工具把设备名读回来，读到就覆盖这一格。
+    /// 覆盖「设备名」这一格。
     ///
-    /// 只在 `start()` 里跑一次（进页面时），不进每秒的采样路径 —— 起一次子进程
-    /// 是几十毫秒的量级，放进每秒那一拍就成了这一页最贵的一项。
+    /// ── 为什么要有这个入口（2026-10-15）─────────────────────────────────────
     ///
-    /// `DeviceActions.deviceName()` 是阻塞调用，所以整段丢到 detached 任务上；
-    /// 写回 `rootDeviceName` 时回到主 actor（本类默认 MainActor）。
-    private static func resolveDeviceName() async {
-        let name = await Task.detached(priority: .utility) {
-            DeviceActions.deviceName()
-        }.value
-        guard let name else { return }
-        rootDeviceName = name
+    /// 设备名的真值在 iOS 16+ 上要 `com.apple.developer.device-information
+    /// .user-assigned-device-name` 那个 entitlement 才拿得到，拿不到一律给
+    /// "iPhone"。兜底办法是借 root 工具（`DeviceActions.deviceName()`）读一次 ——
+    /// 但**`DeviceActions` 只编进主 App target**（负一屏不需要 root 链路），
+    /// 而本类型在负一屏也要用，所以**不能在这里直接调它**。
+    ///
+    /// （2026-10-15 踩过：把调用写进 `start()`，`Shared` 里的这个类型一引用
+    /// `DeviceActions`，appex 当场编不过 ——
+    /// `HardwareMonitor.swift:609: error: cannot find 'DeviceActions' in scope`。
+    /// 改由主 App 启动时注入。）
+    ///
+    /// 注入值必须存成**静态**的（`rootDeviceName`）：`readSystem()` 每拍都会从
+    /// `systemIdentity` 重建一份 `system`，存实例属性的话下一拍就被覆盖回去。
+    func overrideDeviceName(_ name: String) {
+        Self.rootDeviceName = name
+        // 立刻改掉当前这一份，不必等下一拍 —— 那一拍 1 秒后到，
+        // 而设备卡片此刻显示的正是旧的 "iPhone"。
+        snapshot.system.deviceName = name
     }
 
     // MARK: sysctl 辅助
