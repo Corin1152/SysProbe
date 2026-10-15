@@ -56,14 +56,15 @@ struct ChargeControlPanels: View {
 
     /// 「容量阈值」与「温度控制」两张卡片的折叠开关（2026-10-15 新增）。
     ///
-    /// **默认展开。** 与频段页的 4G 卡片（默认折叠）刻意不同：那边一张卡就是
-    /// 24 个可点的格子，展开的代价是「一屏全被它占掉」；而这两张卡的内容 ——
-    /// 两个阈值滑块 —— 正是「充电控制」这一段存在的理由，默认收起会让人以为
-    /// 它们没了。折叠是给「已经配好、不想每次滚过去」的人用的。
+    /// **默认折叠**（同一天按要求从「默认展开」改成这样）。原来担心「收起之后
+    /// 用户以为功能没了」，但收起态在标题行右侧写了当前区间
+    /// （`20–80%` / `20–35°`），信息并没有丢 —— 而这两张卡加起来四根滑块、
+    /// 纵向占掉小半屏，默认铺开会把这一页真正要看的东西（上面那几张读数卡）
+    /// 挤出首屏。要调的人点一下标题就展开，这一次点击换来的是整页的可读性。
     ///
     /// 不持久化：与频段页、进程页的折叠一致，折叠是一次浏览里的临时姿态。
-    @State private var thresholdsExpanded = true
-    @State private var temperatureExpanded = true
+    @State private var thresholdsExpanded = false
+    @State private var temperatureExpanded = false
 
     var body: some View {
         Group {
@@ -359,7 +360,13 @@ struct ValueRow: View {
                 .foregroundStyle(Color.primary)
             Spacer(minLength: 8)
             Text(value)
-                .mwReadout(size: 14, weight: .semibold)
+                // ── 2026-10-15：14 → 16 ────────────────────────────────────────
+                //
+                // 14 pt 与上面的标签同号，读起来像「标签的附属」而不是一个读数；
+                // 而同一张卡片上半截那三格（电芯电压 / 电流 / 温度）是 20 pt ——
+                // 上下差六号，下半截那一列数字就显得缩进去了。
+                // 16 pt 是「比标签大一档、又不去抢上半截那三格」的位置。
+                .mwReadout(size: 16, weight: .semibold)
                 .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)

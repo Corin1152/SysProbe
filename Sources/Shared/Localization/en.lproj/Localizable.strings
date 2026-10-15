@@ -8,6 +8,8 @@
 "Adapter" = "Adapter";
 "Done" = "Done";
 "Device" = "Device";
+/* 设备卡片补齐第六格（2026-10-15）：五项凑不出整齐的两列，补上设备名 */
+"Device name" = "Device name";
 "Model" = "Model";
 "System" = "System";
 "Kernel" = "Kernel";
@@ -433,5 +435,8 @@
 /* 进程分页 · 分组折叠与排序（2026-10-15 第三轮） */
 "App name" = "App name";
 "Sort" = "Sort";
+
+/* 进程分页 · 自定义采样间隔（2026-10-15 第四轮） */
+"Refresh interval" = "Refresh interval";
 
 /* 电源页 · 广播档位并进供电路径卡片（2026-10-15） */

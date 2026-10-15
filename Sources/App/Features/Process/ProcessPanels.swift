@@ -431,6 +431,8 @@ private struct ProcessOverviewPanel: View {
 
             Spacer(minLength: 8)
 
+            intervalMenu
+
             Button {
                 monitor.refresh()
             } label: {
@@ -460,6 +462,42 @@ private struct ProcessOverviewPanel: View {
             .disabled(monitor.isSampling)
             .accessibilityLabel(Text("Refresh"))
         }
+    }
+
+    /// 采样间隔菜单，摆在刷新按钮**左边** —— 它管「多久自动刷一次」，刷新按钮管
+    /// 「现在立刻刷一次」，从慢到快的顺序读下来更顺。
+    ///
+    /// 用 `Picker` 而不是几个 `Button`：当前档位由系统在菜单里画勾，不必自己再维护
+    /// 一份选中态。档位全部取自 `ProcessMonitor.intervalOptions`，`setInterval` 会
+    /// 校验并落盘，所以这里不需要做任何边界处理。
+    ///
+    /// 图标右边带一个当前档位的小字（`3s`）。没有它的话，用户改完间隔从菜单退出来
+    /// 就看不到自己设成了几秒 —— 只有图标是没法回读的。数值用 `.monospacedDigit()`
+    /// 并且整块给固定宽度，否则 `1s` 与 `30s` 宽度不同，会把右边的刷新按钮推来推去。
+    private var intervalMenu: some View {
+        Menu {
+            Picker(Strings.text("Refresh interval"),
+                   selection: Binding(get: { monitor.interval },
+                                      set: { monitor.setInterval($0) })) {
+                ForEach(ProcessMonitor.intervalOptions, id: \.self) { seconds in
+                    Text(verbatim: "\(Int(seconds))s").tag(seconds)
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "timer")
+                    .font(AppFont.text(12, weight: .semibold))
+                Text(verbatim: "\(Int(monitor.interval))s")
+                    .font(AppFont.text(11, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(Color.mwAccent)
+            // 与右边的刷新按钮同一个 22 pt 高 —— 这一行的高度由这两个控件定，
+            // 哪一个高一截都会把下面的列表整体顶下去（就是上次那个跳动）。
+            .frame(minWidth: 42, minHeight: 22, alignment: .center)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("Refresh interval"))
     }
 
     private func percent(_ value: Double) -> String {

@@ -32,10 +32,12 @@ struct HardwareView: View {
     /// 留出余量。其余卡片（设备/CPU/存储）列数少，维持 18 不动。
     fileprivate static let memoryValueSize: CGFloat = 15
 
-    /// 设备卡片专用的一档（2026-10-15）。比 `valueSize` 再小两号：
-    /// 那张卡片把「机型 / 系统 / 内核」并成了三格一行，列宽只有 100 pt 上下，
-    /// 18 pt 的 `iPhone17,2` 会把格子撑爆。16 pt 是「三格放得下」与
-    /// 「与别的卡片读起来还是一档」之间的折中。
+    /// 设备卡片专用的一档（2026-10-15）。比 `valueSize` 小两号。
+    ///
+    /// 起因是那张卡片要压高度（三行 → 两行），当时并成了三格一行、列宽只有 100 pt
+    /// 上下，18 pt 的 `iPhone17,2` 会把格子撑爆。后来虽然改回了「两列」（列宽翻倍，
+    /// 18 pt 也放得下），**字号仍然留在 16** —— 这一页最上面那张答的是「这台设备是
+    /// 什么」，扫一眼就够，比下面那些实时读数小一档是有意的。
     fileprivate static let deviceValueSize: CGFloat = 16
 
     var body: some View {
@@ -73,9 +75,29 @@ struct HardwareView: View {
     /// 五项读数用掉三行的高度，而这张卡片在这一页最上面，答的又只是「这台设备是
     /// 什么」这种扫一眼就够的问题，不该比下面几张更占地方。
     ///
-    /// 压法是把三个**短标识**并成一行：`iPhone17,2` / `26.1` / `24.0.0` 三格
-    /// 并排放得下（见 `deviceValueSize` 那一段的取舍）。行距同时从 12 收到 10 ——
-    /// 这一页别的卡片是 12，差 2 pt 看不出来，省下来的却是实打实的。
+    /// ── 同一天再改：统一成两列 ──────────────────────────────────────────────
+    ///
+    /// 压缩时把三个短标识并成了一行，于是变成「三格一行 + 两格一行」——
+    /// 两行的列宽不一样（1/3 与 1/2），第二格的起点一处在 33%、一处在 50%，
+    /// 两条竖线错开，看着就是没对齐。**每行用同一个列数**才对得齐。
+    ///
+    /// 选两列而不是三列：`Physical memory` 这个标签在 1/3 宽（约 100 pt）里
+    /// 会折行（`mwCaption` 是大写 + 字距，11 pt 下这一串接近 110 pt），
+    /// 而两列的 155 pt 放得下。
+    ///
+    /// ── 同一天第三次改：五行补齐成六格 ──────────────────────────────────────
+    ///
+    /// 上一版是「两列 + 最后一项占满一行」。虽然行内两格的起点是对齐的，但
+    /// 第三行那一格**跨了整行**，前两行是两条竖线、第三行只有一条 —— 扫过去
+    /// 就是一个不完整的网格，用户反馈「不好看，按列对齐」说的正是这里。
+    ///
+    /// 根因是**五项除不尽两列**：怎么排都会余一格。与其让余下的那格跨列或留白，
+    /// 不如把它填上 —— `SystemStats` 里本来就有 `deviceName`（用户给这台设备
+    /// 起的名字），只是这张卡片一直没显示它。补进来正好六项，三行两列，行行完整。
+    ///
+    /// 顺序按「这台设备是什么 → 跑着什么 → 跑了多久 / 多大内存」重排：
+    /// 设备名与机型打头，系统与内核跟上，运行时长与物理内存收尾。行距保持 10，
+    /// 所以**高度与上一版完全相同**（都是三行）—— 没有回退上一轮的压缩。
     private struct DeviceCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
 
@@ -85,10 +107,18 @@ struct HardwareView: View {
             let snap = hardware.snapshot
             Panel("Device", systemImage: "iphone") {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 12) {
+                    // 三行都是**两格**，且每格的 `Metric` 自带
+                    // `.frame(maxWidth: .infinity, alignment: .leading)`，
+                    // 于是列宽恒为 (卡片宽 − 14) / 2，三行的竖线落在同一处。
+                    HStack(alignment: .top, spacing: 14) {
+                        Metric(caption: "Device name",
+                               value: snap.system.deviceName,
+                               size: HardwareView.deviceValueSize)
                         Metric(caption: "Model",
                                value: snap.system.modelIdentifier,
                                size: HardwareView.deviceValueSize)
+                    }
+                    HStack(alignment: .top, spacing: 14) {
                         Metric(caption: "System",
                                value: snap.system.systemVersion,
                                size: HardwareView.deviceValueSize)
@@ -96,7 +126,7 @@ struct HardwareView: View {
                                value: snap.system.kernelVersion,
                                size: HardwareView.deviceValueSize)
                     }
-                    HStack(alignment: .top, spacing: 12) {
+                    HStack(alignment: .top, spacing: 14) {
                         Metric(caption: "Uptime",
                                value: Formatting.duration(snap.system.uptime),
                                size: HardwareView.deviceValueSize)
@@ -313,8 +343,14 @@ var body: some View {
         }
         .font(AppFont.text(14, weight: .semibold))
         .foregroundStyle(Color.white)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
+        // 高度与「清理」那一列大按钮**完全一致**（`CleanSection.bigButton` 也是
+        // `minHeight: 54`）。这两块现在在同一张存储卡片 / 内存卡片里上下相邻地出现，
+        // 差 17 pt 会一眼看出来是两套版式 —— 上一版这里是 `padding(.vertical, 10)`，
+        // 量出来只有 37 pt。
+        //
+        // 用 `minHeight` 而不是再算一次 padding：`ProgressView` / 动态字体的行高
+        // 一变，padding 那套就跟着飘，而 `minHeight` 是「至少这么高」。
+        .frame(maxWidth: .infinity, minHeight: 54)
         .background(
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

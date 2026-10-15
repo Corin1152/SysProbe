@@ -293,8 +293,58 @@ nonisolated enum ProcessSampler {
 @MainActor
 final class ProcessMonitor: ObservableObject {
 
-    /// 采样间隔（秒）。见类型头上的说明。
-    static let interval: TimeInterval = 3
+    /// 采样间隔（秒）。
+    ///
+    /// ── 2026-10-15：从 `static let` 改成可配置 ──────────────────────────────
+    ///
+    /// 原来硬编码 3 秒。加设置入口的理由就在上面那段：这一页的代价是**每一拍起一个
+    /// 特权子进程**，而「多久刷一次」是使用场景决定的 —— 盯着排查异常时 1 秒才跟得上，
+    /// 只是想扫一眼列表时 30 秒更省电。默认仍是 3 秒。
+    ///
+    /// 落 `UserDefaults`：与清理页的保护名单同一套约定，这是用户的长期选择，
+    /// 不该每次进页面都忘掉。
+    @Published private(set) var interval: TimeInterval = ProcessMonitor.storedInterval()
+
+    /// 可选档位。**不给「关闭」**：这一页的 CPU 占用率只能由两次采样求差得到
+    /// （见 `updateCPUShare`），停掉自动刷新会让那两列在三秒后集体变成「—」——
+    /// 那不是「省电模式」，是把这一页最有用的两列关掉。要手动控制的话把间隔
+    /// 拉到 30 秒就够，而且手动刷新按钮一直在。
+    ///
+    /// 下面这一组（含 `storedInterval()`）全部标 `nonisolated`：`interval` 的
+    /// **默认值表达式**要调 `storedInterval()`，而默认值表达式在类还没初始化完时
+    /// 求值，走 MainActor 隔离会撞上 Swift 6 的严格并发检查。它们本来就是纯常量
+    /// 与纯函数（只读 `UserDefaults`），不碰实例状态，摘出来零代价。
+    nonisolated static let intervalOptions: [TimeInterval] = [1, 2, 3, 5, 10, 30]
+
+    /// 没存过时用的间隔。与 0.0.70 之前的硬编码值是同一个数。
+    nonisolated static let defaultInterval: TimeInterval = 3
+
+    nonisolated private static let intervalKey = "process.sampleInterval"
+
+    /// 读回用户上次选的间隔。**不信任 `UserDefaults` 里的值**：手改过 plist、
+    /// 或将来档位表变了，都可能留下一个不在选项里的数 —— 那会让定时器按一个
+    /// 奇怪节奏跑，界面上那个胶囊又显示不出对应的档位。认不出来就退回默认。
+    ///
+    /// `double(forKey:)` 对缺失的键返回 0，所以「没存过」也走这条兜底。
+    nonisolated private static func storedInterval() -> TimeInterval {
+        let stored = UserDefaults.standard.double(forKey: intervalKey)
+        return intervalOptions.contains(stored) ? stored : defaultInterval
+    }
+
+    /// 换一个采样间隔。定时器**按新节奏重建** —— `Timer.publish` 的间隔是创建时
+    /// 定死的，改不动。
+    ///
+    /// 页面不可见时（`ticker == nil`）只记下值：下次 `start()` 会用新间隔建表。
+    func setInterval(_ seconds: TimeInterval) {
+        guard seconds != interval else { return }
+        interval = seconds
+        UserDefaults.standard.set(seconds, forKey: Self.intervalKey)
+
+        guard ticker != nil else { return }
+        ticker?.cancel()
+        ticker = nil
+        startTicker()
+    }
 
     @Published private(set) var processes: [ProcessEntry] = []
     /// 最近一次**成功**采样的时刻。`nil` = 还没成功过。
@@ -336,10 +386,17 @@ final class ProcessMonitor: ObservableObject {
         isVisible = true
         guard ticker == nil else { return }
         refresh()
-        // 与 `HardwareMonitor` / `PowerMonitor` 同样的理由：挂在 `.default` 模式上的
-        // `Timer` 会在滚动期间自动让路，`Task.sleep` 不会。这一页有几百行，
-        // 滚动时正好最不该被重算打断。
-        ticker = Timer.publish(every: Self.interval, on: .main, in: .default)
+        startTicker()
+    }
+
+    /// 按当前 `interval` 建定时器。
+    ///
+    /// 单独拆出来是因为 `setInterval` 也要用它 —— 换间隔时先取消旧的再调这里。
+    /// 与 `HardwareMonitor` / `PowerMonitor` 同样的理由：挂在 `.default` 模式上的
+    /// `Timer` 会在滚动期间自动让路，`Task.sleep` 不会。这一页有几百行，
+    /// 滚动时正好最不该被重算打断。
+    private func startTicker() {
+        ticker = Timer.publish(every: interval, on: .main, in: .default)
             .autoconnect()
             .sink { [weak self] _ in
                 Task { @MainActor in self?.refresh() }

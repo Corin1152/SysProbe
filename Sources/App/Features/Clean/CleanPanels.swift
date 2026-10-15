@@ -127,8 +127,25 @@ struct CleanSection: View {
     // 那会让这一页在 App 内部看起来是另一个程序。
 
     /// 顶部：可清理量 + 分隔线。原版也是这两样，位置和含义都一致。
+    ///
+    /// ── 2026-10-15：清完之后多一行「释放量」──────────────────────────────────
+    ///
+    /// 清理一结束界面就回到未扫描状态（见 `performClean`），而那是这次操作唯一的
+    /// 回执 —— 不显示的话用户按完一次清理、页面一闪回到初始态，什么都没告诉他。
+    /// 单独占一行而不是并进下面那句提示：一个是**结果**（过去式、强调色），
+    /// 一个是**下一步**（祈使句、灰的），合成一句读起来分不清哪半是结果。
+    ///
+    /// 只在「清完且还没重新扫描」时出现 —— 一旦用户按了扫描，顶部该说的是
+    /// 「能清多少」，旧的回执就该让位。
     private var totalHeader: some View {
         VStack(spacing: 10) {
+            if scan == nil, !isScanning, let freed = lastFreed, freed > 0 {
+                Text(Strings.text("Freed %@", Formatting.bytes(UInt64(freed))))
+                    .font(AppFont.text(14, weight: .semibold))
+                    .foregroundStyle(Color.mwAccent)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+
             Group {
                 if let scan {
                     Text(Strings.text("Cleanable: %@",
@@ -639,9 +656,17 @@ struct CleanSection: View {
         }
     }
 
-    /// 真的去执行。清完**自动重扫**：不重扫的话界面上的数字停留在清理前，
-    /// 用户唯一能做的就是手动再点一次扫描 —— 那不如直接做掉。重扫是只读操作，
-    /// 代价可以接受。
+    /// 真的去执行。
+    ///
+    /// ── 2026-10-15：清完**回到未扫描状态**（原来会自动重扫）──────────────────
+    ///
+    /// 原来这里收尾是一句 `await runScan()`，于是界面停在「已扫描」：应用缓存列表
+    /// 还在、分项按钮还在、顶部那个「可清理」是刚重扫出来的新数字。按用户要求改成
+    /// 清完就归零 —— 一次清理结束了，这一页该回到「等你按扫描」的初始态，
+    /// 而不是拿一份刚扫出来的新清单继续摆着。
+    ///
+    /// 释放量**留着**（`lastFreed`）：它是这次操作唯一的回执。丢掉的话用户按完
+    /// 一次清理、页面一闪回到初始态，什么都没告诉他。显示位置见 `totalHeader`。
     private func performClean(_ target: CleanTarget) async {
         guard !isCleaning else { return }
         isCleaning = true
@@ -675,7 +700,9 @@ struct CleanSection: View {
             return
         }
         lastFreed = result.freedBytes
-        await runScan()
+        // 清完**回到未扫描状态**（2026-10-15 按要求改，原来这里是一句
+        // `await runScan()` 自动重扫）。释放量留着 —— 见 `totalHeader`。
+        scan = nil
     }
 
     /// 扫描。阻塞调用放主 actor 之外；失败置位给 alert，不在这里说话。
