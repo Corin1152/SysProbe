@@ -842,13 +842,120 @@ static size_t proc_app_bundle_length(const char *exePath) {
     return 0;
 }
 
-/// 读 bundle 的显示名（走本地化，中文环境下就是中文名）。成功返回 1。
+/// 从 bundle 的某个语言目录里取 `InfoPlist.strings` 的显示名。成功返回 1。
+///
+/// ── 为什么必须自己去读那份文件（2026-10-15）────────────────────────────────
+///
+/// 用户报「部分进程名称目前还是没有显示中文」。名字本来就取自 bundle，所以问题
+/// 不在「读到了没有」，而在**挑语言的那一步挑错了**：
+/// `CFBundleGetValueForInfoDictionaryKey` 的本地化查找要按**当前进程**的偏好
+/// 域决定语言，而本工具是 `posix_spawn` 出来的 **uid 0 进程** —— 它的偏好域是
+/// `/var/root`，那里没有 `AppleLanguages`。于是查找落到 bundle 的开发区域
+/// （第三方 App 几乎都是 `en`），拿到的是英文名；而这些 App 的中文名恰恰只写在
+/// `zh-Hans.lproj/InfoPlist.strings` 里（Info.plist 那个 `CFBundleDisplayName`
+/// 是英文的），这一层就漏了。
+///
+/// 与其去猜 CoreFoundation 在 root 下的语言选择顺序（它没有公开文档，换个系统
+/// 版本就可能变），不如**直接把中文那一份读出来**：行为确定，且与进程环境无关。
+/// 读不到再退回到原来的 `CFBundleGetValueForInfoDictionaryKey` —— 那条路能覆盖
+/// 「名字直接写在 Info.plist 里」的 App（中文名不本地化的那些）。
+///
+/// 语言目录按 `zh-Hans` → `zh_CN` 试：前者是 iOS 上中文的标准目录名，后者是
+/// 早期 SDK 的写法，真机上两种都还见得到。开发者没做中文本地化时两个都读不到，
+/// 那本来就是英文名，不是失败。
+static int proc_bundle_strings_name(const char *bundlePath, const char *language,
+                                    char *out, size_t outSize) {
+    char path[SYSPROBE_PROC_PATH_MAX];
+    int written = snprintf(path, sizeof(path), "%s/%s.lproj/InfoPlist.strings",
+                           bundlePath, language);
+    if (written <= 0 || (size_t)written >= sizeof(path)) {
+        return 0;
+    }
+
+    CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, path,
+                                                       kCFStringEncodingUTF8);
+    if (pathString == NULL) {
+        return 0;
+    }
+    CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathString,
+                                                 kCFURLPOSIXPathStyle, false);
+    CFRelease(pathString);
+    if (url == NULL) {
+        return 0;
+    }
+
+    CFReadStreamRef stream = CFReadStreamCreateWithFile(kCFAllocatorDefault, url);
+    CFRelease(url);
+    if (stream == NULL) {
+        return 0;
+    }
+
+    int ok = 0;
+    // 打不开就是没有这个语言目录 —— 常态，不是错误（多数 App 只有一两种语言）。
+    if (CFReadStreamOpen(stream)) {
+        CFPropertyListRef plist = CFPropertyListCreateWithStream(kCFAllocatorDefault,
+                                                                 stream, 0,
+                                                                 kCFPropertyListImmutable,
+                                                                 NULL, NULL);
+        if (plist != NULL) {
+            if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+                CFTypeRef value = CFDictionaryGetValue((CFDictionaryRef)plist,
+                                                       CFSTR("CFBundleDisplayName"));
+                if (value == NULL) {
+                    value = CFDictionaryGetValue((CFDictionaryRef)plist,
+                                                 CFSTR("CFBundleName"));
+                }
+                if (value != NULL && CFGetTypeID(value) == CFStringGetTypeID() &&
+                    CFStringGetCString((CFStringRef)value, out, (CFIndex)outSize,
+                                       kCFStringEncodingUTF8)) {
+                    ok = 1;
+                }
+            }
+            CFRelease(plist);
+        }
+        CFReadStreamClose(stream);
+    }
+    CFRelease(stream);
+    return ok;
+}
+
+/// 显示名的逐次缓存。一次 `proc-list` 里同一个 bundle 会被多个进程命中
+/// （一个 App 通常带着若干扩展进程），而每命中一次都要开两次文件。
+///
+/// 进程是一次性的，所以「跨运行失效」这件事不存在 —— 静态数组就是每次运行的
+/// 第一手缓存。条数上限取 128：真机上用户 App 加系统 App 的 bundle 总数远小于它，
+/// 满了就不缓存（仍然正确，只是回到逐个读）。
+#define SYSPROBE_PROC_NAME_CACHE 128
+static char proc_name_cache_path[SYSPROBE_PROC_NAME_CACHE][SYSPROBE_PROC_PATH_MAX];
+static char proc_name_cache_name[SYSPROBE_PROC_NAME_CACHE][128];
+static int proc_name_cache_ok[SYSPROBE_PROC_NAME_CACHE];
+static int proc_name_cache_count = 0;
+
+/// 兜底路径：按系统规则读 bundle 的显示名（`CFBundleCreate` + Info.plist）。成功返回 1。
 ///
 /// 用 `CFBundleCreate` 而不是自己解析 Info.plist：它对同一个 URL 有**内部缓存**，
 /// 而这一趟里同一个 .app 会被多个进程命中（一个 App 通常带着若干扩展进程），
-/// 缓存把「每个进程读一次 plist」压成「每个 bundle 读一次」。那一步是这一趟里
-/// 唯一的文件系统开销，值得。
-static int proc_bundle_display_name(const char *bundlePath, char *out, size_t outSize) {
+/// 缓存把「每个进程读一次 plist」压成「每个 bundle 读一次」。
+///
+/// ── 为什么不用 `CFBundleGetDisplayName` ──────────────────────────────────────
+///
+/// 它是**私有** API（在 CoreFoundation 的 `CFBundlePriv.h` 里），公开 SDK 的
+/// 头文件没有它 —— 而这一处不是链接期失败，是**编译期**：
+///
+///     error: call to undeclared function 'CFBundleGetDisplayName'
+///     error: incompatible integer to pointer conversion initializing 'CFStringRef'
+///
+/// 两个错 CI 都实测报过（`-Wimplicit-function-declaration` 在 C99 之后是错误）。
+///
+/// 公开的等价路径是 `CFBundleGetValueForInfoDictionaryKey`：它同样会走
+/// `InfoPlist.strings` 的本地化查找。而 `CFBundleGetDisplayName` 内部本来就是
+/// 「先查 `CFBundleDisplayName`、取不到再退 `CFBundleName`」，下面这两步正是把
+/// 那个顺序写出来 —— 不是「换个能编过的写法」，是同一件事。
+///
+/// **2026-10-15 起它只是兜底**：中文名走 `proc_bundle_strings_name` 直接读
+/// `zh-Hans.lproj`（理由见那里）。这一条留给「名字就直接写在 Info.plist 里、
+/// 没有 `InfoPlist.strings`」的 App —— 那种名字与语言无关，读它是对的。
+static int proc_bundle_info_name(const char *bundlePath, char *out, size_t outSize) {
     CFStringRef pathString = CFStringCreateWithCString(kCFAllocatorDefault, bundlePath,
                                                        kCFStringEncodingUTF8);
     if (pathString == NULL) {
@@ -867,23 +974,6 @@ static int proc_bundle_display_name(const char *bundlePath, char *out, size_t ou
         return 0;   // 不是 bundle（或读不出来）—— 调用方保留进程名。
     }
 
-    int ok = 0;
-    // ── 为什么不用 `CFBundleGetDisplayName` ──────────────────────────────────
-    //
-    // 它是**私有** API（在 CoreFoundation 的 `CFBundlePriv.h` 里），公开 SDK 的
-    // 头文件没有它 —— 而这一处不是链接期失败，是**编译期**：
-    //
-    //     error: call to undeclared function 'CFBundleGetDisplayName'
-    //     error: incompatible integer to pointer conversion initializing 'CFStringRef'
-    //
-    // 两个错 CI 都实测报过（`-Wimplicit-function-declaration` 在 C99 之后是错误）。
-    //
-    // 公开的等价路径是 `CFBundleGetValueForInfoDictionaryKey`：它同样会走
-    // `InfoPlist.strings` 的本地化查找，所以中文环境下照样拿到中文名。
-    // 而 `CFBundleGetDisplayName` 内部本来就是「先查 `CFBundleDisplayName`、
-    // 取不到再退 `CFBundleName`」，下面这两步正是把那个顺序写出来 ——
-    // 不是「换个能编过的写法」，是同一件事。
-    //
     // 两个键都用 `CFSTR` 字面量而不是 `kCFBundle*Key` 常量：少依赖一个导出符号，
     // 而这两个键名属于 plist 格式的一部分，不会变。
     CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(bundle,
@@ -897,12 +987,58 @@ static int proc_bundle_display_name(const char *bundlePath, char *out, size_t ou
     // `CFGetTypeID` 那道检查是防御：这个键理论上一定是字符串，但真机上的第三方
     // App 什么都写得出来，类型不对时 `CFStringGetCString` 会按别的结构去读 ——
     // 与其信它，不如先判一次。
+    int ok = 0;
     if (value != NULL && CFGetTypeID(value) == CFStringGetTypeID() &&
         CFStringGetCString((CFStringRef)value, out, (CFIndex)outSize,
                            kCFStringEncodingUTF8)) {
         ok = 1;
     }
     CFRelease(bundle);
+    return ok;
+}
+
+/// 读 bundle 的显示名（优先中文，取不到再按系统规则）。成功返回 1。
+static int proc_bundle_display_name(const char *bundlePath, char *out, size_t outSize) {
+    // ── 缓存 ─────────────────────────────────────────────────────────────────
+    //
+    // 命中直接返回（成功与失败都缓存）：同一个 App 的若干个扩展进程会连着命中
+    // 同一个 bundle，而每条没有缓存就是两次 `open`。
+    for (int i = 0; i < proc_name_cache_count; i++) {
+        if (strcmp(proc_name_cache_path[i], bundlePath) == 0) {
+            if (!proc_name_cache_ok[i]) {
+                return 0;
+            }
+            snprintf(out, outSize, "%s", proc_name_cache_name[i]);
+            return 1;
+        }
+    }
+
+    // ── 先取中文名 ───────────────────────────────────────────────────────────
+    //
+    // 顺序就是优先级：`zh-Hans` 是 iOS 上中文的标准目录名，`zh_CN` 是早期 SDK
+    // 的写法。这一页是中文界面，而两者内容一致 —— 谁先谁后无所谓，都试到为止。
+    // 见 `proc_bundle_strings_name` 头上关于「root 进程挑语言挑错」的说明。
+    int ok = 0;
+    if (proc_bundle_strings_name(bundlePath, "zh-Hans", out, outSize) ||
+        proc_bundle_strings_name(bundlePath, "zh_CN", out, outSize)) {
+        ok = 1;
+    }
+
+    if (!ok) {
+        ok = proc_bundle_info_name(bundlePath, out, outSize);
+    }
+
+    if (proc_name_cache_count < SYSPROBE_PROC_NAME_CACHE) {
+        int slot = proc_name_cache_count++;
+        snprintf(proc_name_cache_path[slot], sizeof(proc_name_cache_path[slot]),
+                 "%s", bundlePath);
+        proc_name_cache_ok[slot] = ok;
+        proc_name_cache_name[slot][0] = '\0';
+        if (ok) {
+            snprintf(proc_name_cache_name[slot], sizeof(proc_name_cache_name[slot]),
+                     "%s", out);
+        }
+    }
     return ok;
 }
 

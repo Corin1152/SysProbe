@@ -21,8 +21,9 @@ import SwiftUI
 /// Bundle 容器里）。这台设备上三百多个进程里用户 App 只占十几个，混在一起时
 /// 想找自己装的 App 得翻很久；分开之后两组各自好找。
 ///
-/// 两组**都可以折叠**（2026-10-15 要求），默认展开：系统那一组动辄三百行，而这一页
-/// 大多数时候要找的是自己装的 App —— 收起系统组，列表就只剩十几行。
+/// 两组**都可以折叠**（2026-10-15 要求），**进页时系统组默认收起、用户应用默认展开**
+/// （同一天稍后的要求）：系统那一组动辄三百行，而这一页大多数时候要找的是自己装的
+/// App —— 收起系统组，列表一进来就只剩十几行。
 ///
 /// ── 排序（2026-10-15 要求）──────────────────────────────────────────────────
 ///
@@ -63,23 +64,43 @@ struct ProcessPanels: View {
 
     /// 排序口径。**默认按应用名** —— 这一页最常见的用途是「找到那个 App」，
     /// 而按占用排是「排查异常」时才需要的第二件事。
-    @State private var sortOrder: ProcessSortOrder = .name
-
-    /// 已经折叠的分组。**默认空 = 两组都展开**。
     ///
-    /// 与频段页的折叠一样不持久化：折叠是一次浏览里的临时姿态，每次进这一页都从
-    /// 「全展开」开始，用户想收起系统组时再收。
-    @State private var collapsedGroups: Set<ProcessGroup> = []
+    /// ── 2026-10-15：落盘 ────────────────────────────────────────────────────
+    ///
+    /// 用户报「进程的排序在 App 退出后重新进入，无法保存上次的排序规则」。
+    /// 它原来是 `@State`，App 一退就跟着没了。
+    ///
+    /// 存**原始值字符串**而不是整个枚举：字符串是 `UserDefaults` 里最稳的形态，
+    /// 而读到认不出来的值（降级安装、手改 plist）时退回 `.name`，不崩也不错排。
+    @AppStorage("sysprobe.processSortOrder")
+    private var sortOrderRaw = ProcessSortOrder.name.rawValue
+
+    private var sortOrder: ProcessSortOrder {
+        ProcessSortOrder(rawValue: sortOrderRaw) ?? .name
+    }
+
+    /// 菜单用的双向绑定：读走计算属性（带兜底），写回原始值。
+    private var sortOrderSelection: Binding<ProcessSortOrder> {
+        Binding(get: { sortOrder }, set: { sortOrderRaw = $0.rawValue })
+    }
+
+    /// 已经折叠的分组。**进这一页时系统组默认收起、用户应用默认展开**。
+    ///
+    /// 与频段页的折叠一样**不持久化**：折叠是一次浏览里的临时姿态，每次进这一页
+    /// 都从同一个默认姿态开始。默认姿态按两组的性质定 —— 用户装的那十几个 App 是
+    /// 这一页的主角，系统那三百多个进程只是偶尔查一下，收起它们才能一眼看到主角。
+    @State private var collapsedGroups: Set<ProcessGroup> = [.system]
 
     var body: some View {
-        // `spacing: 6`（默认 14）—— 这一页几百行**每一行都是这个 `LazyVStack`
-        // 的直接子视图**，所以页面级间距就是行间距。
+        // `spacing: 6` → `4`（本轮）—— 这一页几百行**每一行都是这个 `LazyVStack`
+        // 的直接子视图**，所以页面级间距就是行间距的一半（另一半在 `ProcessRow`
+        // 自己的上下内边距里）。
         //
-        // 三次收紧的记录：14 + 9 + 9 = 32 pt →（0.0.73）8 + 6 + 6 = 20 pt →
-        // （本轮）6 + 4 + 4 = 14 pt。用户每次都说「再小点」，而进程列表本来就该
-        // 像列表那样紧凑 —— 它唯一的用途是让人一眼扫出「谁在吃 CPU」，
-        // 行与行之间留白越大，一屏能看的行就越少。
-        PageScaffold("Processes", glow: .mwAccent, spacing: 6, openSettings: openSettings) {
+        // 四次收紧的记录：14 + 9 + 9 = 32 pt →（0.0.73）8 + 6 + 6 = 20 pt →
+        // 6 + 4 + 4 = 14 pt →（本轮）4 + 3 + 3 = 10 pt。用户每次都说「再小点」，
+        // 而进程列表本来就该像列表那样紧凑 —— 它唯一的用途是让人一眼扫出
+        // 「谁在吃 CPU」，行与行之间留白越大，一屏能看的行就越少。
+        PageScaffold("Processes", glow: .mwAccent, spacing: 4, openSettings: openSettings) {
             // 概览单独成一个子视图：它观察 `HardwareMonitor`（每秒发布一次），
             // 而列表是几百行 —— 把那份订阅留在这一层，等于每秒让整页 body
             // 重算一遍、把整个列表 diff 一次。拆出去之后只有这个小面板跟着重算。
@@ -215,7 +236,8 @@ struct ProcessPanels: View {
             }
             .padding(.horizontal, 4)
             // 竖向留白给足：命中区域不能只有那一行文字的 15 pt 高。
-            .padding(.vertical, 8)
+            // 8 → 6（本轮）：分组标题的上下各收 2 pt，与行的收紧同一批做。
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -245,7 +267,7 @@ struct ProcessPanels: View {
     /// 「现在按什么排」不用自己再写一遍选中态。
     private var sortMenu: some View {
         Menu {
-            Picker(Strings.text("Sort"), selection: $sortOrder) {
+            Picker(Strings.text("Sort"), selection: sortOrderSelection) {
                 ForEach(ProcessSortOrder.allCases) { order in
                     Label(order.title, systemImage: order.systemImage).tag(order)
                 }
@@ -630,12 +652,12 @@ private struct ProcessRow: View {
             }
         }
         .padding(.horizontal, 12)
-        // 上下各 9 → 6（0.0.73）→ 4（本轮）：行间隙的另一半。与页面级间距
-        // （进程页传 6）合起来是 6 + 4 + 4 = 14 pt。
+        // 上下各 9 → 6（0.0.73）→ 4 →（本轮）3：行间隙的另一半。与页面级间距
+        // （进程页传 4）合起来是 4 + 3 + 3 = 10 pt。
         //
         // 不再往下压：行内是两行文字（13 pt 名字 + 10 pt 详情），它们自己占了约
         // 30 pt，再收上下内边距就要贴到边框上了。
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

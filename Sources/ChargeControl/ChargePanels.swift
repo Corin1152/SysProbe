@@ -356,8 +356,15 @@ private struct MenuRow<Options: View>: View {
 /// 差 1 pt，读起来像标签的附属；频段页是「标签 13 regular 淡 / 值 13 semibold」，
 /// 同号但粗细对比分明，值一眼就跳出来。
 ///
-/// 现在两处一起照频段页来：标签 13 淡、值 13 粗。**绝对值小了，对比反而强了。**
-/// 见 `body` 里的详细说明。
+/// 现在两处一起照频段页来：标签 13 淡、值 13 粗。
+///
+/// ── 2026-10-15 第五次改：标签留 13、**值单独提到 16** ─────────────────────
+///
+/// 上一轮「两处同号」按点数对齐了，但真机上看起来仍是「大标签 + 小数值」——
+/// 原因是汉字与拉丁数字在同一个点数下的**视觉重量不同**（汉字的实际墨迹大一圈）。
+/// 用户的反馈很明确：「文案跟频段页一样大了，但数值还是很小，在这个基础上调大点」。
+/// 所以这一轮只动值：13 → 16，比标签大 3 pt，扣掉那圈视觉差之后两者大致相当。
+/// 标签不动 —— 它正是用户认可的那个尺寸。频段页 `infoRow` 未动。
 ///
 /// 顺带修了一处死参数：`monospaced` 以前声明了却从没被 body 用过（`Serial` 那一行
 /// 传 `true` 毫无效果）。现在它为真时值走 `AppFont.mono` —— 序列号混字母与数字，
@@ -393,16 +400,28 @@ struct ValueRow: View {
                 .foregroundStyle(Color.mwMuted)
             Spacer(minLength: 8)
             Text(value)
-                // 值的字号跟着标签一起降到 13 —— 与 `infoRow` 的值完全相同
-                // （`AppFont.text(13, weight: .semibold)`）。
+                // ── 2026-10-15 再改：13 → 16 ────────────────────────────────────
+                //
+                // 用户看真机截图后的反馈：「健康度文案跟频段页的当前网络文案是一样
+                // 大了，但数值还是很小，在这个基础上调大点」。
+                //
+                // 上一轮把标签与值一起降到 13 是**按点数对齐**的，漏掉了一件事：
+                // 标签是汉字，值是拉丁数字与 `%` / `mAh` —— 同样 13 pt，汉字的
+                // 字面（em box 里的实际墨迹）明显比数字大一圈。于是对齐之后
+                // 视觉上的关系反而成了「大标签 + 小数值」，正是用户说的那个
+                // 「数值还是很小」。
+                //
+                // 所以标签留在 13（它就是用户认可的那个大小），**值单独提到 16**：
+                // 比标签大 3 pt，扣掉汉字那圈多出来的视觉重量之后，两者大致相等，
+                // 而值与标签的粗细对比（semibold vs regular）本来就在。
                 //
                 // 这里**不用 `mwReadout`**：那个会加 `.monospacedDigit()`。
-                // 频段页的值没有它，而加上了会让数字字形在 SF  Proportional
-                // 与 Tabular 之间换一版宽度 —— 视觉上比频段页窄一圈。
-                // 需要等宽数字的那一行显式传 `monospaced: true`，走 `mwMono`。
+                // 频段页的值没有它，而加上了会让数字字形在 SF Proportional
+                // 与 Tabular 之间换一版宽度。需要等宽数字的那一行显式传
+                // `monospaced: true`，走 `mwMono`。
                 .font(monospaced
-                     ? AppFont.mono(13, weight: .semibold)
-                     : AppFont.text(13, weight: .semibold))
+                     ? AppFont.mono(16, weight: .semibold)
+                     : AppFont.text(16, weight: .semibold))
                 .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
