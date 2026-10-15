@@ -437,3 +437,10 @@
 "The private API was blocked, so only names and PIDs are shown." = "The private API was blocked, so only names and PIDs are shown.";
 "App names are unavailable — showing process names." = "App names are unavailable — showing process names.";
 "proc_pidpath or the app bundle could not be read." = "proc_pidpath or the app bundle could not be read.";
+
+/* 进程分页 · 分组折叠与排序（2026-10-15 第三轮） */
+"App name" = "App name";
+"Sort" = "Sort";
+
+/* 电源页 · 广播档位并进供电路径卡片（2026-10-15） */
+"Plug in a charger to read the profile it negotiates." = "Plug in a charger to read the profile it negotiates.";

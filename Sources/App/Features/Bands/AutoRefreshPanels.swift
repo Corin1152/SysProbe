@@ -1,128 +1,58 @@
 import Combine
 import SwiftUI
 
-/// 「频段刷新」分段。
-///
-/// 与「频段锁定」并列在「频段」分页下 —— 两者读的是同一套基带状态，放在一起才说得清
-/// 「锁了哪几个频段」与「什么时候刷新」的关系。
-///
-/// ── 它执行的是「刷新」，不是「重启」，也不是「换频段」 ──────────────────────────
+/// 「自动刷新」那一组卡片 —— 频段页的下半截。
 ///
 /// 到点了执行 `sysprobe_refresh_modem()` —— 上游 CellularInfo 的「刷新蜂窝网络信号」
 /// 同款（`_CTServerConnectionResetModem`），让 modem 重载并重新注册，**CommCenter
-/// 进程不动**。它既不是杀掉蜂窝服务（「频段锁定」分段顶部那个「重启」按钮），也不改
+/// 进程不动**。它既不是杀掉蜂窝服务（页面顶部那个「重启蜂窝网络服务」按钮），也不改
 /// 允许频段。代价仍然是掉网数秒，所以默认关闭、且默认只写日志。
+///
+/// ── 2026-10-15：从「分段」降成「一段内容」──────────────────────────────────
+///
+/// 频段页原来有两个分段（频段锁定 / 频段刷新），靠一个 `Picker` 切。收成单页之后，
+/// 这一段排在频段网格的**后面** —— 顺序即前提关系：「锁哪些频段」是「什么时候重载
+/// modem」的前提，先说前者。
+///
+/// 它原来的「当前网络」卡片按要求并进了上面那张同名的卡片（去掉了重复的 RSRP，
+/// 以及设备型号与卡槽两行），实现见 `RefreshStatusRows`。这里只剩三样：参数、
+/// 日志、脚注。
+///
+/// ── 参数为什么走 `@Binding` 而不是这里的 `@State` ──────────────────────────
+///
+/// 收成单页之后，**引擎的启停与参数的下发都提到了页面层**（`BandView`）：
+///
+///   · 这一组卡片在 `LazyVStack` 里位于频段网格之后，进页面时**根本不会被创建**，
+///     挂在它 `.task` 上的定时器于是永远不开始跑 —— 用户不滚下去就什么都看不到。
+///     页面层一定被创建，所以生命周期归它；
+///   · 参数一改要同时做三件事：落盘、下发给守护进程、按执行体重排定时器。三件事都
+///     需要一个知道「当前是哪张卡」的对象，而那正是页面层。
+///
+/// 于是这里只负责画控件，值走 `@Binding` 上收。
 struct AutoRefreshPanels: View {
+    /// 参数。**由 `BandView` 持有** —— 理由见类型头。
+    @Binding var config: BandAutoRefreshConfig
 
-    @StateObject private var controller = BandAutoRefreshController()
-    /// 后台那条路的状态。单例由 `RootView` 起的看门狗喂，这里只是读它。
+    /// 后台那条路的状态。单例由页面层的看门狗喂，这里只是读它。
     @ObservedObject private var daemon = BandRefreshDaemonBridge.shared
-    /// 界面上的值。改完立刻 `save()` —— 引擎每拍重新 `load()`，所以不用重开开关。
-    @State private var config = BandAutoRefreshConfig.load()
-    @State private var slot = 1
 
-    // MARK: - 倒计时的本地时钟
-    //
-    // ── 为什么界面不能直接显示数据源给的 `remaining`（2026-10-14 修）──────────
-    //
-    // 那个值是**拍报**，不是连续值：
-    //
-    //   · 后台模式下，守护进程写状态文件，而 App 侧的看门狗**每 10 秒**才回读一次
-    //     （`BandRefreshDaemonBridge.startWatchdog`）—— 界面拿到的 `remaining`
-    //     因此 10 秒才变一次。用户看到的就是「倒计时 10 秒才跳一下」，而这与倒计时
-    //     本身没有任何关系。
-    //   · 前台模式下，`remaining` 跟着**采样间隔**更新，而那个间隔用户能调到 30 秒。
-    //
-    // 这里改成记「拿到剩余秒数的那一刻 + 当时的秒数」，之后由本地的每秒时钟相减外推。
-    // 数据源多久刷新一次都不影响走字 —— 这是修复的全部依据。
-
-    /// 倒计时锚点。`nil` = 当前不在倒计时（待机 / 已暂停 / 未触发）。
-    @State private var countdownAnchor: CountdownAnchor?
-
-    /// 本地时钟。只做一件事：每秒变一次，把 body 重算一遍，让外推的剩余秒数跟着走。
-    @State private var now = Date()
-
-    /// 每秒一拍的时钟源。
-    ///
-    /// `.common` 而不是 `.default`：`ScrollView` 滚动时 run loop 会切到 tracking mode，
-    /// `.default` 的定时器在滚动期间不触发 —— 倒计时就会「一滚就僵住」。
-    ///
-    /// 放 `static let`：`autoconnect()` 的 publisher 在最后一个订阅者移除时会自己断开，
-    /// 视图消失不会留下跑着的定时器；而写成实例属性的话，body 每次重算都要新建一个。
-    private static let secondTick = Timer.publish(every: 1, on: .main, in: .common)
-        .autoconnect()
+    /// 前台那条路的日志。**共享实例** —— 见 `BandAutoRefreshController.shared`。
+    @ObservedObject private var controller = BandAutoRefreshController.shared
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                actionPanel
-                statusPanel
-                if !displayedLog.isEmpty {
-                    logPanel
-                }
-                footnote
+        Group {
+            actionPanel
+            if !displayedLog.isEmpty {
+                logPanel
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 24)
-        }
-        .task {
-            // **必须丢到 detached 里跑**：`preferredSlot()` 里是几次**同步 XPC**
-            // （`sysprobe_slot_has_sim` 每次两下、`sysprobe_preferred_data_slot` 一下），
-            // 而 `.task` 跑在主 actor 上 —— 留在主线程会卡住进这一分段的第一帧。
-            // 与 `BandPanels` 同一条理由。
-            let preferred = await Task.detached { BandService.preferredSlot() }.value
-            slot = preferred
-            syncExecutor()
-            // 进来先把倒计时锚点立起来 —— `onChange` 只在下一次**变化**时触发，
-            // 少了这一下，进来时已经在倒计时的话第一秒显示的是数据源原值。
-            resetCountdownAnchor()
-            // 幂等：它已经在跑就什么都不做。放在这里而不是只靠 RootView，
-            // 是为了让「刚装完第一次进这一页」也能立刻知道守护进程在不在。
-            BandRefreshDaemonBridge.shared.startWatchdog()
-            BandRefreshDaemonBridge.shared.refreshState()
-        }
-        // 锚点跟着数据源走：它一报新的剩余秒数，就以那一刻重新起算。
-        .onChange(of: countdownSource) { _ in resetCountdownAnchor() }
-        // 每秒把 body 重算一遍，让外推出来的剩余秒数跟着走。见 `secondTick` 与
-        // `countdownAnchor` 的说明 —— 这是「倒计时每秒递减」的全部机制。
-        .onReceive(Self.secondTick) { now = $0 }
-        // 参数一改就落盘，并**同步下发**给守护进程 —— 它每轮重读配置，
-        // 所以改完立刻生效，不用重启进程、也不用重开开关。
-        .onChange(of: config) { newValue in
-            newValue.save()
-            BandRefreshDaemonBridge.shared.writeConfig(newValue, slot: slot)
-        }
-        // 只有「换执行体」才需要动前台那条定时器：阈值之类的参数它自己会重读。
-        .onChange(of: config.backgroundDaemon) { _ in syncExecutor() }
-        // 开关本身也要跟着：关着的时候那条定时器**完全不排拍**（`start` 里的守卫），
-        // 所以打开它必须重新 `start` 一次，否则界面上「开了」却一动不动。
-        .onChange(of: config.enabled) { _ in syncExecutor() }
-        // 切走分段就停表。后台模式关着时 App 退后台本来也会被挂起；
-        // 这里补的是「还在 App 里但不在这一页」那一段。
-        //
-        // 倒计时的每秒时钟不用在这里停：它是 `onReceive` 的订阅，视图消失时自己断。
-        .onDisappear {
-            controller.stop()
-        }
-    }
-
-    /// 前台定时器与后台守护进程**二选一**。
-    ///
-    /// 两个都开着会在同一次弱信号里刷两次 —— 它们读同一份阈值、各自计时，
-    /// 而用户看到的只是「掉网特别频繁」。
-    private func syncExecutor() {
-        if config.backgroundDaemon {
-            controller.stop()
-        } else {
-            controller.start(slot: slot)
+            footnote
         }
     }
 
     // MARK: - 参数
 
     private var actionPanel: some View {
-        // 标题不叫「自动刷新」：导航栏标题已经是它了（分段名），面板再写一遍会重复。
+        // 标题不叫「自动刷新」：这一段回答的是「多久动一次手」，参数是它的全部内容。
         Panel("Parameters", systemImage: "arrow.clockwise") {
             VStack(alignment: .leading, spacing: 10) {
                 toggle("Enabled", isOn: $config.enabled)
@@ -162,9 +92,6 @@ struct AutoRefreshPanels: View {
                     .font(AppFont.text(12))
                     .foregroundStyle(Color.mwMuted)
             }
-            .onChange(of: config) { newValue in
-                newValue.save()
-            }
         }
     }
 
@@ -175,16 +102,9 @@ struct AutoRefreshPanels: View {
         return base + " · " + Strings.text("paused while Wi-Fi is connected")
     }
 
-    // MARK: - 状态
+    // MARK: - 日志
 
-    /// 状态区读谁，取决于现在用哪个执行体。
-    ///
-    /// 两条路的字段形状不一样（前台是枚举、后台是守护进程写死的英文 phase），
-    /// 在这里归一成两三个值，下面那些行就不用各写一遍分支。
-    private var displayedRsrp: Int? {
-        config.backgroundDaemon ? daemon.state.lastRsrp : controller.lastRsrp
-    }
-
+    /// 日志读谁，取决于现在用哪个执行体。
     private var displayedLog: [String] {
         let lines = config.backgroundDaemon ? daemon.state.log : controller.log
         // 两条路的日志要在这里归一成同一种语言：前台那条路本来就是本地化过的中文；
@@ -239,36 +159,171 @@ struct AutoRefreshPanels: View {
         return body
     }
 
+    private var logPanel: some View {
+        Panel("Recent activity", systemImage: "clock.arrow.circlepath") {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(displayedLog.enumerated()), id: \.offset) { _, line in
+                    Text(verbatim: line)
+                        .font(AppFont.text(11, weight: .regular))
+                        .foregroundStyle(Color.mwMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private var footnote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // 上面两行是**警告**（掉网 / 通话中断 / 只在什么条件下跑），走红色。
+            Group {
+                Text("Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands.")
+                Text(config.backgroundDaemon
+                     ? "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back."
+                     : "Only runs while this page is in the foreground — the app has no background modes.")
+            }
+            .font(AppFont.text(11))
+            .foregroundStyle(Color.mwDanger)
+
+            // 前置开关的说明。它是**行为说明**不是警告，所以不跟着上面走红色 ——
+            // 一屏红色文字里多一句正常说明，只会让人以为它也出了什么问题。
+            if config.pauseOnWiFi {
+                Text("While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well.")
+                    .font(AppFont.text(11))
+                    .foregroundStyle(Color.mwMuted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - 控件
+
+    private func toggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
+        Toggle(title, isOn: isOn)
+            .font(AppFont.text(13))
+    }
+
+    /// `V: Strideable` 而不是 `BinaryInteger`：阈值与间隔里既有 `Int` 也有 `Double`
+    /// （`Stepper` 自己的泛型约束就是 `Strideable`，`step` 的类型是 `V.Stride`）。
+    /// 左标签右值 —— 只有一串数字的 stepper 看不出它在调什么。
+    private func stepper<V: Strideable>(value: Binding<V>, in range: ClosedRange<V>,
+                                        step: V.Stride, label: LocalizedStringKey,
+                                        valueText: String) -> some View {
+        Stepper(value: value, in: range, step: step) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label)
+                    .font(AppFont.text(13))
+                    .foregroundStyle(Color.mwMuted)
+                Spacer(minLength: 8)
+                Text(verbatim: valueText)
+                    .font(AppFont.text(13, weight: .semibold))
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  「当前网络」卡片的下半截：自动刷新的运行状态
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// 「当前网络」卡片下半截 —— 自动刷新的运行状态。
+///
+/// ── 2026-10-15：从它自己的「当前网络」卡片并过来 ────────────────────────────
+///
+/// 频段页原来两个分段各有一张叫「Current network」的卡片，说的是同一件事的两半：
+///
+///   · 「频段锁定」那张 —— 网络本身（运营商、信号格、制式、服务频段、RSRP、SNR、
+///     小区标识）；
+///   · 「频段刷新」那张 —— 这个刷新引擎此刻在干什么（状态、Wi-Fi、守护进程、
+///     上次刷新时刻）。
+///
+/// 分段取消之后，两张同名卡片分在两处只会让人以为看花了眼。按要求并成一张：
+/// 上半是网络，下半是引擎。**重复的 RSRP 去掉了一份**（保留上面那份 —— 它读的是
+/// `copyCellInfo`，是这一页的主体读数），**设备型号与卡槽两行整个去掉**（前者与
+/// 这一页无关，后者在「SIM Slot」卡片里已经有了）。
+///
+/// ── 倒计时的本地时钟 ──────────────────────────────────────────────────────
+///
+/// 界面不能直接显示数据源给的 `remaining`：那是**拍报**，不是连续值。后台模式下
+/// 守护进程写状态文件、App 侧看门狗每 10 秒才回读一次，用户看到的就是「倒计时
+/// 10 秒才跳一下」；前台模式下它跟着采样间隔更新，而那个间隔能调到 30 秒。
+///
+/// 所以这里记「拿到剩余秒数的那一刻 + 当时的秒数」（`countdownAnchor`），之后由
+/// 本地的每秒时钟相减外推。数据源多久刷新一次都不影响走字 —— 这是修复的全部依据。
+struct RefreshStatusRows: View {
+    /// 参数。**值传递** —— 页面层改了它，`BandPanels` 会跟着重算，这里就拿到新值。
+    ///
+    /// 只需要两个开关：`pauseOnWiFi` 决定要不要画 Wi-Fi 那一行，
+    /// `backgroundDaemon` 决定状态读哪条路。
+    let config: BandAutoRefreshConfig
+
+    @ObservedObject private var daemon = BandRefreshDaemonBridge.shared
+    @ObservedObject private var controller = BandAutoRefreshController.shared
+
+    /// 倒计时锚点。`nil` = 当前不在倒计时（待机 / 已暂停 / 未触发）。
+    @State private var countdownAnchor: CountdownAnchor?
+
+    /// 本地时钟。只做一件事：每秒变一次，把 body 重算一遍，让外推的剩余秒数跟着走。
+    @State private var now = Date()
+
+    /// 每秒一拍的时钟源。
+    ///
+    /// `.common` 而不是 `.default`：`ScrollView` 滚动时 run loop 会切到 tracking mode，
+    /// `.default` 的定时器在滚动期间不触发 —— 倒计时就会「一滚就僵住」。
+    ///
+    /// 放 `static let`：`autoconnect()` 的 publisher 在最后一个订阅者移除时会自己断开，
+    /// 视图消失不会留下跑着的定时器；而写成实例属性的话，body 每次重算都要新建一个。
+    private static let secondTick = Timer.publish(every: 1, on: .main, in: .common)
+        .autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row("State", phaseText)
+            // 这一行是前置开关唯一的「看得见」的凭据：开关开着却没暂停时，
+            // 要么是这里显示未连接，要么是暂停逻辑没生效 —— 两者分得开。
+            //
+            // 只在开关开着时显示：关着的时候这一行没有解释力（功能根本没开，
+            // 暂停与否都不是它决定的），而这一页的每一行都在回答「为什么它没动」。
+            if config.pauseOnWiFi {
+                row("Wi-Fi", displayedWifi ? Strings.text("Connected") : Strings.text("Not connected"))
+            }
+            if config.backgroundDaemon {
+                row("Background service", daemonAliveText)
+            }
+            if let at = lastRefreshText {
+                row("Last refresh", at)
+            }
+        }
+        // 进来先把锚点立起来 —— `onChange` 只在下一次**变化**时触发，少了这一下，
+        // 进来时已经在倒计时的话第一秒显示的是数据源原值。
+        .onAppear { resetCountdownAnchor() }
+        // 锚点跟着数据源走：它一报新的剩余秒数，就以那一刻重新起算。
+        .onChange(of: countdownSource) { _ in resetCountdownAnchor() }
+        // 每秒把 body 重算一遍，让外推出来的剩余秒数跟着走。见 `secondTick` 与
+        // `countdownAnchor` 的说明 —— 这是「倒计时每秒递减」的全部机制。
+        .onReceive(Self.secondTick) { now = $0 }
+    }
+
+    /// 一行「标签 —— 值」。与 `BandPanels.infoRow` 同款 —— 这两半现在在同一张卡片里，
+    /// 字号、灰度、右对齐任何一处对不上都会看出来是两块拼的。
+    private func row(_ title: LocalizedStringKey, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(AppFont.text(13))
+                .foregroundStyle(Color.mwMuted)
+            Spacer(minLength: 8)
+            Text(verbatim: value)
+                .font(AppFont.text(13, weight: .semibold))
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
     /// 界面显示哪一侧的 Wi-Fi 状态。
     ///
     /// 两条执行体各判各的：前台是 `controller` 每拍顺带查一次，后台是守护进程写在
     /// 状态文件里的那一份（那时 App 内那条定时器是停着的，自己不会去查）。
     private var displayedWifi: Bool {
         config.backgroundDaemon ? daemon.state.wifiConnected : controller.wifiConnected
-    }
-
-    private var statusPanel: some View {
-        Panel("Current network", systemImage: "antenna.radiowaves.left.and.right") {
-            VStack(alignment: .leading, spacing: 10) {
-                row("Slot", Strings.text("Slot %d", slot))
-                row("RSRP", displayedRsrp.map { "\($0) dBm" } ?? "—")
-                row("State", phaseText)
-                // 这一行是前置开关唯一的「看得见」的凭据：开关开着却没暂停时，
-                // 要么是这里显示未连接，要么是暂停逻辑没生效 —— 两者分得开。
-                //
-                // 只在开关开着时显示：关着的时候这一行没有解释力（功能根本没开，
-                // 暂停与否都不是它决定的），而这一页的每一行都在回答「为什么它没动」。
-                if config.pauseOnWiFi {
-                    row("Wi-Fi", displayedWifi ? Strings.text("Connected") : Strings.text("Not connected"))
-                }
-                if config.backgroundDaemon {
-                    row("Background service", daemonAliveText)
-                }
-                if let at = lastRefreshText {
-                    row("Last refresh", at)
-                }
-            }
-        }
     }
 
     private var lastRefreshText: String? {
@@ -278,7 +333,7 @@ struct AutoRefreshPanels: View {
 
     /// 数据源报回来的「剩余秒数」。`nil` = 当前不在倒计时（待机 / 已暂停 / 未触发）。
     ///
-    /// **它只用来立锚点，不用来直接显示** —— 见 `countdownAnchor` 头上那段说明。
+    /// **它只用来立锚点，不用来直接显示** —— 见类型头那段说明。
     private var countdownSource: Double? {
         if config.backgroundDaemon {
             guard daemon.state.alive else { return nil }
@@ -356,80 +411,6 @@ struct AutoRefreshPanels: View {
         return daemon.state.alive ? Strings.text("Running") : Strings.text("Starting")
     }
 
-    private var logPanel: some View {
-        Panel("Recent activity", systemImage: "clock.arrow.circlepath") {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(displayedLog.enumerated()), id: \.offset) { _, line in
-                    Text(verbatim: line)
-                        .font(AppFont.text(11, weight: .regular))
-                        .foregroundStyle(Color.mwMuted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    private var footnote: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // 上面两行是**警告**（掉网 / 通话中断 / 只在什么条件下跑），走红色。
-            Group {
-                Text("Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands.")
-                Text(config.backgroundDaemon
-                     ? "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back."
-                     : "Only runs while this page is in the foreground — the app has no background modes.")
-            }
-            .font(AppFont.text(11))
-            .foregroundStyle(Color.mwDanger)
-
-            // 前置开关的说明。它是**行为说明**不是警告，所以不跟着上面走红色 ——
-            // 一屏红色文字里多一句正常说明，只会让人以为它也出了什么问题。
-            if config.pauseOnWiFi {
-                Text("While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well.")
-                    .font(AppFont.text(11))
-                    .foregroundStyle(Color.mwMuted)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - 控件
-
-    private func toggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
-        Toggle(title, isOn: isOn)
-            .font(AppFont.text(13))
-    }
-
-    /// `V: Strideable` 而不是 `BinaryInteger`：阈值与间隔里既有 `Int` 也有 `Double`
-    /// （`Stepper` 自己的泛型约束就是 `Strideable`，`step` 的类型是 `V.Stride`）。
-    /// 左标签右值 —— 只有一串数字的 stepper 看不出它在调什么。
-    private func stepper<V: Strideable>(value: Binding<V>, in range: ClosedRange<V>,
-                                        step: V.Stride, label: LocalizedStringKey,
-                                        valueText: String) -> some View {
-        Stepper(value: value, in: range, step: step) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(label)
-                    .font(AppFont.text(13))
-                    .foregroundStyle(Color.mwMuted)
-                Spacer(minLength: 8)
-                Text(verbatim: valueText)
-                    .font(AppFont.text(13, weight: .semibold))
-                    .multilineTextAlignment(.trailing)
-            }
-        }
-    }
-
-    private func row(_ title: LocalizedStringKey, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title)
-                .font(AppFont.text(13))
-                .foregroundStyle(Color.mwMuted)
-            Spacer(minLength: 8)
-            Text(verbatim: value)
-                .font(AppFont.text(13, weight: .semibold))
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
@@ -440,10 +421,9 @@ struct AutoRefreshPanels: View {
 
 /// 倒计时锚点：拿到剩余秒数的那一刻，以及那一刻的剩余值。
 ///
-/// 放在**文件作用域**而不是 `AutoRefreshPanels` 里面 —— 与 `LegendLine`
-/// （`DashboardPanels.swift`）同一个理由：默认 MainActor 隔离下，嵌套类型的隔离
-/// 跟着外层走，而 `Equatable` 的合成实现必须是 `nonisolated` 的。它本来就只是
-/// 一对值，与那个视图没有任何关系。
+/// 放在**文件作用域**而不是视图里面 —— 与 `LegendLine` 同一个理由：默认 MainActor
+/// 隔离下，嵌套类型的隔离跟着外层走，而 `Equatable` 的合成实现必须是 `nonisolated`
+/// 的。它本来就只是一对值，与那个视图没有任何关系。
 nonisolated private struct CountdownAnchor: Equatable {
     let at: Date
     let remaining: Double

@@ -24,9 +24,19 @@ struct RootView: View {
                 // `TodayViewController.openApp`）。这里刻意**不动分页** ——
                 // 用户是来看数据的，停在上次看的那一屏更自然。
                 .onOpenURL { _ in }
-                // 「关于」挂在这里，不在 `tabs` 里面 —— `tabs` 会随语言换 identity，
-                // 挂里面的话用户在关于页切完语言，弹层会被自己触发的重建关掉。
-                .sheet(isPresented: $app.showingSettings) { AboutView() }
+                // 齿轮菜单里的两个弹层都挂在这里，不在 `tabs` 里面 —— `tabs` 会随
+                // 语言换 identity，挂里面的话用户在弹层里切完语言，弹层会被自己
+                // 触发的重建关掉。
+                //
+                // 用 `.sheet(item:)` 而不是两个 `.sheet(isPresented:)`：同一时刻只可能
+                // 有一个弹层，写成两个布尔就会出现「两个同时为真」这种表达得出来、
+                // 但不该存在的状态。
+                .sheet(item: $app.settingsSheet) { destination in
+                    switch destination {
+                    case .maintenance: MaintenanceSheet()
+                    case .about: AboutView()
+                    }
+                }
                 // 采样的生命周期单独放进一个零尺寸视图。
                 //
                 // 独立出来是为了把每秒一次的 `PowerSnapshot` 发布挡在 `RootView` 之外：
@@ -53,13 +63,13 @@ struct RootView: View {
         // **没有语言切换**：应用语言已改为随系统，界面上不再有这个入口。
     }
 
-    /// 打开“关于”弹层。
+    /// 打开齿轮下拉菜单里的某一项。
     ///
     /// 以普通闭包往下传，而不是让每页都去观察 `AppState`：观察 `AppState` 就意味着
-    /// `showingSettings` / `selectedTab` / `language` 任何一个变化都会让四个分页各重算
+    /// `settingsSheet` / `selectedTab` / `language` 任何一个变化都会让四个分页各重算
     /// 一次 —— 而这一帧恰好就是弹层开始做呈现动画的那一帧。齿轮只需要一个动作。
-    private var openSettings: @MainActor () -> Void {
-        { app.showingSettings = true }
+    private var openSettings: @MainActor (SettingsDestination) -> Void {
+        { app.settingsSheet = $0 }
     }
 
     /// 语言一变，整棵分页树换 identity。
@@ -94,36 +104,81 @@ struct RootView: View {
     /// 采样只在停在这一页时发生（`onAppear` / `onDisappear` 驱动），因为每一拍
     /// 都要起一个 root 子进程 —— 切到别的分页时一拍都不跑。
     ///
-    /// 排在最后而不是插在中间：前四个分页的顺序是用户已经用熟的东西，
-    /// 新加的一页放尾巴上，谁的肌肉记忆都不动。
+    /// ── 2026-10-15（第二轮）：页码收成 4 个，两个分段页变单页 ────────────────
+    ///
+    /// 用户明确要求的结果，四格：**硬件 / 电源 / 频段 / 进程**。
+    ///
+    /// 「维护」整格取消：它的三块内容按「改的是哪一类东西」拆到了别处 ——
+    /// 重启设备 / 注销 / 网络唤醒进了齿轮下拉菜单（`MaintenanceSheet`），
+    /// 关闭温控降频进了电源页「基础」卡片，清理并进了硬件页的存储卡片。
+    /// 也就是说**没有丢掉任何功能，只是不再占一格**。
+    ///
+    /// 「电源」与「频段」各自从「分段 + 外壳」收成单页：分段控件那一层
+    /// （`PageHubScaffold` + `PowerSegment` / `BandSegment`）整个去掉，
+    /// 内容顺次排下来，和「硬件」页是同一种结构。
+    ///
+    /// 页码变化会**动到所有用户的肌肉记忆**，所以这是一次性的调整 ——
+    /// 之后再往分页栏上加东西，要先问清楚值不值这个代价。
     private var tabs: some View {
         TabView(selection: $app.selectedTab) {
             HardwareView(openSettings: openSettings)
                 .tabItem { Label("Hardware", systemImage: "cpu") }
                 .tag(0)
-            PowerHubView(openSettings: openSettings)
+            PowerView(openSettings: openSettings)
                 .tabItem { Label("Power", systemImage: "bolt.fill") }
                 .tag(1)
-            MaintenanceHubView(openSettings: openSettings)
-                .tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
-                .tag(2)
+            // 频段页可以被用户隐藏（`BandPanels` 里的「隐藏这一页」）。隐藏之后
+            // 分页栏是 3 格，进程页的 tag 3 仍然对得上 —— TabView 按 tag 选，
+            // 不按位置。
             if showBandEditor {
-                BandHubView(openSettings: openSettings)
+                BandView(openSettings: openSettings)
                     .tabItem { Label("Bands", systemImage: "antenna.radiowaves.left.and.right") }
-                    .tag(3)
+                    .tag(2)
             }
             ProcessPanels(openSettings: openSettings)
                 .tabItem { Label("Processes", systemImage: "list.bullet.rectangle") }
-                .tag(4)
+                .tag(3)
         }
         .tint(.mwAccent)
         .id(app.language)
-        // 分页消失时选中态可能还停在 3 上 —— 挪回维护，免得分页栏显示成「一个都没选」。
+        // 频段页被隐藏时，选中态可能还停在 2 上 —— 挪回硬件，免得分页栏显示成
+        // 「一个都没选」（那时四格全不高亮，看起来像界面坏了）。
         .onChange(of: showBandEditor) { visible in
-            if !visible, app.selectedTab == 3 {
-                app.selectedTab = 2
+            if !visible, app.selectedTab == 2 {
+                app.selectedTab = 0
             }
         }
+    }
+}
+
+/// 右上角齿轮 —— 一个下拉菜单，两项：维护 / 关于。
+///
+/// ── 2026-10-15：从「直接打开关于」变成菜单 ──────────────────────────────────
+///
+/// 「维护」分页取消之后，它剩下的东西（重启设备 / 注销 / 网络唤醒）收进了这里。
+/// 所以齿轮不再是「一个动作」而是一个入口 —— 改回 `Button` 会让维护功能
+/// 彻底没有入口，而且不会报任何错。
+///
+/// 抽成独立类型而不是在每个页面外壳里各写一遍：
+/// 四个分页的外壳都要画同一个菜单，四份实现必然会漂移（一处加了新项、别处忘了）。
+/// 菜单项本身也住在 `SettingsDestination` 里，标题与图标只有一处定义。
+struct SettingsMenuButton: View {
+    let openSettings: @MainActor (SettingsDestination) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(SettingsDestination.allCases) { destination in
+                Button {
+                    openSettings(destination)
+                } label: {
+                    Label(destination.title, systemImage: destination.systemImage)
+                }
+            }
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .tint(.mwAccent)
+        .accessibilityLabel(Text("Settings"))
     }
 }
 
@@ -176,23 +231,30 @@ struct MonitorLifecycle: View {
 /// 2026-10-14：**齿轮回来了**，它装的是「关于」（版本 / 发布日期 / 诊断）。
 /// 10-11 那次重排把第 4 个分页给了「关于」，现在那个位置让给「频段」，
 /// 关于回到弹层里 —— 与 0.0.30 之前一致。
+///
+/// 2026-10-15：齿轮从一个动作变成一个**菜单**（维护 / 关于），见
+/// `SettingsMenuButton`。同一天 `PageHubScaffold`（分段页的外壳）被删掉了 ——
+/// 电源页与频段页各自收成单页之后，已经没有任何页面需要它。
 struct PageScaffold<Content: View>: View {
     let title: LocalizedStringKey
     var glow: Color
-    /// 标题样式。默认大标题；**带分段控件的分页要用 `.inline`** ——
-    /// 大标题会占掉整整一行半的高度，而分段控件就压在它下面，两者叠起来第一屏
-    /// 几乎看不到内容。见 `PageHubScaffold`。
+    /// 标题样式。默认大标题。
+    ///
+    /// 2026-10-15 之前这一项还有一个用途：带分段控件的分页要用 `.inline`，否则
+    /// 大标题加上分段控件会把第一屏占满。分段页取消之后没有调用点再传它了，
+    /// 但**保留**这个参数 —— 它是这个外壳本来就该有的一项，删掉只会让下一个
+    /// 需要它的页面再改一遍外壳。
     var titleDisplayMode: NavigationBarItem.TitleDisplayMode
     /// 打开“关于”弹层。**普通属性，不是 `@EnvironmentObject AppState`** ——
     /// 观察 `AppState` 会让 `showingSettings` 一变就把整页重算一次，而那一帧恰好
     /// 就是弹层开始做呈现动画的那一帧。齿轮只要一个动作，不要那份状态。
-    var openSettings: @MainActor () -> Void
+    var openSettings: @MainActor (SettingsDestination) -> Void
     @ViewBuilder var content: () -> Content
 
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
          titleDisplayMode: NavigationBarItem.TitleDisplayMode = .large,
-         openSettings: @escaping @MainActor () -> Void,
+         openSettings: @escaping @MainActor (SettingsDestination) -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
@@ -224,79 +286,7 @@ struct PageScaffold<Content: View>: View {
             .navigationBarTitleDisplayMode(titleDisplayMode)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { openSettings() } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .tint(.mwAccent)
-                    .accessibilityLabel(Text("Settings"))
-                }
-            }
-        }
-    }
-}
-
-/// 带分段控件的分页外壳。导航栈 + 画布 + 一个常驻的分段控件，滚动交给各分段自己。
-///
-/// ── 为什么不能直接用 `PageScaffold` ──────────────────────────────────────────
-///
-/// `PageScaffold` 的内容是被塞进它**自己的** `ScrollView` 里的。而分段的内容里
-/// 有 `Form`（维护页）与 `ScrollView`（功率 / 适配器 / 清理 / 频段页）—— 它们各自
-/// 就是一个滚动容器。套进去会变成滚动套滚动：内层滚不动、外层抢手势，界面上表现为
-/// 「这一页滑不动」，而且不报任何错。
-///
-/// 所以这一层只提供「导航栈 + 画布 + 分段控件」，**滚动交给分段自己**。
-///
-/// ── 标题为什么是 `.inline` ──────────────────────────────────────────────────
-///
-/// 分段控件必须紧贴标题下方（这是这一页的主导航）。用大标题的话，标题本身就占掉
-/// 一行半，加上分段控件，第一屏能看到的正文只剩一小半。`.inline` 把标题缩成导航栏里
-/// 的 17pt，分段控件直接压在栏下面 —— 这才是「进去就能看到更多内容」。
-///
-/// 标题随分段变：由调用方按当前分段给出 `title`，不是常量。
-struct PageHubScaffold<Header: View, Content: View>: View {
-    let title: LocalizedStringKey
-    var glow: Color
-    /// 打开“关于”弹层。与 `PageScaffold` 同一个齿轮，同一条理由：
-    /// 传动作，不传 `AppState`。
-    var openSettings: @MainActor () -> Void
-    @ViewBuilder var header: () -> Header
-    @ViewBuilder var content: () -> Content
-
-    init(title: LocalizedStringKey,
-         glow: Color = .mwAccent,
-         openSettings: @escaping @MainActor () -> Void,
-         @ViewBuilder header: @escaping () -> Header,
-         @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self.glow = glow
-        self.openSettings = openSettings
-        self.header = header
-        self.content = content
-    }
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.mwCanvas
-                // 与 `PageScaffold` 同一条理由：整屏 `Canvas` 要能被跳过。
-                Backdrop(glow: glow).equatable()
-                VStack(spacing: 0) {
-                    header()
-                        .padding(.horizontal, 16)
-                        .padding(.top, 2)
-                        .padding(.bottom, 8)
-                    content()
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { openSettings() } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .tint(.mwAccent)
-                    .accessibilityLabel(Text("Settings"))
+                    SettingsMenuButton(openSettings: openSettings)
                 }
             }
         }

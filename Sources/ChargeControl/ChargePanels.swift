@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 「电源」页分段 3 —— 充电控制。**这是分段的内容，不是页面。**
+/// 「电源」页的下半截 —— 充电控制。**这是一段内容，不是页面。**
 ///
 /// ## 为什么是原生界面，而不是守护进程托管的那份网页
 ///
@@ -25,52 +25,42 @@ import SwiftUI
 /// ── 2026-10-11 ──────────────────────────────────────────────────────────────
 ///
 /// 这里原本还有一个 `ChargeControlView`（一个带两段 `Picker` 的独立分页「智充」）。
-/// 现在「智充」这个名字没有了：这一段并入了 `PowerHubView`，外壳由它提供。
-/// 所以结构体从 `private` 变成模块内可见，并且**自己带上滚动容器** ——
-/// 它以前是被 `PageScaffold` 的 `ScrollView` 装着的。
+/// 现在「智充」这个名字没有了：这一段并入了 `PowerView`，外壳由它提供。
 ///
-/// ── 2026-10-11（第二轮）────────────────────────────────────────────────────
+/// ── 2026-10-15 ──────────────────────────────────────────────────────────────
 ///
-/// 按界面反馈又收了两处：
+/// 电源页从「分段 + 外壳」收成单页（功率在上、这一段在下），于是这里**又去掉了一层
+/// 滚动容器**：以前它自己套一个 `ScrollView`，是因为 `PageHubScaffold` 只提供画布；
+/// 现在 `PageScaffold` 提供滚动，再套一层就是嵌套滚动 —— 症状是「这一页滑不动」，
+/// 而且不报任何错。改成 `Group`，与 `DashboardPanels` 同一个形状、同一个理由
+/// （见那边类型头关于 `Group` 与 `LazyVStack` 的说明）。
 ///
-///   1. 「电池信息」分段整个并进来了（`ChargeBatteryPanels` 删除）。它的两张卡片
-///      —— 电池、电池参数 —— 现在排在这一页最后；
-///   2. 「高级」卡片只留「智能停充」与「重置全部设置」，挪进「基础」卡片末尾，
-///      其余四项（Prefer SmartBattery / 停充时启用禁流 / 热模拟 / PPM 模拟 / 限流）
-///      移除。那些配置项在守护进程里仍然存在，只是不再有界面入口。
+/// 同一天还搬走了两样：
+///
+///   · **「关闭温控降频」从维护页搬进来**，落在「基础」卡片末尾（`ThermalThrottlePanel`）；
+///   · **电池卡片并进了功率页那一张**（`DashboardPanels.batteryPanel`）—— 两张卡片
+///     说的是同一个东西的两面，分在两处、中间还隔着一次分段切换，看个「循环次数」
+///     要滚两次屏。重复的「电压 / 电流」两行按要求只留了功率页那一份。
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  分段 3：充电控制（含电池信息）
+//  电源页下半截：充电控制
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// 「电源」页分段 3 —— 充电控制 + 电池信息。
+/// 电源页下半截 —— 充电控制。
 ///
-/// 滚动容器在这一层（它以前是被 `PageScaffold` 的 `ScrollView` 装着的），
-/// 所以面板列表从「`PageScaffold` 的若干兄弟子视图」变成「一个 `LazyVStack` 的子视图」，
-/// 间距 14 由 `LazyVStack` 自己给 —— 与 `PageScaffold` 里的间距是同一个数。
-///
-/// 卡片顺序：基础（含智能停充 / 重置）→ 容量阈值 → 温度控制 → 电池 → 电池参数。
-/// 前两张是「怎么管充电」，后两张是「电池现在什么样」—— 后者原本是独立分段，
-/// 按要求挪到末尾。
+/// 卡片顺序：基础（含智能停充 / 关温控降频）→ 容量阈值 → 温度控制。
+/// 原来排在这里的「电池」「电池参数」两张卡片已经并进功率页的电池卡片，
+/// 所以这一段收尾在「温度控制」上。
 struct ChargeControlPanels: View {
     @EnvironmentObject private var charge: ChargeControlService
 
-    private var battery: BatteryInfo { charge.battery }
-
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                ChargeServiceNote()
+        Group {
+            ChargeServiceNote()
 
-                basicsPanel
-                thresholdsPanel
-                temperaturePanel
-                batteryPanel
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 2)
-            .padding(.bottom, 24)
-            .mwContainerWidth()
+            basicsPanel
+            thresholdsPanel
+            temperaturePanel
         }
     }
 
@@ -117,6 +107,21 @@ struct ChargeControlPanels: View {
                 ToggleRow("Predictive charge inhibit",
                           isOn: Binding(get: { charge.config.predictiveInhibit },
                                         set: { charge.setPredictiveInhibit($0) }))
+
+                // ── 2026-10-15：从维护页搬过来的一块 ────────────────────────────
+                //
+                // 它改的是 `thermalmonitord`，而那个守护进程**降的正是充电电流** ——
+                // 放在「充电控制」这张卡片里、紧挨着「智能停充」，比放在一页叫
+                // 「维护」的地方更贴。整块内容与它那一套安全性说明见
+                // `ThermalThrottlePanel`。
+                //
+                // 分隔线在这里是必需的：这一块自带标题与说明文字，直接接在
+                // 「智能停充」那一行下面会被读成它的注解。上面那条线把
+                // 「智能停充」从三个设置项里分出来，这条线把温控块从它分出来 ——
+                // 两条线各自对应一次话题切换。
+                Divider().overlay(Color.mwCardStroke)
+
+                ThermalThrottlePanel()
             }
         }
     }
@@ -179,48 +184,22 @@ struct ChargeControlPanels: View {
         }
     }
 
-    /// 电池：健康度 + 静态参数（循环次数 / 容量 / 电压电流）。
-    ///
-    /// 2026-10-11 由两张卡片合并成一张 —— 它们说的是同一个东西的两面，
-    /// 中间一条分隔线比两张卡片各带一个标题更省地方。
-    ///
-    /// ── 2026-10-15：三项实时读数收掉了两项，第三项换了样式 ──────────────────
-    ///
-    /// **「电量」与「温度」整条去掉**（连同它们的进度条）：
-    ///
-    ///   · 电量在这一页的第一屏就有（`DashboardPanels` 的环形读数），「充电控制」
-    ///     分段里也另有一条；同一页画三次是重复；
-    ///   · 温度同理 —— 功率页有专门的温度读数与曲线，而这里那条进度条的刻度
-    ///     （0…50 °C）本来就是拍出来的，读不出精确值。
-    ///
-    /// **「健康度」保留，但换成与下面几行同一种样式**（`ValueRow`：标题 + 数值，
-    /// 不带进度条）。它是个缓慢变化的静态指标，画成进度条会让人以为它每秒都在动；
-    /// 换成普通行之后颜色也回到与其余各行一致的正文色，不再单独用强调色。
-    ///
-    /// 三行 `BarRow` 换成一行 `ValueRow` 之后，整张卡只剩一种行样式 ——
-    /// 中间那条分隔线也就没有存在的理由了，一并去掉。
-    private var batteryPanel: some View {
-        Panel("Battery", systemImage: "battery.100",
-              trailing: battery.updateTime.map { Text($0.formatted(date: .omitted, time: .standard)) }) {
-            VStack(spacing: 10) {
-                ValueRow(title: "Health",
-                         value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—")
-                ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
-                ValueRow(title: "Design capacity",
-                         value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Full charge capacity",
-                         value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
-                ValueRow(title: "Current",
-                         value: battery.amperage.map { "\($0) mA" } ?? "—")
-                // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
-                ValueRow(title: "Boot voltage",
-                         value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Voltage",
-                         value: battery.voltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
-            }
-        }
-    }
+    // 这里原本是 `batteryPanel`（健康度 + 循环次数 + 容量 + 电压电流 + 序列号）。
+    //
+    // ── 2026-10-15：整张卡片搬去了功率页的电池卡片 ──────────────────────────
+    //
+    // 两张卡片说的是同一个东西的两面 —— 一张是「现在怎么样」（电量、电芯电压 /
+    // 电流 / 温度），一张是「这块电池是什么」（健康度、循环次数、容量、序列号）。
+    // 原来它们分在页面的两处，中间还隔着一次分段切换：想看「循环次数」要滚两次屏。
+    // 合并后的实现见 `DashboardPanels.batteryPanel`。
+    //
+    // **重复的两行去掉了。** 这张卡片里的「Current」与「Voltage」就是那边的
+    // 「Cell current」与「Cell voltage」，只是取数路径不同（一个走守护进程给的电池
+    // 字典 `BatteryInfo`，一个走 `PowerSnapshot`）。按要求保留功率页那一份 ——
+    // 同一张卡片上出现两个同名读数，是最容易让人怀疑「哪个才是对的」的写法。
+    //
+    // 一并留在那边的还有「Boot voltage」：它不是电芯电压，而是开机那一刻记下的
+    // 电池电压，回答的是「这块电池这一轮开机时是什么状态」，与实时读数不是同一个量。
 
     /// 原版的下拉项。1 秒是给「看着它动」用的，30 秒是给「装兜里省电」用的。
     private static let frequencies = [1, 2, 3, 5, 10, 30]
@@ -229,8 +208,9 @@ struct ChargeControlPanels: View {
 /// 守护进程没起来时的提示条。
 ///
 /// 它原来画在 `ChargeControlView` 里、位于分段控件与分段内容之间，两个分段都能看到。
-/// 2026-10-11 之后「电池信息」并进了这一页，所以只剩一个调用点 —— 但**类型保留**：
-/// 它答的是「为什么下面全部不生效」，和 `ChargeControlPanels` 那堆面板是两件事。
+/// 2026-10-11 之后只剩一个调用点（就是这一页），2026-10-15 电源页收成单页后仍然是
+/// 一个 —— 但**类型保留**：它答的是「为什么下面全部不生效」，和
+/// `ChargeControlPanels` 那堆面板是两件事。
 ///
 /// 两种情况要分开说：
 ///   · **没打进包**（`daemonBundled == false`）：这一版构建就没带它，用户自己修不了；
@@ -338,7 +318,13 @@ private struct MenuRow<Options: View>: View {
 }
 
 /// 标签 + 只读值。
-private struct ValueRow: View {
+///
+/// ── 2026-10-15：从 `private` 放开 ──────────────────────────────────────────
+///
+/// 电池那两张卡片合并之后，这个行样式被 `DashboardPanels`（功率页）也拿去用了 ——
+/// 合并后的电池卡片里，上半截是功率页原有的实时读数，下半截是这里原来的静态参数。
+/// 复制一份的话两处会慢慢长歪（字号、对齐、占位符的灰），而它们本来就是同一个东西。
+struct ValueRow: View {
     let title: LocalizedStringKey
     let value: String
     var tint: Color = .primary

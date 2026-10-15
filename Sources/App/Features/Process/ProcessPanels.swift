@@ -19,7 +19,21 @@ import SwiftUI
 ///
 /// 分成「用户应用」与「系统」两组，判据是 C 侧给的 `userApp`（可执行文件在不在
 /// Bundle 容器里）。这台设备上三百多个进程里用户 App 只占十几个，混在一起时
-/// 想找自己装的 App 得翻很久；分开之后两组各自按 pid 升序，各自好找。
+/// 想找自己装的 App 得翻很久；分开之后两组各自好找。
+///
+/// 两组**都可以折叠**（2026-10-15 要求），默认展开：系统那一组动辄三百行，而这一页
+/// 大多数时候要找的是自己装的 App —— 收起系统组，列表就只剩十几行。
+///
+/// ── 排序（2026-10-15 要求）──────────────────────────────────────────────────
+///
+/// 标题行右侧一个菜单，三种口径：**应用名 / CPU 占用 / 内存占用**（见
+/// `ProcessSortOrder`）。排序**在组内做**，两组之间不混 —— 分组是这个列表的
+/// 第一层结构，排序是第二层，把两组合起来重排就等于把分组取消了。
+///
+/// **睡着的进程一律排在组内末尾**，与选了哪种口径无关。理由是这一页要回答的是
+/// 「谁在吃 CPU / 内存」，而睡着的进程在这两个维度上都是 0 —— 它们会把真正在动的
+/// 那几行挤到中间去。这一条在「按名称排」时尤其要紧：`backboardd` 这样的名字
+/// 按字母序会落在中段，而它此刻什么都没干。
 ///
 /// ── 刻意不做的 ──────────────────────────────────────────────────────────────
 ///
@@ -34,8 +48,11 @@ import SwiftUI
 /// 一拍都不跑。
 struct ProcessPanels: View {
 
-    /// 右上角齿轮的回调，由 `RootView` 给。
-    let openSettings: @MainActor () -> Void
+    /// 右上角齿轮菜单的回调，由 `RootView` 给。
+    ///
+    /// 2026-10-15：参数从 `() -> Void` 变成 `(SettingsDestination) -> Void` ——
+    /// 齿轮从一个动作变成一个菜单（维护 / 关于）。
+    let openSettings: @MainActor (SettingsDestination) -> Void
 
     /// 采样器。**在这一层持有**（`@StateObject`）而不是像 `HardwareMonitor` 那样
     /// 挂在 App 级：这一页的数据只有这一页用，而它的生命周期就该跟着这一页走。
@@ -43,6 +60,16 @@ struct ProcessPanels: View {
 
     /// 筛选词。空 = 全部。
     @State private var query = ""
+
+    /// 排序口径。**默认按应用名** —— 这一页最常见的用途是「找到那个 App」，
+    /// 而按占用排是「排查异常」时才需要的第二件事。
+    @State private var sortOrder: ProcessSortOrder = .name
+
+    /// 已经折叠的分组。**默认空 = 两组都展开**。
+    ///
+    /// 与频段页的折叠一样不持久化：折叠是一次浏览里的临时姿态，每次进这一页都从
+    /// 「全展开」开始，用户想收起系统组时再收。
+    @State private var collapsedGroups: Set<ProcessGroup> = []
 
     var body: some View {
         PageScaffold("Processes", glow: .mwAccent, openSettings: openSettings) {
@@ -54,7 +81,7 @@ struct ProcessPanels: View {
             if monitor.processes.isEmpty {
                 emptyPanel
             } else {
-                searchField
+                toolbarRow
 
                 // `ForEach` 直接挂在外层 `LazyVStack`（`PageScaffold` 里的那个）下，
                 // 每一行才是独立的懒加载元素。把它整个包进一个 `Panel` 会让
@@ -62,13 +89,20 @@ struct ProcessPanels: View {
                 //
                 // 分组标题也是这个 LazyVStack 的兄弟节点，而不是套在组外面 ——
                 // 套一层 `Section` 或 `VStack` 会重新把组内所有行变成「一次性建出来」。
+                //
+                // 折叠用的 `if` **不破坏这件事**：条件渲染不产生容器，展开时
+                // `ForEach` 仍然是那个 LazyVStack 的直接子视图。
                 if !userApps.isEmpty {
-                    groupHeader("User Apps", count: userApps.count)
-                    ForEach(userApps) { row(for: $0) }
+                    groupHeader(.userApps, count: userApps.count)
+                    if !collapsedGroups.contains(.userApps) {
+                        ForEach(userApps) { row(for: $0) }
+                    }
                 }
                 if !systemProcesses.isEmpty {
-                    groupHeader("System", count: systemProcesses.count)
-                    ForEach(systemProcesses) { row(for: $0) }
+                    groupHeader(.system, count: systemProcesses.count)
+                    if !collapsedGroups.contains(.system) {
+                        ForEach(systemProcesses) { row(for: $0) }
+                    }
                 }
 
                 if filtered.isEmpty {
@@ -98,38 +132,134 @@ struct ProcessPanels: View {
         }
     }
 
-    /// 用户安装的 App（含它们的扩展进程）。
+    /// 用户安装的 App（含它们的扩展进程），已排序。
     private var userApps: [ProcessEntry] {
-        filtered.filter(\.isUserApp)
+        arranged(filtered.filter(\.isUserApp))
     }
 
-    /// 系统自带的进程。**是「非用户 App」而不是「uid == 0」** ——
+    /// 系统自带的进程，已排序。**是「非用户 App」而不是「uid == 0」** ——
     /// 系统那一组里绝大多数是各自的专用 uid（`_securityd` 之类），
     /// 按 uid 判会把它们全漏掉。
     private var systemProcesses: [ProcessEntry] {
-        filtered.filter { !$0.isUserApp }
+        arranged(filtered.filter { !$0.isUserApp })
+    }
+
+    /// 按当前口径排一组进程。**排序在组内做** —— 理由见类型头。
+    ///
+    /// 三条规则依次生效：
+    ///
+    ///   1. **睡着的沉底**（`isSleeping`）。放在最前面判，所以它与选了哪种口径无关；
+    ///   2. 选中的口径（名称升序 / CPU 降序 / 内存降序）；
+    ///   3. **平手时按 pid 升序**。这一步不是装饰：`sorted(by:)` 要求严格弱序，
+    ///      而 CPU 与内存大量进程取同一个值（一堆 0），只比主键的话比较函数对
+    ///      这些元素两两都返回 `false` —— 那是合法的弱序，但顺序会**在每次
+    ///      采样后跳来跳去**，看起来像列表在自己乱动。加一个全序的兜底键就定了。
+    private func arranged(_ entries: [ProcessEntry]) -> [ProcessEntry] {
+        let shares = monitor.cpuShare
+        return entries.sorted { lhs, rhs in
+            if lhs.isSleeping != rhs.isSleeping { return !lhs.isSleeping }
+            switch sortOrder {
+            case .name:
+                // `localizedStandardCompare` 而不是 `<`：它对数字段做自然排序
+                // （`Core 2` 排在 `Core 10` 前面），而 App 名里带数字的不少。
+                let order = lhs.displayName.localizedStandardCompare(rhs.displayName)
+                if order != .orderedSame { return order == .orderedAscending }
+            case .cpu:
+                let left = shares[lhs.pid] ?? 0
+                let right = shares[rhs.pid] ?? 0
+                if left != right { return left > right }
+            case .memory:
+                if lhs.residentBytes != rhs.residentBytes { return lhs.residentBytes > rhs.residentBytes }
+            }
+            return lhs.pid < rhs.pid
+        }
     }
 
     // MARK: 版式
 
-    private func groupHeader(_ title: LocalizedStringKey, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(AppFont.text(12, weight: .semibold))
-                .foregroundStyle(Color.mwMuted)
-            Text(verbatim: "\(count)")
-                .font(AppFont.mono(11))
-                .foregroundStyle(Color.mwMuted.opacity(0.75))
-            Spacer(minLength: 0)
+    /// 分组标题 —— 同时是这一组的折叠开关。
+    ///
+    /// 整行都可点（不只是那个小三角）：这一行除了文字没有别的东西，而手指按得中
+    /// 比看得清更难。收起之后**计数照留**，所以「系统组有 312 个进程」这件事
+    /// 不用展开也看得到。
+    private func groupHeader(_ group: ProcessGroup, count: Int) -> some View {
+        let isCollapsed = collapsedGroups.contains(group)
+        return Button {
+            if isCollapsed {
+                collapsedGroups.remove(group)
+            } else {
+                collapsedGroups.insert(group)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(AppFont.text(10, weight: .bold))
+                    .foregroundStyle(Color.mwMuted)
+                    // 同一个图形转 90° 表示展开 —— 与频段页那张卡片的折叠按钮
+                    // 是同一个手法，读的人一眼能连上「同一个东西换了姿态」。
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                Text(group.title)
+                    .font(AppFont.text(12, weight: .semibold))
+                    .foregroundStyle(Color.mwMuted)
+                Text(verbatim: "\(count)")
+                    .font(AppFont.mono(11))
+                    .foregroundStyle(Color.mwMuted.opacity(0.75))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            // 竖向留白给足：命中区域不能只有那一行文字的 15 pt 高。
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 4)
-        .padding(.top, 6)
+        .buttonStyle(.plain)
     }
 
     private func row(for entry: ProcessEntry) -> ProcessRow {
         ProcessRow(entry: entry,
                    cpuShare: monitor.cpuShare[entry.pid],
                    resourceAvailable: monitor.resolvedCount > 0)
+    }
+
+    /// 列表顶部那一行：筛选框 + 排序菜单。
+    ///
+    /// ── 排序为什么在这里，而不是导航栏 ──────────────────────────────────────
+    ///
+    /// 导航栏右侧被齿轮占着（它是全局入口，不该被本页的功能挤走）。放在筛选框旁边
+    /// 是这两个控件本来就该挨着：一个决定「看到哪几条」，一个决定「按什么顺序看」，
+    /// 都作用在下面整个列表上。
+    private var toolbarRow: some View {
+        HStack(spacing: 8) {
+            searchField
+            sortMenu
+        }
+    }
+
+    /// 排序菜单。`Picker` 而不是几个 `Button` —— 系统会在菜单里给当前项画上勾，
+    /// 「现在按什么排」不用自己再写一遍选中态。
+    private var sortMenu: some View {
+        Menu {
+            Picker(Strings.text("Sort"), selection: $sortOrder) {
+                ForEach(ProcessSortOrder.allCases) { order in
+                    Label(order.title, systemImage: order.systemImage).tag(order)
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(AppFont.text(14, weight: .semibold))
+                .foregroundStyle(Color.mwAccent)
+                // 与筛选框同一组内边距，两者高度才对得齐 —— 差 1 pt 都看得出来。
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.mwCard)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.mwCardStroke, lineWidth: 1)
+                )
+        }
+        .accessibilityLabel(Text("Sort"))
     }
 
     private var searchField: some View {
@@ -466,6 +596,59 @@ extension ProcessState {
         case .stopped: return "Stopped"
         case .zombie: return "Zombie"
         case .unknown: return "—"
+        }
+    }
+}
+
+// MARK: - 排序与分组的口径
+
+/// 列表的排序口径。
+///
+/// 三种都是「这一页要回答的问题」的直接翻译：**应用名**是「我要找那个 App」、
+/// **CPU** 是「谁在烧电」、**内存**是「谁把内存占满了」。
+///
+/// 放在文件作用域而不是 `ProcessPanels` 里面：默认 MainActor 隔离下嵌套类型的隔离
+/// 跟着外层走，而它只被 `Picker` 与 `ForEach` 读，与那个视图没有关系。
+nonisolated enum ProcessSortOrder: String, CaseIterable, Identifiable {
+    case name
+    case cpu
+    case memory
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .name: return "App name"
+        case .cpu: return "CPU"
+        case .memory: return "Memory"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .name: return "textformat.abc"
+        case .cpu: return "cpu"
+        case .memory: return "memorychip"
+        }
+    }
+}
+
+/// 列表的两个分组。
+///
+/// 用枚举而不是两个 `Bool`：折叠状态是一个 `Set<ProcessGroup>`，加第三组时
+/// 只多一个 case，不用再多一个开关、再多一处 `if`。
+nonisolated enum ProcessGroup: String, CaseIterable, Identifiable {
+    /// 用户安装的 App 及其扩展进程。
+    case userApps
+    /// 系统自带的一切（守护进程、系统 App 的扩展、内核任务）。
+    case system
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .userApps: return "User Apps"
+        case .system: return "System"
         }
     }
 }

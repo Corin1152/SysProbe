@@ -16,38 +16,42 @@ import SwiftUI
 struct DashboardPanels: View {
     @EnvironmentObject private var monitor: PowerMonitor
 
+    /// 电池卡片那一半静态信息的来源。
+    ///
+    /// 2026-10-15 之前它在 `ChargeControlPanels` 里（那是另一个分段）。两张电池卡片
+    /// 合并成一张之后，这个依赖跟着搬了过来 —— 见 `batteryPanel`。
+    @EnvironmentObject private var charge: ChargeControlService
+
     private var snapshot: PowerSnapshot { monitor.snapshot }
     private var plugged: Bool { snapshot.externalConnected }
 
-    // 光晕不在这一层：它属于页面外壳，由 `PowerHubView.glow` 按分段给。
+    /// 光晕不在这一层：它属于页面外壳，由 `PowerView.glow` 给。
+    ///
+    /// ── 为什么是 `Group` 而不是 `VStack` ────────────────────────────────────
+    ///
+    /// 这一层的内容会被 `PowerView` 放进 `PageScaffold` 的 `LazyVStack`。`Group`
+    /// 不产生布局容器，子视图会被展平成那个 `LazyVStack` 的直接元素 —— 每张卡片
+    /// 因此仍是独立的懒加载单元。换成 `VStack` 就只剩一个元素，六张卡片
+    /// （含功率环那层 `Canvas`）会在进页面那一帧全部建出来。
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                heroPanel
-                if monitor.thermalState.isThrottling { throttleBanner }
-                batteryPanel
-                breakdownPanel
-                profilesPanel
-                connectionPanel
-            }
-            .padding(.horizontal, 16)
-            // 顶上的 4 减到 2：分段控件已经给了 8 的下边距，再叠一层 4 就偏松了。
-            .padding(.top, 2)
-            .padding(.bottom, 24)
-            .mwContainerWidth()
+        Group {
+            heroPanel
+            if monitor.thermalState.isThrottling { throttleBanner }
+            batteryPanel
+            powerPathPanel
+            connectionPanel
         }
     }
 
     /// 功率环的 tint。
     ///
-    /// **与 `PowerHubView` 的整页光晕是同一个值** —— 它调的就是那个函数。
+    /// **与 `PowerView` 的整页光晕是同一个值** —— 它调的就是那个函数。
     /// 原来这两处在 `DashboardView` 里本来就是同一个 `glowColor`；拆成两个类型之后
     /// 如果各写一份，环的颜色会与背景对不上，看起来像坏了，而且不报任何错。
     private var ringTint: Color {
-        PowerSegment.glow(for: .draw,
-                          throttling: monitor.thermalState.isThrottling,
-                          wirelessInput: snapshot.isWirelessInput,
-                          externalConnected: plugged)
+        PowerGlow.color(throttling: monitor.thermalState.isThrottling,
+                        wirelessInput: snapshot.isWirelessInput,
+                        externalConnected: plugged)
     }
 
     // MARK: Hero
@@ -140,8 +144,28 @@ struct DashboardPanels: View {
 
     // MARK: Battery
 
+    /// 电池：实时读数 + 静态参数，**一张卡片**。
+    ///
+    /// ── 2026-10-15：与「充电控制」分段那张电池卡片合并 ────────────────────────
+    ///
+    /// 两张卡片说的是同一个东西的两面 —— 一张是「现在怎么样」（电量、电芯电压 /
+    /// 电流 / 温度），一张是「这块电池是什么」（健康度、循环次数、容量、序列号）。
+    /// 原来它们分在页面的两处，中间还隔着一次分段切换：想看「循环次数」要滚两次屏。
+    ///
+    /// **重复的两行去掉了。** 充电控制那张里的「Current」与「Voltage」就是这里的
+    /// 「Cell current」与「Cell voltage」，只是取数路径不同（一个走守护进程给的电池
+    /// 字典 `BatteryInfo`，一个走 `PowerSnapshot`）。按要求保留这一份、去掉那一份 ——
+    /// 同一张卡片上出现两个同名读数是最容易让人怀疑「哪个才是对的」的写法。
+    ///
+    /// 「Boot voltage」**留着**：它不是电芯电压，而是开机那一刻记下的电池电压，
+    /// 回答的是「这块电池这一轮开机时是什么状态」。与上面那个读数不是同一个量。
     private var batteryPanel: some View {
-        Panel("Battery", systemImage: "battery.100") {
+        Panel("Battery", systemImage: "battery.100",
+              // 这个时刻来自守护进程给的电池字典，与功率那半边不是同一个源 ——
+              // 它是「静态参数」那一半的新鲜度，标在卡片右上角正好。
+              trailing: charge.battery.updateTime.map {
+                  Text($0.formatted(date: .omitted, time: .standard))
+              }) {
             VStack(spacing: 12) {
                 if let percent = snapshot.percent {
                     BarRow(title: Text("Charge level"),
@@ -172,13 +196,50 @@ struct DashboardPanels: View {
                            tint: snapshot.batteryTemperature.map { Color.mwTemperature($0) } ?? .primary,
                            size: 20)
                 }
+
+                // 一条分隔线把「现在怎么样」和「这块电池是什么」分开。它与
+                // `MemoryCard` 里分隔读数与优化按钮用的是同一条线。
+                Divider().overlay(Color.mwCardStroke)
+
+                VStack(spacing: 10) {
+                    ValueRow(title: "Health",
+                             value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—")
+                    ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
+                    ValueRow(title: "Design capacity",
+                             value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
+                    ValueRow(title: "Full charge capacity",
+                             value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
+                    // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
+                    ValueRow(title: "Boot voltage",
+                             value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                    ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
+                }
             }
         }
     }
 
-    // MARK: Breakdown
+    private var battery: BatteryInfo { charge.battery }
 
-    private var breakdownPanel: some View {
+    // MARK: Power path（2026-10-15：广播档位并进来了）
+
+    /// 供电路径 + 当前协商到的档位，**一张卡片**。
+    ///
+    /// ── 为什么把「广播档位」并进来 ────────────────────────────────────────────
+    ///
+    /// 两张卡片答的是同一个问题的两半：这张说「进来多少、存下多少、路上丢了多少」，
+    /// 档位那张说「充电器允许进来多少」。分开摆的时候，读的人要自己在脑子里把
+    /// 「17 W 的档位」和「实际进来 14 W」对上 —— 而这两件事本来就该挨着看。
+    ///
+    /// ── 为什么档位只显示命中的那一档 ──────────────────────────────────────────
+    ///
+    /// 充电器会广播一整张档位表（5V / 9V / 12V / 15V / 20V…），但**此刻真正在用**
+    /// 的只有一档。把整张表列出来，用户得自己在里面找出带勾的那一行才知道「现在跑在
+    /// 哪一档」；而这个页面要回答的正是「现在」。所以只显示 `negotiatedProfile`，
+    /// 一行读完。
+    ///
+    /// 完整档位表不是没有价值 —— 它回答的是「这个充电器还能给多少」，
+    /// 但那是个「换充电器之前」的问题，不是这一页主读数旁边该摆的东西。
+    private var powerPathPanel: some View {
         Panel("Power path", systemImage: "arrow.triangle.branch",
               // 百分号先落成 `String` 再插值，于是键是 `%@ of adapter` 而不是
               // `%lld% of adapter` —— 后者会把一个字面量 `%` 塞进格式串里，
@@ -218,38 +279,53 @@ struct DashboardPanels: View {
                     EmptyNote(text: "Charging wirelessly. The charge IC exposes the coil's voltage but no current to pair with it, so the power coming in cannot be measured — only what reaches the cell. The figure the charger reports about itself is a ceiling, not a reading, and does not move.",
                               systemImage: "wave.3.right")
                 }
+
+                // 一条分隔线把「这一秒的电」和「谈成的合同」分开。上面四格是读数
+                // （会动），下面这一行是协商结果（插着的时候基本不动）——
+                // 放在一起而不加线的话，读的人会以为它也每秒在跳。
+                Divider().overlay(Color.mwCardStroke)
+
+                if !plugged {
+                    EmptyNote(text: "Plug in a charger to read the profile it negotiates.",
+                              systemImage: "powerplug")
+                } else if let profile = snapshot.negotiatedProfile {
+                    negotiatedRow(profile)
+                } else {
+                    EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
+                }
             }
         }
+    }
+
+    /// 当前命中的那一档 —— 一行，**不带单选框**。
+    ///
+    /// 原来这里是整张档位表，每行左边一个圆圈，命中的那个画成实心。只留一档之后，
+    /// 「选中」这个状态就没有信息量了：整张卡片上只有它一个，再画个实心圆点等于
+    /// 用图形把「就是它」重复一遍。
+    ///
+    /// 版式改成两段：左边是这一档的**形状**（电压 × 电流，充电器说的），
+    /// 右边是它的**乘积**（瓦特，这一档能给出多少）。左右对齐之后，
+    /// 「17 W」和上面「From charger 14.2 W」的差就是这一档还剩多少没用上。
+    private func negotiatedRow(_ profile: PDProfile) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(verbatim: profile.label)
+                .mwMono(size: 13, weight: .semibold)
+            Spacer(minLength: 8)
+            Text(String(format: "%.0f W", profile.watts))
+                .mwReadout(size: 16, weight: .semibold)
+                .foregroundStyle(Color.mwAccent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.mwAccent.opacity(0.12))
+        )
     }
 
     private var efficiencyTint: Color {
         guard let efficiency = snapshot.conversionEfficiency else { return .primary }
         return efficiency >= 85 ? .mwBattery : (efficiency >= 70 ? .mwLoss : .mwDanger)
-    }
-
-    // MARK: Profiles（2026-10-14 从「适配器」分段迁入）
-
-    /// 适配器广播的 PD 档位表，当前生效的那一档带勾。
-    ///
-    /// 未插电时给一句空态而不是把「没有广播档位表」那句显示出来 —— 后者描述的是
-    /// 「充电器不上报」，没接充电器时说这句话是错的。
-    private var profilesPanel: some View {
-        Panel("Advertised profiles", systemImage: "list.bullet.rectangle",
-              trailing: snapshot.adapterProfiles.isEmpty ? nil : Text(verbatim: "\(snapshot.adapterProfiles.count)")) {
-            if !plugged {
-                EmptyNote(text: "Plug in a charger to read its advertised profiles.",
-                          systemImage: "powerplug")
-            } else if snapshot.adapterProfiles.isEmpty {
-                EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(snapshot.adapterProfiles) { profile in
-                        ProfileRow(profile: profile,
-                                   isActive: profile.index == snapshot.negotiatedProfile?.index)
-                    }
-                }
-            }
-        }
     }
 
     // MARK: Connection（2026-10-14 从「适配器」分段迁入）
@@ -364,33 +440,6 @@ struct DashboardPanels: View {
         case ..<400: .primary
         default: .mwLoss
         }
-    }
-}
-
-/// One advertised PD profile. A row rather than a plain `Text` so the active one can
-/// carry the accent tint and the filled radio.
-struct ProfileRow: View {
-    let profile: PDProfile
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                .font(AppFont.text(13))
-                .foregroundStyle(isActive ? Color.mwAccent : Color.mwMuted.opacity(0.5))
-            Text(verbatim: profile.label)
-                .mwMono(size: 13, weight: isActive ? .semibold : .regular)
-            Spacer()
-            Text(String(format: "%.0f W", profile.watts))
-                .mwReadout(size: 14, weight: .semibold)
-                .foregroundStyle(isActive ? Color.mwAccent : Color.mwMuted)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isActive ? Color.mwAccent.opacity(0.12) : Color.mwMuted.opacity(0.06))
-        )
     }
 }
 

@@ -437,3 +437,10 @@
 "The private API was blocked, so only names and PIDs are shown." = "私有接口被拦下，因此只显示名称与 PID。";
 "App names are unavailable — showing process names." = "读不到应用名 —— 显示的是进程名。";
 "proc_pidpath or the app bundle could not be read." = "读不到可执行路径，或 App 包打不开。";
+
+/* 进程分页 · 分组折叠与排序（2026-10-15 第三轮） */
+"App name" = "应用名";
+"Sort" = "排序";
+
+/* 电源页 · 广播档位并进供电路径卡片（2026-10-15） */
+"Plug in a charger to read the profile it negotiates." = "插上充电器才能读出它协商到的档位。";

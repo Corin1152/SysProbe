@@ -97,6 +97,14 @@ nonisolated struct ProcessEntry: Identifiable, Hashable, Sendable, Decodable {
     /// （那是真实读数），而常驻内存不可能是 0 —— 任何活着的进程都有代码段。
     var hasResourceData: Bool { residentBytes > 0 }
 
+    /// 是不是睡着等事件（`SSLEEP`）。
+    ///
+    /// 列表按它把睡着的排到组内末尾 —— 理由见 `ProcessPanels.arranged`。
+    ///
+    /// 用 `== .sleeping` 而不是「非 running」：`.idle` / `.stopped` / `.zombie`
+    /// 都不是常态，各有各的意思，一起当成「睡着」会把它们藏进末尾。
+    var isSleeping: Bool { ProcessState(raw: status) == .sleeping }
+
     // 手写解码而不是靠合成：**一个字段缺失就让整份报告解不出来**是这一页最
     // 典型的故障形态（工具与 App 不同步、报告被截断）。除了 `pid` 之外全给
     // 默认值，让列表至少能显示出来。

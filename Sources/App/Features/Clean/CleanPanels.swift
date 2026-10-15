@@ -1,14 +1,23 @@
 import SwiftUI
 import UIKit
 
-/// 「维护」分页的分段 2 —— 清理。原来是齿轮菜单里的第三页。
+/// 硬件页「存储」卡片的下半截 —— 清理。**这是一段内容，不是页面。**
 ///
 /// 磁盘缓存扫描与清理（移植自对 iOSCleanerPro 1.0 的分析，见 `Tools/RootTool.c` 的来源说明）。
 ///
-/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题都由 `MaintenanceHubView`
-/// 提供，这里只剩滚动容器与内容。**`ScrollView` 留在这一层** —— 它自带滚动容器，
-/// 套进 `PageScaffold` 的 `ScrollView` 会变成滚动套滚动（症状是「这一页滑不动」，
-/// 不报任何错），所以外壳用的是 `PageHubScaffold`。
+/// ── 2026-10-15：从「维护」分页搬进存储卡片 ──────────────────────────────────
+///
+/// 它原来是「维护」分页的一个分段（`MaintenanceHubView` + `MaintenancePanels`，
+/// 那两个文件同一天删掉了）。底部分页栏收成四格（硬件 / 电源 / 频段 / 进程）之后，
+/// 这一块按「它改的是哪一类东西」重新分配 —— 清理动的是磁盘，于是并进硬件页那张
+/// 已经在回答「磁盘还剩多少」的卡片里，而不是另起一张。
+///
+/// 于是它**自己的滚动容器也去掉了**：卡片在 `PageScaffold` 的 `ScrollView` 里，
+/// 再套一层就是滚动套滚动（症状是「这一页滑不动」，而且不报任何错）。
+///
+/// 版式保留上游 iOSCleanerPro 1.0 那一套（居中的可清理量 + 一列全宽大按钮）：
+/// 「可清理量」是这一块的主读数，值得自己占一行 —— 上面那三个是**盘**的读数，
+/// 这个是**能收回多少**，不是同一类东西。
 ///
 /// ── 刻意不做的三件事 ──────────────────────────────────────────────────────
 ///
@@ -22,10 +31,10 @@ import UIKit
 ///
 /// ── 并发与失败模式 ────────────────────────────────────────────────────────
 ///
-/// 阻塞调用全部走 `Task.detached`（与 `MaintenancePanels` 同一约定）。清理没有
+/// 阻塞调用全部走 `Task.detached`（与「维护」那个弹层同一约定）。清理没有
 /// 「取消」：子进程在后台把活干完，界面这边超时只会报「没返回结果」，
 /// 绝不提示用户「失败了」却让 root 工具继续删 —— 那两种状态必须分开。
-struct CleanPanels: View {
+struct CleanSection: View {
 
     /// 工具能不能用。`nil` = 还没测出来；与维护页同一套自检（`DeviceActions.probe()`），
     /// 两个页面各自跑一次毫秒级的子进程，不为共用状态引入跨页耦合。
@@ -64,24 +73,19 @@ struct CleanPanels: View {
     @State private var expandedPreviews: Set<String> = []
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                totalHeader
-                actionButtons
+        // 间距 12 与 `StorageCard` 上半截是同一个数 —— 上下两半现在在同一张卡片里，
+        // 行距差一点点就会看出来是两块拼的。
+        VStack(alignment: .leading, spacing: 12) {
+            totalHeader
+            actionButtons
 
-                if let scan {
-                    appsSection
-                    previewSection
-                    footerNotes()
-                } else {
-                    toolRow
-                }
+            if let scan {
+                appsSection
+                previewSection
+                footerNotes()
+            } else {
+                toolRow
             }
-            .padding(.horizontal, 16)
-            // 顶上的 8 减到 2：分段控件已经给了 8 的下边距，再叠一层就偏松了。
-            .padding(.top, 2)
-            .padding(.bottom, 28)
-            .mwContainerWidth()
         }
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），放到
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
@@ -327,22 +331,17 @@ struct CleanPanels: View {
     /// 这边多出来的只有「这一页也会坏」的暗示。
     /// 「大小由特权维护工具实时测得」那句也去了（2026-10-15）：脚注只留
     /// 有行动含义的（保留名单），来源说明属于关于页。
+    ///
+    /// 2026-10-15：**不再自带卡片底**。它并进硬件页的存储卡片之后，外面已经是
+    /// 一张卡片了 —— 再套一层同色的圆角块就是「卡片里长了个卡片」，而两层描边
+    /// 叠在一起比什么都显眼。
     private var toolRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
                 .font(AppFont.text(11))
                 .foregroundStyle(Color.mwMuted)
         }
-        .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .fill(Color.mwCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
-        )
     }
 
     /// 扫完之后的页脚：释放量 + 两条说明。
@@ -371,9 +370,12 @@ struct CleanPanels: View {
     /// 垃圾桶（只清这一个）。整行不是点击区域，名字那一列不带任何动作 ——
     /// 误触面越小越好。
     ///
-    /// 卡片而不是 Form 分组：这一页已经改成「大按钮 + 卡片」的版式，再混一个
-    /// 系统分组列表进来，两种行高与边距会互相打架。卡片底色、描边、圆角用的
-    /// 是同一组设计 token。
+    /// 卡片而不是 Form 分组：这一块已经改成「大按钮 + 卡片」的版式，再混一个
+    /// 系统分组列表进来，两种行高与边距会互相打架。
+    ///
+    /// 2026-10-15：**不再自带卡片底**。并进硬件页的存储卡片之后，外面已经是一张
+    /// 卡片了 —— 再套一层同色的圆角块就是「卡片里长了个卡片」，两层描边叠在一起
+    /// 比什么都显眼。`toolRow` 与 `previewSection` 同样处理。
     private var appsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("App caches")
@@ -458,16 +460,7 @@ struct CleanPanels: View {
                 }
             }
         }
-        .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .fill(Color.mwCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
-        )
     }
 
     // MARK: 预览
@@ -480,6 +473,8 @@ struct CleanPanels: View {
     /// 折叠而不是全铺开：四类全展开最多 24 行，而多数时候用户只想扫一眼
     /// 「哪一类最占地方」。收起状态下每行右边就是该类的实测总量，
     /// 已经足够做那个判断。
+    ///
+    /// 与 `toolRow` 同一件事：**不再自带卡片底**，外面那张存储卡片就是它的底。
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("What will be removed")
@@ -496,22 +491,13 @@ struct CleanPanels: View {
                     .foregroundStyle(Color.mwMuted)
             }
         }
-        .padding(Theme.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .fill(Color.mwCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .strokeBorder(Color.mwCardStroke, lineWidth: 1)
-        )
     }
 
     /// 预览里的一行：标题 + 该类总量，点一下展开条目。
     ///
-    /// 用 `Button` 而不是 `DisclosureGroup` + 自定义 `Binding`：这一页已经有两处
-    /// 手写 `Binding`（`MaintenancePanels` 的开关），而这里只是「展开/收起」，
+    /// 用 `Button` 而不是 `DisclosureGroup` + 自定义 `Binding`：这一块本来就有别的
+    /// 手写 `Binding`（保护开关、频段页那些折叠），而这里只是「展开/收起」，
     /// 一个 `Set` 加一个按钮就说清楚了。
     private func previewRow(scope: StorageCleanScope,
                             items: [StorageScanResult.Preview]) -> some View {

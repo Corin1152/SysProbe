@@ -1,5 +1,39 @@
 import SwiftUI
 
+/// 右上角齿轮下拉菜单里的两项。
+///
+/// ── 2026-10-15：从「只有一个关于」扩成两项 ──────────────────────────────────
+///
+/// 底部分页栏取消了「维护」那一格（页码收成 硬件 / 电源 / 频段 / 进程）。
+/// 维护页剩下的东西分成两半：**改系统状态的**（重启设备 / 注销 / 网络唤醒）
+/// 收进这里的 `.maintenance`；**动充电行为的**（关闭温控降频）搬去了电源页的
+/// 基础卡片末尾。
+///
+/// 标题与图标住在这里而不是各个调用点：四个分页的外壳都要画同一个菜单
+/// （`SettingsMenuButton`），各写一份必然会漂移。
+enum SettingsDestination: String, Identifiable, CaseIterable {
+    /// 重启设备 / 注销 / 网络唤醒。
+    case maintenance
+    /// 版本号与诊断。
+    case about
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .maintenance: return "Maintenance"
+        case .about: return "About"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .maintenance: return "wrench.and.screwdriver"
+        case .about: return "info.circle"
+        }
+    }
+}
+
 /// App 级状态：界面语言、当前分页。
 ///
 /// 两样都放在 `RootView` 这一层，各有用意：
@@ -30,11 +64,18 @@ final class AppState: ObservableObject {
 
     @Published var selectedTab = 0
 
-    /// 右上角齿轮的「关于」弹层是否展开。
+    /// 右上角齿轮下拉菜单里正在打开的那一项。`nil` = 没有弹层。
     ///
-    /// 2026-10-14：第 4 个分页让给了「频段」，「关于」回到齿轮里。这个标志位与
-    /// 0.0.30 之前那个是同一个 —— 那时它装的是设置面板，现在只剩关于。
-    @Published var showingSettings = false
+    /// ── 2026-10-15：从 `Bool` 换成这一组枚举 ────────────────────────────────
+    ///
+    /// 原来是 `showingSettings: Bool`，只装「关于」。这一版取消了「维护」分页，
+    /// 它剩下的东西（重启设备 / 注销 / 网络唤醒）没有别处可去，全部收进齿轮的
+    /// 第二个菜单项 —— 于是齿轮从一个直接动作变成一个 `Menu`，状态也就从
+    /// 「开没开」变成「开的是哪一个」。
+    ///
+    /// 用 `Identifiable` 的枚举而不是两个 `Bool`：后者会出现「两个同时为真」这种
+    /// 表达得出来、但不该存在的状态，而 `.sheet(item:)` 天然不允许。
+    @Published var settingsSheet: SettingsDestination?
 
     init() {
         // `AppFont` 与 `Strings.text` 读的是 `AppLanguage.current` 这个全局，

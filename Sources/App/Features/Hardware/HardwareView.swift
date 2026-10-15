@@ -6,9 +6,12 @@ import SwiftUI
 /// 那一块（见 `HardwareCard`），优化按钮自己观察 `MemoryOptimizer`。原因见 `body`
 /// 上那段说明：`HardwareMonitor` 每秒发布一次，观察它的视图整棵重算。
 struct HardwareView: View {
-    /// 右上角齿轮的回调，由 `RootView` 给 —— 见 `PageScaffold` 上那条注释：
+    /// 右上角齿轮菜单的回调，由 `RootView` 给 —— 见 `PageScaffold` 上那条注释：
     /// 传动作，不传 `AppState`。
-    let openSettings: @MainActor () -> Void
+    ///
+    /// 2026-10-15：参数从 `() -> Void` 变成 `(SettingsDestination) -> Void` ——
+    /// 齿轮从一个动作变成一个菜单（维护 / 关于），外壳要把点的是哪一项带出来。
+    let openSettings: @MainActor (SettingsDestination) -> Void
 
     /// 第一屏所有**读数**的字号。
     ///
@@ -51,7 +54,8 @@ struct HardwareView: View {
 
     // 注意：这里开始到 `StorageCard` 结束为止都**仍然在 `HardwareView` 内部** ——
     // 它们是嵌套类型，不是文件顶层类型。`HardwareView` 的闭合括号在 StorageCard
-    // 之后；`OptimizeSection` 则刻意留在 `HardwareView` 外面（同文件顶层私有类型）。
+    // 之后；`OptimizeSection` 与 `CleanSection` 则刻意留在外面（后者在
+    // `Clean/CleanPanels.swift`，同文件顶层类型）。
 
     /// 设备卡片：机型 / 系统 / 内核 / 运行时长 / 物理内存。
     ///
@@ -191,7 +195,20 @@ struct HardwareView: View {
         }
     }
 
-    /// 存储卡片。
+    /// 存储卡片：盘的使用量 + **清理**。
+    ///
+    /// ── 2026-10-15：清理并进来了 ────────────────────────────────────────────
+    ///
+    /// 它原来是「维护」分页的一个分段。那一页取消之后，这一块按「它改的是哪一类
+    /// 东西」重新分配 —— 清理动的是磁盘，而这张卡片已经在回答「磁盘还剩多少」，
+    /// 于是并进来而不是另起一张。实现见 `CleanSection`。
+    ///
+    /// 上下两半之间那条分隔线是必需的：上面三行是**盘**的读数（每秒在动），
+    /// 下面那一整块是**能收回多少**（只在按了扫描之后才有数），不加线会被读成
+    /// 「存储」卡片又多了一行。
+    ///
+    /// 卡片因此变长了，但这一页本来就是纵向滚动的四张卡片 —— 把「能清理多少」
+    /// 摆在「还剩多少」正下方，比让用户切到另一页去找它更省事。
     private struct StorageCard: View {
         @EnvironmentObject private var hardware: HardwareMonitor
 
@@ -204,14 +221,25 @@ struct HardwareView: View {
             Panel("Storage", systemImage: "internaldrive", trailing: trailing) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 14) {
-                        Metric(caption: "Used", value: Formatting.bytes(snapshot.storage.used), tint: .mwLoss, size: HardwareView.valueSize)
-                    Metric(caption: "Free", value: Formatting.bytes(snapshot.storage.free), tint: .mwBattery, size: HardwareView.valueSize)
+                        Metric(caption: "Used",
+                               value: Formatting.bytes(snapshot.storage.used),
+                               tint: .mwLoss,
+                               size: HardwareView.valueSize)
+                        Metric(caption: "Free",
+                               value: Formatting.bytes(snapshot.storage.free),
+                               tint: .mwBattery,
+                               size: HardwareView.valueSize)
+                    }
+
+                    BarRow(title: Text("Capacity"),
+                           detail: Formatting.percent(snapshot.storage.usage * 100),
+                           fraction: snapshot.storage.usage,
+                           tint: .mwLoss)
+
+                    Divider().overlay(Color.mwCardStroke)
+
+                    CleanSection()
                 }
-                BarRow(title: Text("Capacity"),
-                       detail: Formatting.percent(snapshot.storage.usage * 100),
-                       fraction: snapshot.storage.usage,
-                       tint: .mwLoss)
-            }
             }
         }
     }

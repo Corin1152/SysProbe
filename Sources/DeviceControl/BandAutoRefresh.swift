@@ -132,6 +132,21 @@ struct BandAutoRefreshConfig: Equatable {
 /// 调用方在 `.onDisappear` 里 `stop()` 是同一件事的另一半：切到别的分段也该停。
 final class BandAutoRefreshController: ObservableObject {
 
+    /// 进程内共享的实例。
+    ///
+    /// ── 为什么需要它（2026-10-15）────────────────────────────────────────────
+    ///
+    /// 频段页从「两个分段」收成单页之后，**同一个引擎的状态要被两处读**：
+    ///
+    ///   · 页面顶部「当前网络」卡片里的那几行运行状态（`RefreshStatusRows`）；
+    ///   · 页面下方「自动刷新」那一组卡片（参数 / 日志）。
+    ///
+    /// 两处各建一个实例的话，前台那条路会有**两个定时器**，各自读数、各自计时 ——
+    /// 而「两条路同时跑会在同一次弱信号里刷两次」正是这个功能刻意避开的坑
+    /// （见 `BandAutoRefreshConfig.backgroundDaemon`）。共享一个实例，两处读的是
+    /// 同一份状态、同一条定时器，谁 start 谁 stop 都作用在同一个对象上。
+    static let shared = BandAutoRefreshController()
+
     enum Phase: Equatable {
         /// 没在计时、也没在冷却。
         case idle

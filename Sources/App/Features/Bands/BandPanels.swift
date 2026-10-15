@@ -1,13 +1,25 @@
 import SwiftUI
 
-/// 「维护」分页的分段 3 —— 频段。原来是齿轮菜单里的第二页。
+/// 「频段」页的上半截 —— 频段锁定。**这是一段内容，不是页面。**
 ///
 /// 读 / 写基带允许使用的频段，按 SIM 卡槽分开。
 ///
-/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题都由 `MaintenanceHubView`
-/// 提供，这里只剩滚动容器与内容。**`ScrollView` 留在这一层**，外壳用
-/// `PageHubScaffold` 而不是 `PageScaffold`（后者的内容会被塞进它自己的 `ScrollView`，
-/// 变成滚动套滚动）。
+/// 2026-10-11 起它不再自己撑一页：画布、光晕、导航栈、标题都由外壳提供。
+///
+/// ── 2026-10-15：频段页收成单页 ──────────────────────────────────────────────
+///
+/// 原来这一页是「频段锁定 / 频段刷新」两个分段，靠一个 `Picker` 切。按要求取消分段：
+/// 这一半在上（锁哪些频段），另一半在下（什么时候重载 modem）。于是**滚动容器也交回
+/// 外壳** —— 这一层从 `ScrollView` + `LazyVStack` 改成 `Group`，与 `PowerView` /
+/// `ChargeControlPanels` 同一个形状、同一个理由（`Group` 不产生布局容器，子视图被
+/// 展平成外层 `LazyVStack` 的直接元素，每张卡片仍是独立的懒加载单元）。
+///
+/// 同一天还并进来两样：
+///
+///   · **「当前网络」卡片**：两个分段各有一张同名的，现在合成一张（上半网络、
+///     下半刷新引擎），重复的 RSRP 去了一份，设备型号与卡槽两行整个去掉；
+///   · **4G 频段卡片默认折叠**：折叠时标题旁边显示「选了几个 / 一共几个」，
+///     展开后才是那一屏 24 个格子。
 ///
 /// ## 四个动作按钮：一排，在「当前网络」卡片上方
 ///
@@ -19,9 +31,6 @@ import SwiftUI
 /// 顺序即优先级：**恢复 → 重启 → 刷新 → 保存**。前两个是「出事了怎么办」，
 /// 后两个是日常操作；把保存排在最后不是降级，而是它旁边必须有一个明确的参照物 ——
 /// 它写的是基带，而基带写错了靠的就是前两个按钮救回来。
-///
-/// 右上角只剩齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 频段页不再自己
-/// 声明工具栏项。
 ///
 /// ## 这一页是整个 App 里唯一会「写系统状态」的地方
 ///
@@ -40,22 +49,19 @@ import SwiftUI
 /// 第 5 条尤其重要：CommCenter 权限没生效时，读会失败、写会**静默失败**
 /// （调用不抛异常、不打日志）。不给一个「点了没反应」的保存按钮。
 ///
-/// 搬成分页之后，第 1 条的意义**变得更重**：它以前是「从齿轮里点进来」的独立一层，
-/// 现在它自己占一个分页，而分页里的两个分段之间只隔一次点击 —— 从「频段锁定」
-/// 到「频段刷新」只要一下，一次误触就可能把 modem 刷掉线。所以那一屏警告留着。
+/// **频段网格默认折叠**（2026-10-15）也在这一条下面：一进页面就是一屏 24 个可点的
+/// 格子，而每一次误触都可能被「保存」写进基带。折叠之后要先展开才能勾 —— 多出来的
+/// 那一次点击，正是这一页唯一需要的缓冲。
 struct BandPanels: View {
 
-    /// 基带取数与写入。**由 `BandHubView` 注入**，不再是这里的 `@StateObject` ——
-    /// 分段之间来回切会重建本视图，服务挂在视图上的话每次都重读一遍基带、
-    /// 整屏盖一次转圈。详见 `BandHubView` 类型头上那段说明。
+    /// 基带取数与写入。**由 `BandView` 注入**，不再是这里的 `@StateObject` ——
+    /// 服务挂在视图上的话，页面重建一次就重读一遍基带、整屏盖一次转圈。
+    /// 详见 `BandView` 类型头上那段说明。
     @ObservedObject var service: BandService
 
-    /// 设备摘要（机型 · 总容量 · iOS 版本）。
-    ///
-    /// **刻意不观察 `HardwareMonitor`。** 这一页原来为了显示这一行而 `@EnvironmentObject`
-    /// 了它，代价是**每秒重算整页**（40 多个频段格子 + 四个动作按钮）—— 而这三个值
-    /// 出厂就定死、容量十秒才变一次。改成进页面时取一次（`HardwareMonitor.deviceSummary()`）。
-    @State private var deviceSummary = "—"
+    /// 自动刷新的参数。**由 `BandView` 注入** —— 「当前网络」卡片下半截要按它决定
+    /// 画哪几行（见 `RefreshStatusRows`），而参数的持有者是页面层。
+    let refreshConfig: BandAutoRefreshConfig
 
     /// 界面上的勾选状态：制式 → 启用的频段号。
     ///
@@ -66,6 +72,13 @@ struct BandPanels: View {
     /// 哪张卡」不该在切分段时丢掉。
     @State private var selection: [RadioAccessTechnology: Set<Int>] = [:]
     @State private var hasUnsavedChanges = false
+
+    /// 已经展开的频段网格。**默认空 = 全部折叠**（2026-10-15 要求）。
+    ///
+    /// 刻意**不持久化**（不是 `@AppStorage`）：折叠是一次浏览里的临时姿态，每次进
+    /// 这一页都从「全折叠」开始 —— 那正是这个改动想要的效果。持久化的话，用户某次
+    /// 展开过之后就再也回不到默认的收拢状态了。
+    @State private var expandedRats: Set<RadioAccessTechnology> = []
 
     // MARK: 四层警告的持久化开关
 
@@ -105,29 +118,35 @@ struct BandPanels: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                if let banner {
-                    bannerPanel(banner)
-                }
-
-                if service.availability == .unavailable {
-                    unavailablePanel
-                } else {
-                    // 四个动作按钮：一排，紧贴页面顶部（「当前网络」卡片上方）。
-                    //
-                    // 2026-10-14 定稿：保存 / 刷新从导航栏右上搬下来，恢复默认 /
-                    // 重启蜂窝网络服务从页面最底部搬上来，四个并排。
-                    actionRow
-                    infoPanel
-                    if service.slots.count > 1 { slotPanel }
-                    bandPanels
-                }
+        // ── 为什么这里是 `VStack`，而电源页那边是 `Group` ──────────────────────
+        //
+        // 两处看着像同一件事（都是「一段内容」），但 `Group` 有个必须知道的性质：
+        // **挂在 `Group` 上的修饰符会被应用到组内每一个子视图上**。这一层下面挂着
+        // 一整套生命周期与弹窗（`.task` / `.onAppear` / `.onDisappear` / 四个
+        // `.onChange` / `.alert` / 三个 `.confirmationDialog` / `.disabled` /
+        // `.overlay`）—— 换成 `Group` 会变成「每个子视图各弹一次保存确认」，
+        // 而且不报任何错。
+        //
+        // 包一层 `VStack` 就能把这一整套收在一个视图上。代价是这一层从「外层
+        // `LazyVStack` 的四个元素」变成一个元素，懒加载范围小了一格 —— 而它内部
+        // 只有四块、且都在页面顶部，省不下什么。间距 14 与外层是同一个数。
+        VStack(spacing: 14) {
+            if let banner {
+                bannerPanel(banner)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 2)
-            .padding(.bottom, 24)
-            .mwContainerWidth()
+
+            if service.availability == .unavailable {
+                unavailablePanel
+            } else {
+                // 四个动作按钮：一排，紧贴页面顶部（「当前网络」卡片上方）。
+                //
+                // 2026-10-14 定稿：保存 / 刷新从导航栏右上搬下来，恢复默认 /
+                // 重启蜂窝网络服务从页面最底部搬上来，四个并排。
+                actionRow
+                infoPanel
+                if service.slots.count > 1 { slotPanel }
+                bandPanels
+            }
         }
         .disabled(isInitialLoad)
         .overlay {
@@ -147,9 +166,6 @@ struct BandPanels: View {
         .task {
             // 首次进入先给整屏警告。它挡在加载之前 —— 让人先看懂风险，再看数据。
             if !entryTipsDone { showEntryTips = true }
-            // 设备摘要取一次就够（出厂就定死的机型 / 系统版本，加十秒才变一次的容量）。
-            // 它是一次文件系统往返，几十微秒，放在主 actor 上无所谓。
-            if deviceSummary == "—" { deviceSummary = HardwareMonitor.deviceSummary() }
             // 读 / 探卡槽都在服务里（已经读过就是静默刷新，见 `BandService.ensureLoaded`）。
             await service.ensureLoaded()
         }
@@ -165,7 +181,7 @@ struct BandPanels: View {
         // 离开就停表：切分段、切分页都会走到这里。定时器挂在 `.default` 模式上，
         // 滚动期间本来就会让路，这一句管的是「人已经不在这页了」那种情况。
         .onDisappear { service.stopSlotPolling() }
-        // 右上角只有齿轮（装「关于」），由外壳 `PageHubScaffold` 渲染 —— 这一层
+        // 右上角只有齿轮（维护 / 关于），由外壳 `PageScaffold` 渲染 —— 这一层
         // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
         // `.toolbar` 排在导航栏右侧，现在这四个动作全部搬到页面顶部（见 `actionRow`）。
         .onChange(of: service.bandInfo) { _ in
@@ -229,16 +245,28 @@ struct BandPanels: View {
 
     // MARK: - 顶部信息
 
-    /// 设备 + 当前网络的只读状态。
+    /// 设备 + 当前网络的只读状态 + 自动刷新引擎的状态。
     ///
     /// 每一行**只在真的有值时才画** —— 读不到就不占位置。原版会把读不到的项显示成
     /// 空白，那会让人以为「信号是 0」而不是「这一项读不到」。
+    ///
+    /// ── 2026-10-15：与「频段刷新」那一张同名的卡片合并 ──────────────────────
+    ///
+    /// 两张卡片说的是同一件事的两半：这张说「网络本身什么样」，那张说「刷新引擎
+    /// 此刻在干什么」。分段取消之后，两张同名卡片分在两处只会让人以为看花了眼。
+    ///
+    /// 合并时去掉了三样：
+    ///
+    ///   · **设备型号**（`Device`）—— 那是机型 / 容量 / 系统版本，与「当前网络」
+    ///     没有任何关系，它在硬件页有专门的位置；
+    ///   · **卡槽**（`Slot`）—— 下面那张「SIM Slot」卡片就是它的选择器，同一页
+    ///     画两遍只会让人分不清哪个能点；
+    ///   · **重复的 RSRP** —— 两边各有一行。保留这一份（读的是 `copyCellInfo`，
+    ///     是这一页的主体读数），去掉刷新引擎那一份。
     private var infoPanel: some View {
         let info = service.slotInfo
         return Panel("Current network", systemImage: "antenna.radiowaves.left.and.right") {
             VStack(alignment: .leading, spacing: 10) {
-                infoRow("Device", deviceSummary)
-
                 if let name = info?.carrierName {
                     infoRow("Carrier", name)
                 }
@@ -278,6 +306,14 @@ struct BandPanels: View {
                 if let cellId = info?.cellId {
                     infoRow("Cell ID", String(cellId))
                 }
+
+                // ── 下半截：自动刷新引擎 ────────────────────────────────────────
+                //
+                // 分隔线在这里是必需的：上下两半的字号、灰度完全一样，不加线的话
+                // 「State」那一行会被读成上面网络的又一个字段。见 `RefreshStatusRows`。
+                Divider().overlay(Color.mwCardStroke)
+
+                RefreshStatusRows(config: refreshConfig)
             }
         }
     }
@@ -358,27 +394,73 @@ struct BandPanels: View {
     /// 没有用 `Panel`：它的 `trailing` 只收一个 `Text`，放不下「全选 / 取消全选」两个
     /// 按钮，而把这两个按钮挪到内容里会多占一整行。卡片底色、描边、圆角用的是同一组
     /// 设计 token，视觉上与 `Panel` 一致。
+    ///
+    /// ── 2026-10-15：默认折叠 ────────────────────────────────────────────────
+    ///
+    /// 一进页面就是一屏 24 个可点的格子，而这一页的每一次勾选都可能被「保存」写进
+    /// 基带。折叠之后要先展开才能勾 —— 多出来的那一次点击，正是这一页唯一需要的缓冲。
+    ///
+    /// **折叠时标题旁边补一个「选了几个 / 一共几个」**：不然收起之后这一页什么都不说，
+    /// 用户得逐张展开才知道自己锁了什么，而「我到底锁了哪些」正是来这一页要看的第一件事。
+    ///
+    /// 「全选 / 清空」在折叠时**不画**。它们是盲操作 —— 看不到勾选状态时一键改掉全部
+    /// 频段，而下一步就是写基带，这正是要避免的组合。展开之后它们照常在。
     private func bandPanel(rat: RadioAccessTechnology, info: BandSet) -> some View {
         let bands = info.supportedBands(of: rat)
         let active = selection[rat] ?? []
+        let isExpanded = expandedRats.contains(rat)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Text(verbatim: rat.title)
-                    .mwCaption()
+                // 整行标题都是折叠按钮（不只是那个小三角）—— 手指按得中比看得清更难，
+                // 而这一行除了文字没有别的东西。
+                Button {
+                    if isExpanded {
+                        expandedRats.remove(rat)
+                    } else {
+                        expandedRats.insert(rat)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(AppFont.text(11, weight: .bold))
+                            .foregroundStyle(Color.mwAccent)
+                            // 90° 而不是换成另一个符号：同一个图形转过去，读的人
+                            // 一眼能连上是「同一个东西换了姿态」。
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        Text(verbatim: rat.title)
+                            .mwCaption()
+                        if !isExpanded {
+                            Text(verbatim: "\(active.count) / \(bands.count)")
+                                .font(AppFont.text(12, weight: .semibold))
+                                .foregroundStyle(Color.mwAccent)
+                        }
+                    }
+                    // 让整行的空白处也能点，而不是只有图标和文字那一小块。
+                    .contentShape(Rectangle())
+                }
+                // `.plain` 覆盖外层那个 `.borderless`：标题不是「一行里的一个动作」，
+                // 它是这一整块的开合开关，不该带按钮的高亮底色。
+                .buttonStyle(.plain)
+
                 Spacer(minLength: 8)
-                // 与维护页那两个并排按钮同一个理由：不加 `.borderless` 的话，
-                // 点一个会把行内两个都触发。
-                Button("Select All") { setAll(rat, in: bands, on: true) }
-                    .font(AppFont.text(12, weight: .semibold))
-                Button("Clear") { setAll(rat, in: bands, on: false) }
-                    .font(AppFont.text(12, weight: .semibold))
+
+                if isExpanded {
+                    // 与维护页那两个并排按钮同一个理由：不加 `.borderless` 的话，
+                    // 点一个会把行内两个都触发。
+                    Button("Select All") { setAll(rat, in: bands, on: true) }
+                        .font(AppFont.text(12, weight: .semibold))
+                    Button("Clear") { setAll(rat, in: bands, on: false) }
+                        .font(AppFont.text(12, weight: .semibold))
+                }
             }
             .buttonStyle(.borderless)
             .tint(.mwAccent)
 
-            LazyVGrid(columns: gridColumns, spacing: 8) {
-                ForEach(bands, id: \.self) { band in
-                    bandCell(rat: rat, band: band, isOn: active.contains(band.number))
+            if isExpanded {
+                LazyVGrid(columns: gridColumns, spacing: 8) {
+                    ForEach(bands, id: \.self) { band in
+                        bandCell(rat: rat, band: band, isOn: active.contains(band.number))
+                    }
                 }
             }
         }
