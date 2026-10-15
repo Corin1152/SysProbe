@@ -867,14 +867,38 @@ static int proc_bundle_display_name(const char *bundlePath, char *out, size_t ou
     }
 
     int ok = 0;
-    CFStringRef name = CFBundleGetDisplayName(bundle);
-    if (name == NULL) {
-        name = CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleNameKey);
+    // ── 为什么不用 `CFBundleGetDisplayName` ──────────────────────────────────
+    //
+    // 它是**私有** API（在 CoreFoundation 的 `CFBundlePriv.h` 里），公开 SDK 的
+    // 头文件没有它 —— 而这一处不是链接期失败，是**编译期**：
+    //
+    //     error: call to undeclared function 'CFBundleGetDisplayName'
+    //     error: incompatible integer to pointer conversion initializing 'CFStringRef'
+    //
+    // 两个错 CI 都实测报过（`-Wimplicit-function-declaration` 在 C99 之后是错误）。
+    //
+    // 公开的等价路径是 `CFBundleGetValueForInfoDictionaryKey`：它同样会走
+    // `InfoPlist.strings` 的本地化查找，所以中文环境下照样拿到中文名。
+    // 而 `CFBundleGetDisplayName` 内部本来就是「先查 `CFBundleDisplayName`、
+    // 取不到再退 `CFBundleName`」，下面这两步正是把那个顺序写出来 ——
+    // 不是「换个能编过的写法」，是同一件事。
+    //
+    // 两个键都用 `CFSTR` 字面量而不是 `kCFBundle*Key` 常量：少依赖一个导出符号，
+    // 而这两个键名属于 plist 格式的一部分，不会变。
+    CFTypeRef value = CFBundleGetValueForInfoDictionaryKey(bundle,
+                                                            CFSTR("CFBundleDisplayName"));
+    if (value == NULL) {
+        value = CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("CFBundleName"));
     }
     // 名字过长（或含转不出来的字符）时 `CFStringGetCString` 返回 false ——
     // 那时保留进程名，不写一个截断的名字出去。
-    if (name != NULL &&
-        CFStringGetCString(name, out, (CFIndex)outSize, kCFStringEncodingUTF8)) {
+    //
+    // `CFGetTypeID` 那道检查是防御：这个键理论上一定是字符串，但真机上的第三方
+    // App 什么都写得出来，类型不对时 `CFStringGetCString` 会按别的结构去读 ——
+    // 与其信它，不如先判一次。
+    if (value != NULL && CFGetTypeID(value) == CFStringGetTypeID() &&
+        CFStringGetCString((CFStringRef)value, out, (CFIndex)outSize,
+                           kCFStringEncodingUTF8)) {
         ok = 1;
     }
     CFRelease(bundle);
@@ -896,8 +920,8 @@ typedef struct {
     char comm[MAXCOMLEN + 1];
     /// 显示名 —— 从 `.app` 里读出来的应用名。取不到时与 `comm` 相同。
     ///
-    /// 128 字节：应用名远短于此，留足是为了万一 `CFBundleGetDisplayName`
-    /// 返回一长串时不会在 `CFStringGetCString` 那里失败。
+    /// 128 字节：应用名远短于此，留足是为了万一 Info.plist 里那个键写得很长时
+    /// 不会在 `CFStringGetCString` 那里失败（那时会退回进程名）。
     char name[128];
     /// 1 = 用户安装的 App（可执行文件在 Bundle 容器里），0 = 系统自带。
     int userApp;
@@ -922,9 +946,17 @@ static int proc_compare_pid(const void *a, const void *b) {
 /// 采集进程表。
 ///
 /// 成功返回条目数（`*outEntries` 由调用方 `free`），失败返回 -1。
-/// `*outResolved` 是这一趟里真的读到资源计数的进程数 —— 报告顶部那个统计，
-/// 界面据此决定是显示数字还是显示「—」。
-static int proc_collect(proc_entry **outEntries, int *outResolved) {
+///
+/// 两个出参都是给报告顶部的统计用的，**它们是两条独立的诊断线**：
+///
+/// · `*outResolved` —— 有多少个进程真的读到了资源计数（`proc_pidinfo` 通没通）；
+/// · `*outNamed`    —— 有多少个进程从 `.app` 包里读到了应用显示名。
+///
+/// 刻意分开：前者失败时界面把 CPU / 内存显示成「—」，后者失败时界面显示的是
+/// 进程名而不是应用名。**它们可能一个通一个不通** —— `proc_pidpath` 通（所以
+/// 分组是对的、能找到 `.app` 路径）而 Bundle 容器读不进去（所以名字取不到），
+/// 那是一种真实存在且需要区分开的状态。
+static int proc_collect(proc_entry **outEntries, int *outResolved, int *outNamed) {
     int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
     size_t size = 0;
 
@@ -957,6 +989,7 @@ static int proc_collect(proc_entry **outEntries, int *outResolved) {
     sysprobe_proc_pidpath_fn pidpath = proc_pidpath_sym();
     sysprobe_proc_pidinfo_fn pidinfo = proc_pidinfo_sym();
     int resolved = 0;
+    int named = 0;
 
     int kept = 0;
     for (size_t i = 0; i < count; i++) {
@@ -1010,8 +1043,10 @@ static int proc_collect(proc_entry **outEntries, int *outResolved) {
                     char bundlePath[SYSPROBE_PROC_PATH_MAX];
                     memcpy(bundlePath, exePath, bundleLen);
                     bundlePath[bundleLen] = '\0';
-                    proc_bundle_display_name(bundlePath, entries[kept].name,
-                                             sizeof(entries[kept].name));
+                    if (proc_bundle_display_name(bundlePath, entries[kept].name,
+                                                 sizeof(entries[kept].name))) {
+                        named++;
+                    }
                 }
             }
         }
@@ -1038,20 +1073,23 @@ static int proc_collect(proc_entry **outEntries, int *outResolved) {
 
     *outEntries = entries;
     *outResolved = resolved;
+    *outNamed = named;
     return kept;
 }
 
 /// 写报告。返回 0 成功，-1 写不出来。
 static int proc_write_report(const char *path, const proc_entry *entries, int count,
-                             int resolved) {
+                             int resolved, int named) {
     FILE *f = fopen(path, "w");
     if (f == NULL) {
         return -1;
     }
 
-    // `resolved` 摆在最前面：界面靠它判断「资源计数这一趟到底通没通」，
-    // 而不是去猜 —— 把 0 当成「占用 0」是这一页最容易犯的错。
-    fprintf(f, "{\"count\":%d,\"resolved\":%d,\"processes\":[", count, resolved);
+    // `resolved` 与 `named` 摆在最前面：界面靠它们判断「资源计数这一趟到底通没通」
+    // 与「应用名读没读到」，而不是去猜 —— 把 0 当成「占用 0」是这一页最容易犯的错，
+    // 把进程名当成应用名则是第二容易的。两者是独立的，见 `proc_collect` 的说明。
+    fprintf(f, "{\"count\":%d,\"resolved\":%d,\"named\":%d,\"processes\":[",
+            count, resolved, named);
     for (int i = 0; i < count; i++) {
         if (i > 0) {
             fputc(',', f);
@@ -1085,13 +1123,14 @@ static int proc_write_report(const char *path, const proc_entry *entries, int co
 static int do_proc_list(const char *reportPath) {
     proc_entry *entries = NULL;
     int resolved = 0;
-    int count = proc_collect(&entries, &resolved);
+    int named = 0;
+    int count = proc_collect(&entries, &resolved, &named);
     if (count < 0) {
         fprintf(stderr, "proc-list: sysctl(KERN_PROC_ALL) failed (%s)\n", strerror(errno));
         return SYSPROBE_EXIT_FAILED;
     }
 
-    int written = proc_write_report(reportPath, entries, count, resolved);
+    int written = proc_write_report(reportPath, entries, count, resolved, named);
     free(entries);
 
     if (written != 0) {
@@ -1099,12 +1138,15 @@ static int do_proc_list(const char *reportPath) {
         return SYSPROBE_EXIT_FAILED;
     }
 
-    // 资源计数一个都没读到，说明 libproc 那条路被权限拦住了。
-    // **不影响退出码** —— 进程列表本身是好的，界面该照常显示，
-    // 只是 CPU / 内存两列留空。写一行 stderr，抓日志时一眼能看到。
+    // 下面两条都**不影响退出码** —— 进程列表本身是好的，界面该照常显示。
+    // 各写一行 stderr，抓日志时一眼能看到是哪一层降级了。
     if (resolved == 0) {
         fprintf(stderr, "proc-list: 0/%d processes resolved resource usage"
                         " (libproc blocked or unavailable)\n", count);
+    }
+    if (named == 0) {
+        fprintf(stderr, "proc-list: 0/%d processes resolved an app display name"
+                        " (proc_pidpath blocked, or app bundles unreadable)\n", count);
     }
     return SYSPROBE_EXIT_OK;
 }

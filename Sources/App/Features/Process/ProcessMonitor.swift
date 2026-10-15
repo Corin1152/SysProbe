@@ -169,23 +169,32 @@ nonisolated struct ProcessListReport: Decodable, Sendable {
     /// 这一趟里真的读到资源计数的进程数。0 = libproc 那条路整条不通，
     /// 界面据此把 CPU / 内存两列显示成「—」。
     let resolved: Int
+    /// 这一趟里从 `.app` 包里读到应用显示名的进程数。0 = 一个都没读到，
+    /// 界面据此说明「现在显示的是进程名」。
+    ///
+    /// **与 `resolved` 是两条独立的诊断线**：`proc_pidpath` 通（所以分组是对的）
+    /// 而 Bundle 容器读不进去（所以名字取不到）是一种真实存在的中间状态，
+    /// 见 `Tools/RootTool.c` 里 `proc_collect` 的说明。
+    let named: Int
     let processes: [ProcessEntry]
 
-    private enum CodingKeys: String, CodingKey { case count, resolved, processes }
+    private enum CodingKeys: String, CodingKey { case count, resolved, named, processes }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         processes = try c.decode([ProcessEntry].self, forKey: .processes)
         count = try c.decodeIfPresent(Int.self, forKey: .count) ?? processes.count
         resolved = try c.decodeIfPresent(Int.self, forKey: .resolved) ?? 0
+        named = try c.decodeIfPresent(Int.self, forKey: .named) ?? 0
     }
 }
 
-/// 一次采样的结果。比裸数组多带一个 `resolved` —— 界面要它来判断资源那两列
-/// 该显示数字还是「—」。
+/// 一次采样的结果。比裸数组多带两个统计 —— 界面要它们来判断
+/// 「CPU / 内存该显示数字还是「—」」与「名字该不该说明是进程名」。
 nonisolated struct ProcessSample: Sendable {
     let entries: [ProcessEntry]
     let resolved: Int
+    let named: Int
 }
 
 // MARK: - 采样
@@ -230,7 +239,9 @@ nonisolated enum ProcessSampler {
         }
         removeReport(reportPath)
 
-        return ProcessSample(entries: report.processes, resolved: report.resolved)
+        return ProcessSample(entries: report.processes,
+                             resolved: report.resolved,
+                             named: report.named)
     }
 
     /// 与 `Tools/RootTool.c` 的退出码 enum 对齐：0 = 成功。
@@ -289,6 +300,8 @@ final class ProcessMonitor: ObservableObject {
     @Published private(set) var isSampling = false
     /// 最近一拍里读到资源计数的进程数。0 = 整条 libproc 路不通。
     @Published private(set) var resolvedCount = 0
+    /// 最近一拍里读到应用显示名的进程数。0 = 显示的全是进程名。
+    @Published private(set) var namedCount = 0
     /// 每个进程的 CPU 占用率（0…1，**整机口径**：所有核加起来是 100%）。
     ///
     /// 只有「这一拍与上一拍之间」有基线的进程才在里面 —— 刚出现的进程不在，
@@ -367,6 +380,7 @@ final class ProcessMonitor: ObservableObject {
                 let now = Date()
                 self.processes = result.entries
                 self.resolvedCount = result.resolved
+                self.namedCount = result.named
                 // 先更新列表再算占用率：`updateCPUShare` 内部会把这拍的读数存成
                 // 下一拍的基线，所以两件事的先后顺序只影响这一帧显示什么。
                 self.updateCPUShare(with: result.entries, at: now)

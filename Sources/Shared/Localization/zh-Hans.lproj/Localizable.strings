@@ -435,3 +435,5 @@
 "User Apps" = "用户应用";
 "Per-process CPU and memory are unavailable." = "单个进程的 CPU 与内存读不到。";
 "The private API was blocked, so only names and PIDs are shown." = "私有接口被拦下，因此只显示名称与 PID。";
+"App names are unavailable — showing process names." = "读不到应用名 —— 显示的是进程名。";
+"proc_pidpath or the app bundle could not be read." = "读不到可执行路径，或 App 包打不开。";

@@ -241,10 +241,11 @@ private struct ProcessOverviewPanel: View {
 
                 statusRow
 
-                // 只在「列表有内容、但资源计数一个都没读到」时出现。这一条是
-                // 阶段二（CPU / 内存两列）的唯一失败形态，必须说出来 ——
-                // 否则用户看到整列「—」会以为是这一页坏了，而其实是权限被拦。
-                if !monitor.processes.isEmpty && monitor.resolvedCount == 0 {
+                // 只在「列表有内容、但有东西没读到」时出现。**两种降级分开说** ——
+                // 「CPU / 内存整列是 —」与「名字全是进程名」在界面上看起来完全不同，
+                // 用户据此该做的事也不同。不说清楚的话，两种都会被当成「这一页坏了」。
+                if !monitor.processes.isEmpty
+                    && (monitor.resolvedCount == 0 || monitor.namedCount == 0) {
                     unavailableNotice
                 }
             }
@@ -252,11 +253,26 @@ private struct ProcessOverviewPanel: View {
     }
 
     private var unavailableNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if monitor.resolvedCount == 0 {
+                noticeBlock("Per-process CPU and memory are unavailable.",
+                            detail: "The private API was blocked, so only names and PIDs are shown.")
+            }
+            if monitor.namedCount == 0 {
+                noticeBlock("App names are unavailable — showing process names.",
+                            detail: "proc_pidpath or the app bundle could not be read.")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func noticeBlock(_ title: LocalizedStringKey,
+                             detail: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Per-process CPU and memory are unavailable.")
+            Text(title)
                 .font(AppFont.text(11, weight: .medium))
                 .foregroundStyle(Color.mwMuted)
-            Text("The private API was blocked, so only names and PIDs are shown.")
+            Text(detail)
                 .font(AppFont.text(10))
                 .foregroundStyle(Color.mwMuted.opacity(0.8))
         }

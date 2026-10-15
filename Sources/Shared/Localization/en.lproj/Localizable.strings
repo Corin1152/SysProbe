@@ -435,3 +435,5 @@
 "User Apps" = "User Apps";
 "Per-process CPU and memory are unavailable." = "Per-process CPU and memory are unavailable.";
 "The private API was blocked, so only names and PIDs are shown." = "The private API was blocked, so only names and PIDs are shown.";
+"App names are unavailable — showing process names." = "App names are unavailable — showing process names.";
+"proc_pidpath or the app bundle could not be read." = "proc_pidpath or the app bundle could not be read.";
