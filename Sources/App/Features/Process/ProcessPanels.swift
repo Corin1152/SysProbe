@@ -72,11 +72,14 @@ struct ProcessPanels: View {
     @State private var collapsedGroups: Set<ProcessGroup> = []
 
     var body: some View {
-        // `spacing: 8`（默认 14）—— 这一页几百行**每一行都是这个 `LazyVStack`
-        // 的直接子视图**，所以页面级间距就是行间距。14 加行自身上下各 9 的内边距，
-        // 相邻两行的边框之间要空出 32 pt，用户反馈「行间隙太大」。压到 8 之后是
-        // 8 + 6 + 6 = 20 pt（`ProcessRow` 的内边距同时从 9 收到 6）。
-        PageScaffold("Processes", glow: .mwAccent, spacing: 8, openSettings: openSettings) {
+        // `spacing: 6`（默认 14）—— 这一页几百行**每一行都是这个 `LazyVStack`
+        // 的直接子视图**，所以页面级间距就是行间距。
+        //
+        // 三次收紧的记录：14 + 9 + 9 = 32 pt →（0.0.73）8 + 6 + 6 = 20 pt →
+        // （本轮）6 + 4 + 4 = 14 pt。用户每次都说「再小点」，而进程列表本来就该
+        // 像列表那样紧凑 —— 它唯一的用途是让人一眼扫出「谁在吃 CPU」，
+        // 行与行之间留白越大，一屏能看的行就越少。
+        PageScaffold("Processes", glow: .mwAccent, spacing: 6, openSettings: openSettings) {
             // 概览单独成一个子视图：它观察 `HardwareMonitor`（每秒发布一次），
             // 而列表是几百行 —— 把那份订阅留在这一层，等于每秒让整页 body
             // 重算一遍、把整个列表 diff 一次。拆出去之后只有这个小面板跟着重算。
@@ -355,22 +358,59 @@ private struct ProcessOverviewPanel: View {
     @ObservedObject var monitor: ProcessMonitor
     @EnvironmentObject private var hardware: HardwareMonitor
 
+    /// 概览三格的读数尺寸。`Metric` 默认是 24，这里压到 20（2026-10-15）。
+    ///
+    /// 用户反馈「上方概览卡片高度调小」。这一页真正要看的是下面几百行进程，
+    /// 概览只答「有多少进程 / 整机此刻多忙」，三格读数占的高度是纯开销。
+    /// 20 正好与功率页电池卡片上半截那三格同号 —— 顺带把整页统一了。
+    private static let metricSize: CGFloat = 20
+
     var body: some View {
         Panel("Overview", systemImage: "list.bullet.rectangle") {
-            VStack(alignment: .leading, spacing: 12) {
+            // 12 → 8：标题与三格之间、三格与状态行之间各收 4 pt。卡片四周的
+            // 内边距（`Theme.cardPadding` = 16）是共用的，动它会波及所有页面，
+            // 所以只收这一层自己的间距。
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 12) {
                     Metric(caption: "Processes",
                            value: monitor.processes.isEmpty
                                ? "—"
-                               : "\(monitor.processes.count)")
+                               : "\(monitor.processes.count)",
+                           size: ProcessOverviewPanel.metricSize)
                     // 这两项是**整机**的，不是某个进程的 —— 摆在这里是为了让
                     // 「有多少进程」和「系统此刻有多忙」能对着读。
+                    //
+                    // ── 它为什么不等于下面进程之和（2026-10-15 查）────────────
+                    //
+                    // 用户问「概览的 CPU 占用大于下方进程的占用，查下是什么原因」。
+                    // 结论：**口径不同，不是哪一边算错了。**
+                    //
+                    // · 这一格来自 `host_processor_info(PROCESSOR_CPU_LOAD_INFO)` 的
+                    //   tick 差分（见 `HardwareMonitor.readCPU`），分母是**所有核**的
+                    //   tick 总和，busy 时间是**整机**口径；
+                    // · 列表里每一个进程是 `proc_pidinfo` 的
+                    //   `pti_total_user + pti_total_system`，只累计它自己的时间
+                    //   （见 `ProcessMonitor.updateCPUShare`）。
+                    //
+                    // 而**内核线程不属于任何进程**（`kernel_task` 的线程、驱动里的
+                    // 工作线程、中断处理……）。它们的 CPU 时间在整机口径里算 busy，
+                    // 在进程列表里却找不到归属。所以恒有 「整机 ≥ 进程之和」，
+                    // iOS 空闲时内核占比本就不低，差出两三倍都属正常。
+                    //
+                    // 次要因素：这一格每秒刷新（1 秒窗），进程列表每 `interval`
+                    // 秒刷新（默认 3 秒窗）。突发负载下两者不同步 —— 卡在尖峰那一拍
+                    // 看到「概览高、列表低」同样正常。
+                    //
+                    // **硬把这一格改成「进程之和」是个坏主意**：那样它就失去
+                    // 「整机此刻多忙」这个唯一的用途。真相要的是说清楚，不是抹平。
                     Metric(caption: "CPU",
                            value: percent(hardware.snapshot.cpu.usage),
-                           tint: .mwAccent)
+                           tint: .mwAccent,
+                           size: ProcessOverviewPanel.metricSize)
                     Metric(caption: "Memory",
                            value: percent(hardware.snapshot.memory.usage),
-                           tint: .mwBattery)
+                           tint: .mwBattery,
+                           size: ProcessOverviewPanel.metricSize)
                 }
 
                 statusRow
@@ -590,9 +630,12 @@ private struct ProcessRow: View {
             }
         }
         .padding(.horizontal, 12)
-        // 上下各 9 → 6（2026-10-15）：行间隙的另一半。与页面级间距（进程页传 8）
-        // 合起来把相邻两行边框之间的距离从 32 pt 收到 20 pt。
-        .padding(.vertical, 6)
+        // 上下各 9 → 6（0.0.73）→ 4（本轮）：行间隙的另一半。与页面级间距
+        // （进程页传 6）合起来是 6 + 4 + 4 = 14 pt。
+        //
+        // 不再往下压：行内是两行文字（13 pt 名字 + 10 pt 详情），它们自己占了约
+        // 30 pt，再收上下内边距就要贴到边框上了。
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

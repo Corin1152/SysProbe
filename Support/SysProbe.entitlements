@@ -189,5 +189,23 @@
 	-->
 	<key>com.apple.developer.networking.multicast</key>
 	<true/>
+
+	<!-- ── 设备名（2026-10-15）──────────────────────────────────────────────── -->
+	<!--
+	  「设置 → 通用 → 关于本机 → 名称」里用户起的名字。
+
+	  iOS 16 起，`UIDevice.current.name` 与 MobileGestalt 的
+	  `MGCopyAnswer("UserAssignedDeviceName")` **都要这一条**才返回真名，
+	  拿不到就一律给 "iPhone" —— 用户报了两次「设备名显示 iPhone」就是这个。
+
+	  它与下面那条 WOL 权限同一个域（`com.apple.developer.*`），本包是靠
+	  TrollStore 保留 entitlements 才带得上的。
+
+	  **这是第一道，不是唯一一道**：`HardwareMonitor.start()` 在读到通用名时
+	  还会借 root 工具（`SysProbeRootTool device-name`）读一次 —— root 身份不受
+	  这道闸门约束。两条路互为兜底，任何一条通了这一格就对了。
+	-->
+	<key>com.apple.developer.device-information.user-assigned-device-name</key>
+	<true/>
 </dict>
 </plist>

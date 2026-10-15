@@ -197,4 +197,46 @@ nonisolated enum DeviceActions {
         }
         return status == 0
     }
+
+    /// 借 root 工具读「用户给这台设备起的名字」。
+    ///
+    /// ── 为什么要绕这一圈（2026-10-15）───────────────────────────────────────
+    ///
+    /// 主 App 里 `UIDevice.current.name` 与 `MGCopyAnswer("UserAssignedDeviceName")`
+    /// 在 iOS 16+ 上都要 `com.apple.developer.device-information.user-assigned-device-name`
+    /// 那个 entitlement 才返回真名，拿不到就**一律给 "iPhone"**。用户先报了
+    /// 「设备名显示 iPhone」，App 侧改走 MobileGestalt 之后**仍然是 iPhone** ——
+    /// 说明那道闸门在 App 进程里没打开。root 身份没有这道闸门，所以借工具读一次。
+    ///
+    /// 结果走报告文件（与 `StorageCleaner.scan` 同一条约定）：App 传一个 tmp 路径，
+    /// 工具写完 JSON + `chmod 0644` 再退出，这里读完删掉。
+    ///
+    /// 读不到返回 `nil`，调用方保持原来的名字 —— 「设备名读不到」不该变成一个新的
+    /// 失败模式，这一格本来也只是少一行信息。
+    ///
+    /// **阻塞**调用（起子进程并等它，最多约 3 秒），调用方负责别放在主线程上。
+    static func deviceName() -> String? {
+        guard let path = toolPath else { return nil }
+
+        // UUID 命名：万一工具超时没写成报告，也不会读到上一次的旧文件。
+        let report = NSTemporaryDirectory()
+            + "sysprobe-device-name-\(UUID().uuidString).json"
+        defer { try? FileManager.default.removeItem(atPath: report) }
+
+        var status: Int32 = 0
+        let spawnResult = sysprobe_spawn_root_tool_sync_args(
+            path, "device-name", report, nil, nil, nil, 3_000, &status)
+        guard spawnResult == 0, status == 0 else { return nil }
+
+        guard let data = FileManager.default.contents(atPath: report),
+              let payload = try? JSONDecoder().decode(DeviceNameReport.self, from: data),
+              !payload.name.isEmpty else { return nil }
+        return payload.name
+    }
+
+    /// `device-name` 那份报告。只有一个键 —— 读不到时工具写的是空串，
+    /// 上面那句 `!payload.name.isEmpty` 会把这种情况挡掉。
+    private struct DeviceNameReport: Decodable {
+        let name: String
+    }
 }

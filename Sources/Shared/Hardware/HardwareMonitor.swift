@@ -238,6 +238,23 @@ final class HardwareMonitor: ObservableObject {
         first.system = Self.readSystem()
         snapshot = first
 
+        // ── 设备名兜底（2026-10-15）─────────────────────────────────────────────
+        //
+        // 本地那条路（`UIDevice.current.name` 与 MobileGestalt）在 iOS 16+ 上都要
+        // `com.apple.developer.device-information.user-assigned-device-name`
+        // 这个 entitlement，拿不到就**一律给通用名** "iPhone" / "iPad"。
+        //
+        // **只在读到通用名时才借 root 工具**：权限一旦生效（或者设备本来就
+        // 不叫这两个名字）这条路就自动不再触发，不会白起一次子进程。
+        // 用户真把设备命名为 "iPhone" 时也只是多跑一次，读到的是同一个值。
+        //
+        // 不 await：这一格晚一拍（1 秒）再变成真名是可以接受的，而
+        // `start()` 不该被一次子进程卡住。
+        let localName = Self.systemIdentity.deviceName
+        if localName == "iPhone" || localName == "iPad" {
+            Task { await Self.resolveDeviceName() }
+        }
+
         // 与 `PowerMonitor.start` 同样的理由：挂在 `.default` 模式上的 `Timer` 会在
         // 滚动期间自动让路，`Task.sleep` 不会。详见那边的注释。
         //
@@ -563,10 +580,36 @@ final class HardwareMonitor: ObservableObject {
         return stats
     }()
 
+    /// 借 root 工具读到的设备名。`nil` = 还没读到（或工具不可用）。
+    ///
+    /// ── 为什么不塞进 `systemIdentity`（2026-10-15）───────────────────────────
+    ///
+    /// 那个 `let` 是在**首次访问时**一次性构造的，而设备名要**在启动之后**才能从
+    /// 子进程拿到 —— 时序上晚于它，写不进去。所以单独存一份，由 `readSystem`
+    /// 在每次采样时叠加上去。
+    private static var rootDeviceName: String?
+
     private static func readSystem() -> SystemStats {
         var stats = systemIdentity
+        // root 工具读到的名字优先 —— 本地那条路在 iOS 16+ 上拿不到真名。
+        if let rootDeviceName { stats.deviceName = rootDeviceName }
         stats.uptime = ProcessInfo.processInfo.systemUptime
         return stats
+    }
+
+    /// 起一次 root 工具把设备名读回来，读到就覆盖这一格。
+    ///
+    /// 只在 `start()` 里跑一次（进页面时），不进每秒的采样路径 —— 起一次子进程
+    /// 是几十毫秒的量级，放进每秒那一拍就成了这一页最贵的一项。
+    ///
+    /// `DeviceActions.deviceName()` 是阻塞调用，所以整段丢到 detached 任务上；
+    /// 写回 `rootDeviceName` 时回到主 actor（本类默认 MainActor）。
+    private static func resolveDeviceName() async {
+        let name = await Task.detached(priority: .utility) {
+            DeviceActions.deviceName()
+        }.value
+        guard let name else { return }
+        rootDeviceName = name
     }
 
     // MARK: sysctl 辅助

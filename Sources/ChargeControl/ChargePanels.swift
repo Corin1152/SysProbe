@@ -347,6 +347,21 @@ private struct MenuRow<Options: View>: View {
 /// 电池那两张卡片合并之后，这个行样式被 `DashboardPanels`（功率页）也拿去用了 ——
 /// 合并后的电池卡片里，上半截是功率页原有的实时读数，下半截是这里原来的静态参数。
 /// 复制一份的话两处会慢慢长歪（字号、对齐、占位符的灰），而它们本来就是同一个东西。
+///
+/// ── 2026-10-15 第四次改：对齐频段页 `infoRow` ────────────────────────────────
+///
+/// 用户说「健康度数值太小、不太正常，调整为跟频段页当前网络的数值相同大小」并附了
+/// 两页截图。改了三次（14 → 16 → 15）都不满意，看截图才明白症结不在这一个数字的
+/// **绝对大小**，而在**值与标签几乎同号**：这里是「标签 14 medium / 值 15 semibold」，
+/// 差 1 pt，读起来像标签的附属；频段页是「标签 13 regular 淡 / 值 13 semibold」，
+/// 同号但粗细对比分明，值一眼就跳出来。
+///
+/// 现在两处一起照频段页来：标签 13 淡、值 13 粗。**绝对值小了，对比反而强了。**
+/// 见 `body` 里的详细说明。
+///
+/// 顺带修了一处死参数：`monospaced` 以前声明了却从没被 body 用过（`Serial` 那一行
+/// 传 `true` 毫无效果）。现在它为真时值走 `AppFont.mono` —— 序列号混字母与数字，
+/// 比例字形下会参差不齐。
 struct ValueRow: View {
     let title: LocalizedStringKey
     let value: String
@@ -354,26 +369,44 @@ struct ValueRow: View {
     var monospaced = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        // 间距与 `BandPanels.infoRow`（频段页「当前网络」）一致的 12。
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
-                .font(AppFont.text(14, weight: .medium))
-                .foregroundStyle(Color.primary)
+                // ── 2026-10-15：对齐频段页 `infoRow` 的样式 ─────────────────────
+                //
+                // 用户说「电源页健康度数值字体太小、不太正常，调整为跟频段页
+                // 当前网络的数值相同大小」，并附了两页的截图。
+                //
+                // 看截图才知道差别在哪：频段页「当前网络」是**11 行同一种
+                // 「标签 + 值」**，值一律 13 pt semibold；而这里标签是 14 pt
+                // medium、值 15 pt semibold —— **值与标签只差 1 pt**，
+                // 读起来像「标签的附属」而不是一个读数。用户说的「太小、不正常」
+                // 说的正是这个，不是绝对值小。
+                //
+                // 所以两处一起改：标签降到 13 pt 并压淡，值也降到 13 pt 但保持
+                // semibold。**字号虽然小了，值与标签的对比反而更强**（细而淡
+                // 对粗而浓），整行的样式也就和频段页完全一致了。
+                //
+                // `ValueRow` 是电源页与充电控制页共用的一个行样式，改这里两处
+                // 一起生效 —— 它们本来就是同一个东西（见本类型头上的说明）。
+                .font(AppFont.text(13))
+                .foregroundStyle(Color.mwMuted)
             Spacer(minLength: 8)
             Text(value)
-                // ── 2026-10-15：14 → 15 ────────────────────────────────────────
+                // 值的字号跟着标签一起降到 13 —— 与 `infoRow` 的值完全相同
+                // （`AppFont.text(13, weight: .semibold)`）。
                 //
-                // 原来是 14：与上面的标签同号，读起来像「标签的附属」而不是一个
-                // 读数；而同一张卡片上半截那三格（电芯电压 / 电流 / 温度）是
-                // 20 pt，上下差六号，下半截那一列数字显得缩进去了。
-                //
-                // 中途试过 16，用户回「改成 15pt」。15 是「比标签大一档、又明确
-                // 不跟上半截那三格争」的位置 —— 这一列是六行**次要**读数
-                // （健康度 / 循环次数 / 两种容量 / 开机电压 / 序列号），
-                // 尺寸上不该和上面那三格实时读数平起平坐。
-                .mwReadout(size: 15, weight: .semibold)
+                // 这里**不用 `mwReadout`**：那个会加 `.monospacedDigit()`。
+                // 频段页的值没有它，而加上了会让数字字形在 SF  Proportional
+                // 与 Tabular 之间换一版宽度 —— 视觉上比频段页窄一圈。
+                // 需要等宽数字的那一行显式传 `monospaced: true`，走 `mwMono`。
+                .font(monospaced
+                     ? AppFont.mono(13, weight: .semibold)
+                     : AppFont.text(13, weight: .semibold))
                 .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.trailing)
         }
     }
 }

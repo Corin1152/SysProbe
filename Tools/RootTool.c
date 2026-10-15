@@ -15,6 +15,7 @@
 //      clean-scan         存储清理：扫描各目录与应用容器的缓存大小，写 JSON 报告
 //      clean-run          存储清理：按范围清空对应目录的内容，写 JSON 报告
 //      proc-list          进程列表：列出当前进程（名称 / PID / 属主 / 状态），写 JSON 报告
+//      device-name        读用户给设备起的名字，写 JSON 报告
 //
 //  ── 为什么是独立二进制，而不是把这几行写进 App ──────────────────────────
 //
@@ -2305,6 +2306,74 @@ static int do_clean_run(const char *scope, const char *reportPath,
     return SYSPROBE_EXIT_OK;
 }
 
+/// 用户给设备起的名字（「设置 → 通用 → 关于本机 → 名称」）。
+///
+/// ── 为什么要在 root 工具里读（2026-10-15）───────────────────────────────────
+///
+/// 主 App 里 `UIDevice.current.name` 与 `MGCopyAnswer("UserAssignedDeviceName")`
+/// 在 iOS 16+ 上都要 `com.apple.developer.device-information.user-assigned-device-name`
+/// 这个 entitlement 才返回真名，拿不到就**一律给 "iPhone"**。用户先报了
+/// 「设备名显示 iPhone」，App 侧改走 MobileGestalt 之后**仍然是 iPhone** ——
+/// 说明那道闸门在 App 进程里没打开。root 身份没有这道闸门，所以借这里读一次。
+///
+/// 结果走报告文件，与 clean-* / proc-list 同一条约定：App 传一个 tmp 路径进来，
+/// 这里写完 JSON、`chmod 0644`（属主是 root，不放开权限 App 读不到）再退出，
+/// App 读完自己删。
+///
+/// **读不到不算失败**：写一个 `{"name":""}` 就返回成功，App 侧看到空串会保持
+/// 原来的名字。这样「设备名读不到」不会变成一个新的失败模式 —— 这一页本来
+/// 也只是少一行信息。
+static int do_device_name(const char *reportPath) {
+    if (geteuid() != 0) {
+        fprintf(stderr, "device-name: not running as root\n");
+        return SYSPROBE_EXIT_NOT_ROOT;
+    }
+
+    char name[256];
+    name[0] = '\0';
+
+    // `MGCopyAnswer` 是 MobileGestalt 的私有入口，没有可链接的头文件，只能 dlsym。
+    // 与下面 libproc 那两个符号同一手法：取不到就安静降级（名字留空）。
+    //
+    // `RTLD_DEFAULT` 先试一次：MobileGestalt 早就被 SpringBoard 之类加载进
+    // 共享缓存了，多数情况下不必真的去 dlopen。
+    typedef CFStringRef (*mg_copy_answer_fn)(CFStringRef);
+    mg_copy_answer_fn copyAnswer =
+        (mg_copy_answer_fn)dlsym(RTLD_DEFAULT, "MGCopyAnswer");
+    void *handle = NULL;
+    if (copyAnswer == NULL) {
+        handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+        if (handle != NULL) {
+            copyAnswer = (mg_copy_answer_fn)dlsym(handle, "MGCopyAnswer");
+        }
+    }
+
+    if (copyAnswer != NULL) {
+        CFStringRef answer = copyAnswer(CFSTR("UserAssignedDeviceName"));
+        if (answer != NULL) {
+            // 转不成 UTF-8 就保持空串 —— 名字里出现怪字符时宁可退回 App 侧
+            // 的通用名，也不要塞一个截断的半个字符进去。
+            CFStringGetCString(answer, name, (CFIndex)sizeof(name),
+                               kCFStringEncodingUTF8);
+            CFRelease(answer);
+        }
+    }
+    if (handle != NULL) {
+        dlclose(handle);
+    }
+
+    FILE *f = fopen(reportPath, "w");
+    if (f == NULL) {
+        return SYSPROBE_EXIT_FAILED;
+    }
+    fputs("{\"name\":", f);
+    clean_json_string(f, name);
+    fputs("}", f);
+    fclose(f);
+    chmod(reportPath, 0644);
+    return SYSPROBE_EXIT_OK;
+}
+
 int main(int argc, char *argv[]) {
     // clean-* 系列带自己的参数，放在「argc == 2」的检查**之前**分派。
     if (argc >= 2 && strcmp(argv[1], "clean-scan") == 0) {
@@ -2334,13 +2403,20 @@ int main(int argc, char *argv[]) {
         }
         return do_proc_list(argv[2]);
     }
+    if (argc >= 2 && strcmp(argv[1], "device-name") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "usage: %s device-name <report.json>\n", argv[0]);
+            return SYSPROBE_EXIT_USAGE;
+        }
+        return do_device_name(argv[2]);
+    }
 
     if (argc != 2) {
         fprintf(stderr,
                 "usage: %s check|reboot|respring|restart-commcenter"
                 "|thermal-status|thermal-disable|thermal-enable|daemon-kill"
                 "|clean-scan <report>|clean-run <scope> <report> [bundleId] [excludeCsv]"
-                "|proc-list <report>\n",
+                "|proc-list <report>|device-name <report>\n",
                 argv[0]);
         return SYSPROBE_EXIT_USAGE;
     }
