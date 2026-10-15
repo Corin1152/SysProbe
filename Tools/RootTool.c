@@ -596,6 +596,16 @@ static int do_daemon_kill(void) {
         fprintf(stderr, "daemon-kill: cannot kill %d (%s)\n", pid, strerror(errno));
         return SYSPROBE_EXIT_FAILED;
     }
+
+    // 状态文件必须一起清掉。App 判活只看心跳（uid 501 查不了 root 进程，
+    // `kill(pid,0)` 只会拿到 EPERM），SIGKILL 又不给进程留遗言的机会 ——
+    // 不清的话，死前最后 1 秒的心跳还能让 App 在整个有效期
+    // （interval*4+10，默认 18 秒）里误判「还活着」，表现为界面显示运行中、
+    // 倒计时不走。清掉之后 App 立刻读到空文件，按「没在跑」处理。
+    // unlink 失败不致命：最坏也就是回到那 18 秒的旧行为。
+    if (unlink(SYSPROBE_BAND_STATE_PATH) != 0 && errno != ENOENT) {
+        fprintf(stderr, "daemon-kill: cannot remove state (%s)\n", strerror(errno));
+    }
     return SYSPROBE_EXIT_OK;
 }
 

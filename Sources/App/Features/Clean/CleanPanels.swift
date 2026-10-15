@@ -325,11 +325,10 @@ struct CleanPanels: View {
     /// 页脚说明。**没有工具状态那一行**（2026-10-14 去掉）——
     /// 「Root tool 能不能用」在关于页已经有一行，同一处信息在两页各写一遍，
     /// 这边多出来的只有「这一页也会坏」的暗示。
+    /// 「大小由特权维护工具实时测得」那句也去了（2026-10-15）：脚注只留
+    /// 有行动含义的（保留名单），来源说明属于关于页。
     private var toolRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
-                .font(AppFont.text(11))
-                .foregroundStyle(Color.mwMuted)
             Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
                 .font(AppFont.text(11))
                 .foregroundStyle(Color.mwMuted)
@@ -357,9 +356,6 @@ struct CleanPanels: View {
                     .font(AppFont.text(13, weight: .semibold))
                     .foregroundStyle(Color.mwAccent)
             }
-            Text("Sizes are measured live from the privileged root tool. Cleaning deletes the contents of each directory and keeps the directories themselves; everything here is regenerated as needed.")
-                .font(AppFont.text(11))
-                .foregroundStyle(Color.mwMuted)
             // 排除名单的存在要在这里说，而不是只在确认弹窗里 —— 弹窗一闪就没，
             // 页脚才是用户会回头核对的地方。
             Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")

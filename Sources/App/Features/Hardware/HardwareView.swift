@@ -24,6 +24,11 @@ struct HardwareView: View {
     /// 同一张卡片里会出现两种大小的读数。
     fileprivate static let valueSize: CGFloat = 18
 
+    /// 内存卡片专用的一档。**比 `valueSize` 小**（2026-10-15）：内存卡三列
+    /// 并排，列宽最窄，数值带上「 GB」后缀在 18pt 下偶尔换行；降到 15pt
+    /// 留出余量。其余卡片（设备/CPU/存储）列数少，维持 18 不动。
+    fileprivate static let memoryValueSize: CGFloat = 15
+
     var body: some View {
         PageScaffold("Hardware", glow: .mwAccent, openSettings: openSettings) {
             DeviceCard()
@@ -154,18 +159,18 @@ struct HardwareView: View {
                         Metric(caption: "Used",
                            value: Formatting.bytes(snapshot.memory.used),
                            tint: .mwAccent,
-                           size: HardwareView.valueSize)
+                           size: HardwareView.memoryValueSize)
                     Metric(caption: "Available",
                            value: Formatting.bytes(snapshot.memory.available),
                            tint: .mwBattery,
-                           size: HardwareView.valueSize)
+                           size: HardwareView.memoryValueSize)
                     // 与 CPU-X 的 `Mem Free` 同一个口径（纯 `free_count`），
                     // 拿它去跟 CPU-X 对才对得上；「Available」比它多算了
                     // purgeable + speculative，所以天生更大。见 `MemoryStats`。
                     Metric(caption: "Free",
                            value: Formatting.bytes(snapshot.memory.free),
                            tint: .mwMuted,
-                           size: HardwareView.valueSize)
+                           size: HardwareView.memoryValueSize)
                 }
 
                 BarRow(title: Text("Memory usage"),
@@ -174,9 +179,9 @@ struct HardwareView: View {
                        tint: snapshot.memory.usage > 0.85 ? .mwDanger : .mwAccent)
 
                 HStack(spacing: 14) {
-                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: HardwareView.valueSize)
-                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: HardwareView.valueSize)
-                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: HardwareView.valueSize)
+                    Metric(caption: "Wired", value: Formatting.bytes(snapshot.memory.wired), size: HardwareView.memoryValueSize)
+                    Metric(caption: "Active", value: Formatting.bytes(snapshot.memory.active), size: HardwareView.memoryValueSize)
+                    Metric(caption: "Compressed", value: Formatting.bytes(snapshot.memory.compressed), size: HardwareView.memoryValueSize)
                 }
 
                 Divider().overlay(Color.mwCardStroke)
@@ -237,20 +242,48 @@ private struct OptimizeSection: View {
 /// 一轮优化结束（成功或失败）时调用。
 let onFinished: @MainActor () -> Void
 
+/// 当前进度（0…1）。只在 running 态有意义。
+private var runningProgress: Double {
+    if case .running(let progress, _) = optimizer.phase { return progress }
+    return 0
+}
+
 var body: some View {
     Button {
         optimizer.run()
     } label: {
+        // 整键作进度条（2026-10-15 定稿，替代「中间细线」方案）：
+        // 轨道 = accent 32% —— 视觉上正好就是原 disabled 的灰化观感，
+        // 所以运行中不再需要额外的变淡处理；
+        // 填充 = accent 实色，按 `MemoryOptimizer` 的 progress（每 5% 发布一次）
+        // 从左向右扫过整键；「优化中…」文字浮于填充之上。
+        // 空闲态 = accent 实色，与原 `.borderedProminent` 无差别。
+        // 填充手画而不用 ProgressView：tinted 底色上轨道/填充色不可控。
         HStack(spacing: 6) {
             Image(systemName: "wand.and.stars")
             Text(optimizer.phase.isRunning ? "Optimising…" : "Optimise memory")
         }
         .font(AppFont.text(14, weight: .semibold))
+        .foregroundStyle(Color.white)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
+        .background(
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.mwAccent.opacity(optimizer.phase.isRunning ? 0.32 : 1))
+                if optimizer.phase.isRunning {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(Color.mwAccent)
+                            .frame(width: max(16, geo.size.width * runningProgress))
+                            .animation(.linear(duration: 0.3), value: runningProgress)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        )
     }
-    .buttonStyle(.borderedProminent)
-    .tint(.mwAccent)
+    .buttonStyle(.plain)
     .disabled(optimizer.phase.isRunning)
     .onChange(of: optimizer.phase) { phase in
         switch phase {
