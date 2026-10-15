@@ -107,15 +107,15 @@ nonisolated struct ProcessEntry: Identifiable, Hashable, Sendable, Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         pid = try c.decode(Int.self, forKey: .pid)
-        ppid = c.decodeIfPresent(Int.self, forKey: .ppid) ?? 0
-        uid = c.decodeIfPresent(Int.self, forKey: .uid) ?? 0
-        status = c.decodeIfPresent(Int.self, forKey: .status) ?? 0
-        started = c.decodeIfPresent(Double.self, forKey: .started) ?? 0
-        userApp = c.decodeIfPresent(Int.self, forKey: .userApp) ?? 0
-        cpuNanos = c.decodeIfPresent(UInt64.self, forKey: .cpuNanos) ?? 0
-        residentBytes = c.decodeIfPresent(UInt64.self, forKey: .residentBytes) ?? 0
-        comm = c.decodeIfPresent(String.self, forKey: .comm) ?? ""
-        name = c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        ppid = try c.decodeIfPresent(Int.self, forKey: .ppid) ?? 0
+        uid = try c.decodeIfPresent(Int.self, forKey: .uid) ?? 0
+        status = try c.decodeIfPresent(Int.self, forKey: .status) ?? 0
+        started = try c.decodeIfPresent(Double.self, forKey: .started) ?? 0
+        userApp = try c.decodeIfPresent(Int.self, forKey: .userApp) ?? 0
+        cpuNanos = try c.decodeIfPresent(UInt64.self, forKey: .cpuNanos) ?? 0
+        residentBytes = try c.decodeIfPresent(UInt64.self, forKey: .residentBytes) ?? 0
+        comm = try c.decodeIfPresent(String.self, forKey: .comm) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
     }
 }
 
@@ -176,8 +176,8 @@ nonisolated struct ProcessListReport: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         processes = try c.decode([ProcessEntry].self, forKey: .processes)
-        count = c.decodeIfPresent(Int.self, forKey: .count) ?? processes.count
-        resolved = c.decodeIfPresent(Int.self, forKey: .resolved) ?? 0
+        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? processes.count
+        resolved = try c.decodeIfPresent(Int.self, forKey: .resolved) ?? 0
     }
 }
 
