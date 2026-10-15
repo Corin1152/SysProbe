@@ -553,7 +553,9 @@ final class HardwareMonitor: ObservableObject {
     /// 机型、系统版本、内核版本、物理内存 —— 同样是一秒读一次而从不改变的东西。
     private static let systemIdentity: SystemStats = {
         var stats = SystemStats()
-        stats.deviceName = UIDevice.current.name
+        // 先试 MobileGestalt 的 `UserAssignedDeviceName`，拿不到才退回
+        // `UIDevice.current.name`（后者在 iOS 16+ 上通常只会给 "iPhone"）。
+        stats.deviceName = userAssignedDeviceName() ?? UIDevice.current.name
         stats.modelIdentifier = machineIdentifier()
         stats.systemVersion = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
         stats.kernelVersion = sysctlString("kern.osrelease") ?? "—"
@@ -616,6 +618,37 @@ final class HardwareMonitor: ObservableObject {
         ]
         if let name = table[machine] { return name }
         return machine.isEmpty ? "—" : machine
+    }
+
+    /// 用户给这台设备起的名字（「设置 → 通用 → 关于本机 → 名称」）。
+    ///
+    /// ── 为什么不用 `UIDevice.current.name`（2026-10-15）──────────────────────
+    ///
+    /// iOS 16 起那个属性要 `com.apple.developer.device-information.user-assigned-device-name`
+    /// 这个 entitlement 才返回真实名字，拿不到就**一律给 `"iPhone"`** ——
+    /// 用户报的「设备名提取的不对，当前显示 iPhone，这不是我的设备名」就是它。
+    ///
+    /// 改走 MobileGestalt 的 `UserAssignedDeviceName` 键。这是私有 API，但本 App 在
+    /// TrollStore 下是 `platform-application` + `no-sandbox`，读得到；而且这份数据
+    /// 在 `systemIdentity` 这个 `static let` 里**只取一次**，不进每秒的采样路径，
+    /// 所以 `dlopen` 的开销也只在冷启动那一下。
+    ///
+    /// 读不到就返回 `nil`，由调用点退回 `UIDevice.current.name` —— 最差也只是回到
+    /// 改之前的行为，不会让这一格空着。
+    nonisolated private static func userAssignedDeviceName() -> String? {
+        guard let handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_NOW) else { return nil }
+        defer { dlclose(handle) }
+        guard let symbol = dlsym(handle, "MGCopyAnswer") else { return nil }
+
+        // `MGCopyAnswer` 的签名是 `CFStringRef MGCopyAnswer(CFStringRef key)`，
+        // 返回的是 **+1 的引用**（名字里的 Copy 就是这个意思），所以要
+        // `takeRetainedValue()` 交给 ARC 管，而不是 `takeUnretainedValue()`。
+        typealias MGCopyAnswer = @convention(c) (CFString) -> Unmanaged<CFString>?
+        let copyAnswer = unsafeBitCast(symbol, to: MGCopyAnswer.self)
+
+        guard let answer = copyAnswer("UserAssignedDeviceName" as CFString) else { return nil }
+        let name = answer.takeRetainedValue() as String
+        return name.isEmpty ? nil : name
     }
 
     nonisolated private static func machineIdentifier() -> String {

@@ -72,7 +72,11 @@ struct ProcessPanels: View {
     @State private var collapsedGroups: Set<ProcessGroup> = []
 
     var body: some View {
-        PageScaffold("Processes", glow: .mwAccent, openSettings: openSettings) {
+        // `spacing: 8`（默认 14）—— 这一页几百行**每一行都是这个 `LazyVStack`
+        // 的直接子视图**，所以页面级间距就是行间距。14 加行自身上下各 9 的内边距，
+        // 相邻两行的边框之间要空出 32 pt，用户反馈「行间隙太大」。压到 8 之后是
+        // 8 + 6 + 6 = 20 pt（`ProcessRow` 的内边距同时从 9 收到 6）。
+        PageScaffold("Processes", glow: .mwAccent, spacing: 8, openSettings: openSettings) {
             // 概览单独成一个子视图：它观察 `HardwareMonitor`（每秒发布一次），
             // 而列表是几百行 —— 把那份订阅留在这一层，等于每秒让整页 body
             // 重算一遍、把整个列表 diff 一次。拆出去之后只有这个小面板跟着重算。
@@ -434,7 +438,7 @@ private struct ProcessOverviewPanel: View {
             intervalMenu
 
             Button {
-                monitor.refresh()
+                monitor.refresh(manual: true)
             } label: {
                 // ── 2026-10-15：两个状态必须占同一块地方 ────────────────────────
                 //
@@ -447,8 +451,14 @@ private struct ProcessOverviewPanel: View {
                 // 修法不是把两者调成一样高（那要猜 `ProgressView` 的内部尺寸，
                 // 换个系统版本就失效），而是给这一格**写死**一个 frame：
                 // `ZStack` 让两个状态叠在同一个位置上，谁都不撑开谁。
+                //
+                // ── 同一天再改：圈只跟**手动**刷新走 ─────────────────────────────
+                //
+                // 判据从 `isSampling` 换成 `isManualRefresh`。原来自动刷新也置
+                // `isSampling`，于是那个圈每 3 秒转一次、看着像「一直在转」。
+                // 手动点一下转一下，自动刷新期间保持静止的箭头。
                 ZStack {
-                    if monitor.isSampling {
+                    if monitor.isManualRefresh {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.clockwise")
@@ -459,7 +469,10 @@ private struct ProcessOverviewPanel: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.mwAccent)
-            .disabled(monitor.isSampling)
+            // 也跟手动状态走：自动刷新那几十毫秒里按钮**仍然可点** ——
+            // 否则用户点了没反应（`refresh` 里那句 `guard !samplingInFlight`
+            // 会把这一拍丢掉），看起来就是「按钮坏了」。
+            .disabled(monitor.isManualRefresh)
             .accessibilityLabel(Text("Refresh"))
         }
     }
@@ -577,7 +590,9 @@ private struct ProcessRow: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        // 上下各 9 → 6（2026-10-15）：行间隙的另一半。与页面级间距（进程页传 8）
+        // 合起来把相邻两行边框之间的距离从 32 pt 收到 20 pt。
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

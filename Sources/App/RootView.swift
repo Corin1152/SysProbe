@@ -245,6 +245,17 @@ struct PageScaffold<Content: View>: View {
     /// 但**保留**这个参数 —— 它是这个外壳本来就该有的一项，删掉只会让下一个
     /// 需要它的页面再改一遍外壳。
     var titleDisplayMode: NavigationBarItem.TitleDisplayMode
+    /// 内容栈的纵向间距。默认 14 —— 与 `PowerView` 原来两个分段各自的
+    /// `LazyVStack` 是同一个数。
+    ///
+    /// 2026-10-15 才加这个参数，起因是进程页：那边几百行**每一行都是这个
+    /// `LazyVStack` 的直接子视图**（`ForEach` 不包容器，为的是保住懒加载），
+    /// 于是「页面级间距」直接变成了「行间距」。14 再叠上每行自身上下各 9 的
+    /// 内边距，相邻两行的边框之间要空出 32 pt，用户反馈「行间隙太大」。
+    /// 页面级间距是这里唯一能压的量，所以让它可配；进程页传 8。
+    ///
+    /// 其余页面不传，行为与加这个参数之前完全一样。
+    var spacing: CGFloat
     /// 打开“关于”弹层。**普通属性，不是 `@EnvironmentObject AppState`** ——
     /// 观察 `AppState` 会让 `showingSettings` 一变就把整页重算一次，而那一帧恰好
     /// 就是弹层开始做呈现动画的那一帧。齿轮只要一个动作，不要那份状态。
@@ -254,11 +265,13 @@ struct PageScaffold<Content: View>: View {
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
          titleDisplayMode: NavigationBarItem.TitleDisplayMode = .large,
+         spacing: CGFloat = 14,
          openSettings: @escaping @MainActor (SettingsDestination) -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.glow = glow
         self.titleDisplayMode = titleDisplayMode
+        self.spacing = spacing
         self.openSettings = openSettings
         self.content = content
     }
@@ -271,7 +284,7 @@ struct PageScaffold<Content: View>: View {
                 // 都会重新求值它，而 SwiftUI 比不了闭包、只能重画。详见 `Backdrop`。
                 Backdrop(glow: glow).equatable()
                 ScrollView {
-                    LazyVStack(spacing: 14) {
+                    LazyVStack(spacing: spacing) {
                         content()
                     }
                     .padding(.horizontal, 16)

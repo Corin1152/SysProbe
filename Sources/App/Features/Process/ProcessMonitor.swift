@@ -354,8 +354,21 @@ final class ProcessMonitor: ObservableObject {
     /// 与「列表是空的」是两件事：失败但列表非空说明这是旧数据（该提示「数据是旧的」），
     /// 失败且列表为空说明从来没拿到过（该提示「读不出来」）。界面要分开说。
     @Published private(set) var lastAttemptFailed = false
-    /// 这一拍正在跑。手动刷新按钮据此显示进度。
+    /// 这一拍正在跑。**自动与手动都置位** —— 它是「有没有在采样」这个事实本身。
     @Published private(set) var isSampling = false
+
+    /// 这一拍是**用户手点刷新**触发的。
+    ///
+    /// ── 2026-10-15：刷新按钮的转动只跟这一条走 ──────────────────────────────
+    ///
+    /// 原来按钮的 `ProgressView` 由 `isSampling` 驱动，于是**自动刷新也在转** ——
+    /// 3 秒一转、每次都转几十毫秒，用户看到的是「那个圈一直在转，没停过」。
+    /// 而自动刷新本来就该是背景行为：它转与不转，用户能看到的只是列表数字变了。
+    ///
+    /// 拆成两条之后：`isSampling` 继续管「丢拍」与「按钮禁用」这类内部逻辑，
+    /// `isManualRefresh` 只管**按钮上那个圈画不画**。手动点一下转一下，
+    /// 自动刷新期间按钮保持静止的箭头。
+    @Published private(set) var isManualRefresh = false
     /// 最近一拍里读到资源计数的进程数。0 = 整条 libproc 路不通。
     @Published private(set) var resolvedCount = 0
     /// 最近一拍里读到应用显示名的进程数。0 = 显示的全是进程名。
@@ -410,7 +423,10 @@ final class ProcessMonitor: ObservableObject {
     }
 
     /// 跑一拍。手动刷新与定时器都走这里。
-    func refresh() {
+    ///
+    /// `manual` 只影响**刷新按钮上那个圈画不画**（`isManualRefresh`），
+    /// 不影响采样本身 —— 两条路径做的事完全一样。见 `isManualRefresh` 的说明。
+    func refresh(manual: Bool = false) {
         // 页面不在前台就什么都不做。定时器在 `pause()` 里已经取消了，这一条是
         // 兜底：任何路径（未来的 scenePhase、别的调用方）都不会绕过它去起特权进程。
         guard isVisible else { return }
@@ -421,6 +437,7 @@ final class ProcessMonitor: ObservableObject {
         guard !samplingInFlight else { return }
         samplingInFlight = true
         isSampling = true
+        isManualRefresh = manual
 
         Task { @MainActor in
             // 阻塞调用（起子进程并等它），必须放到主 actor 之外 ——
@@ -438,6 +455,7 @@ final class ProcessMonitor: ObservableObject {
             guard !MainThreadPacing.isScrolling else {
                 self.samplingInFlight = false
                 self.isSampling = false
+                self.isManualRefresh = false
                 return
             }
 
@@ -456,6 +474,7 @@ final class ProcessMonitor: ObservableObject {
             }
             self.samplingInFlight = false
             self.isSampling = false
+            self.isManualRefresh = false
         }
     }
 

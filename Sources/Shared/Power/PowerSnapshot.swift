@@ -11,6 +11,13 @@ nonisolated struct PDProfile: Identifiable, Hashable {
     var amps: Double { Double(currentMilliamps) / 1000 }
     var watts: Double { volts * amps }
     var label: String { String(format: "%.1f V × %.2f A", volts, amps) }
+
+    /// 没插充电器时用的**空档**：电压与电流都是 0。
+    ///
+    /// 用它而不是让调用点去写 `"—"`，是为了让那一行在插拔前后的**格式完全一致**
+    /// （都是 `%.1f V × %.2f A`）：用户明确要求「没连接充电器时数值全部为 0」，
+    /// 而不是显示一个破折号。
+    static let zero = PDProfile(index: -1, voltageMillivolts: 0, currentMilliamps: 0)
 }
 
 /// Every temperature sensor that sits in one zone of the phone.
@@ -439,6 +446,17 @@ nonisolated struct PowerSnapshot {
 
     /// The profile currently in use, from the adapter's active index.
     var negotiatedProfile: PDProfile? {
+        // ── 未插充电器时不给档位（2026-10-15）───────────────────────────────────
+        //
+        // 原来这里只判 `voltage > 0`。而**拔掉充电器之后 IOKit 会留着一份
+        // AdapterDetails 残留** —— 实测电压仍是 5000 mV、电流 0，于是
+        // `voltage > 0` 成立，界面把「没插电」渲染成了一个 `5.0 V × 0.00 A`
+        // 的档位。用户报的「没连接充电器常驻显示 5V × 0.00A」就是它。
+        //
+        // 加了这道 `externalConnected` 闸门之后，未插电一律返回 `nil`，
+        // 调用点走 `negotiatedRow(.zero)`，显示成 `0.0 V × 0.00 A` 与 `0 W`。
+        guard externalConnected else { return nil }
+
         if let active = int("UsbHvcHvcIndex", in: adapter),
            let profile = adapterProfiles.first(where: { $0.index == active }) {
             return profile

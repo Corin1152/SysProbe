@@ -364,7 +364,7 @@ struct DashboardPanels: View {
     ///
     ///   · 有协商结果 → `negotiatedRow(profile)`；
     ///   · 插着电但充电器没广播档位表（旧式 USB-A、部分无线充电板）→ 一句说明；
-    ///   · 没插充电器 → `negotiatedRow(nil)`，即 `—` 与 `0 W`。
+    ///   · 没插充电器 → `negotiatedRow(.zero)`，即 `0.0 V × 0.00 A` 与 `0 W`。
     @ViewBuilder
     private var negotiatedSection: some View {
         if let profile = snapshot.negotiatedProfile {
@@ -372,7 +372,7 @@ struct DashboardPanels: View {
         } else if plugged {
             EmptyNote(text: "This adapter published no PD profile menu. Legacy USB-A chargers and some wireless pads report only a single voltage and current.")
         } else {
-            negotiatedRow(nil)
+            negotiatedRow(.zero)
         }
     }
 
@@ -386,16 +386,19 @@ struct DashboardPanels: View {
     /// 右边是它的**乘积**（瓦特，这一档能给出多少）。左右对齐之后，
     /// 「17 W」和上面「From charger 14.2 W」的差就是这一档还剩多少没用上。
     ///
-    /// `profile` 为 `nil`（没插充电器）时画的是同一个版式的空档：左边 `—`、
-    /// 右边 `0 W`。**保留这一行而不是整块换掉**，是因为它在这一页的位置本身
-    /// 就是信息（「这一档现在能给多少」）—— 整块消失会让卡片矮一截，
-    /// 插拔充电器时高度跟着跳。
-    private func negotiatedRow(_ profile: PDProfile?) -> some View {
+    /// 参数是**非可选**的：没插充电器时调用点传 `.zero`，画出来就是
+    /// `0.0 V × 0.00 A` 与 `0 W`（2026-10-15 按用户要求改，原来这里画的是 `—`）。
+    /// 用空档而不是破折号，是为了让这一行在插拔前后的**格式完全一致** ——
+    /// 破折号看起来像「读不到」，而这里的事实是「就是 0」。
+    ///
+    /// **保留这一行而不是整块换掉**，是因为它在这一页的位置本身就是信息
+    /// （「这一档现在能给多少」）—— 整块消失会让卡片矮一截，插拔充电器时高度跟着跳。
+    private func negotiatedRow(_ profile: PDProfile) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(verbatim: profile?.label ?? "—")
+            Text(verbatim: profile.label)
                 .mwMono(size: 13, weight: .semibold)
             Spacer(minLength: 8)
-            Text(String(format: "%.0f W", profile?.watts ?? 0))
+            Text(String(format: "%.0f W", profile.watts))
                 .mwReadout(size: 16, weight: .semibold)
                 .foregroundStyle(Color.mwAccent)
         }
