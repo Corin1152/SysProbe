@@ -309,6 +309,29 @@ int main(int argc, const char *argv[]) {
         NSTimeInterval nextSampleAt = [[NSDate date] timeIntervalSince1970];
 
         for (;;) {
+            // ── 睡眠必须在循环体的最前面（2026-10-15 修）───────────────────────
+            //
+            // 它原来放在循环体**末尾**，而循环里有五个提前退出的 `continue` 分支
+            // （读不到 RSRP / Wi-Fi 暂停 / 冷却中 / 未达阈值 / 计时未满）。
+            // `continue` 直接跳回 `for` 的下一轮，**把末尾那句 sleep 整个跳过** ——
+            // 于是守护进程在这些状态下是一个**忙等循环**：一秒几千轮，每轮都
+            // 读配置 plist + `getifaddrs()` + 原子写一次状态 plist。
+            //
+            // 实测表现：整机 CPU 常年 ~17%（六核口径 ≈ 一个核满转），性能核被钉在
+            // 2000MHz 以上；而用户两个测试场景都连着 Wi-Fi，`pauseOnWiFi` 默认开，
+            // 恰好一直走 `paused` 那条 continue —— 所以是纯忙等。
+            //
+            // 两条实测也能对上：把「采样间隔」从 2 秒调到 30 秒**毫无改善**
+            // （忙等的节拍由 `continue` 决定，与采样间隔无关）；关掉「后台运行」
+            // 让整个进程消失，CPU 立刻回落。
+            //
+            // 挪到最前面之后，每条 `continue` 都必然经过它。代价是进程起来后先睡
+            // 1 秒才做第一轮 —— App 侧的心跳宽限期（`interval*4+10`，默认 18 秒）
+            // 远大于此，没有影响。
+            //
+            // **别把它挪回末尾**：这里没有断言能发现，唯一的信号是用户手上的耗电。
+            sleep(1);
+
             @autoreleasepool {
                 BandRefreshConfig c = readConfig();
                 interval = c.sampleIntervalSec;
@@ -414,10 +437,6 @@ int main(int argc, const char *argv[]) {
                 }
                 writeState(@"cooling", c.cooldownSec, interval);
             }
-
-            // 固定睡 1 秒 —— 状态、心跳与倒计时都是这个节奏。采样间隔由循环内的
-            // `nextSampleAt` 计数器决定，不在这里。见上面那段说明。
-            sleep(1);
         }
     }
 }
