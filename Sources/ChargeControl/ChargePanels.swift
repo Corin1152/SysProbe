@@ -378,14 +378,22 @@ private struct MenuRow<Options: View>: View {
 ///    （那里从来没加过它）。放不下时 `lineLimit(1)` 会截断，看得见；
 ///    缩放是看不见的，不该用在读数上。
 ///
-/// 顺带修了一处死参数：`monospaced` 以前声明了却从没被 body 用过（`Serial` 那一行
-/// 传 `true` 毫无效果）。现在它为真时值走 `AppFont.mono` —— 序列号混字母与数字，
-/// 比例字形下会参差不齐。
+/// ── 2026-10-16 第七次改：15.5 → **15，并删掉 `monospaced` 参数** ───────────
+///
+/// a. 用户定了 15。15.5 是上一轮「16 与 15 之间没有落点」时的折中，现在既然
+///    缩放已经去掉、字号所见即所得，直接回到整数档更好维护。
+/// b. `monospaced` 参数**删掉了**。它原本只被 `Serial` 一行使用，让那一行走
+///    `.monospaced` design（SF Mono），而上面五行是 `.default` —— 同一列混两套
+///    字形，用户看到的就是「有一行跟别的不像」。用户要求整列统一，于是参数一并
+///    删除：留着不用会变成新的死参数（这个参数历史上就有过「声明了但 body 没用」
+///    的前科）。
+///
+///    代价记在这里：序列号混字母与数字，比例字形下字符宽度不齐。但**同一列视觉
+///    统一**的优先级更高 —— 序列号是给人看一眼抄下来的，不是用来逐列对齐的。
 struct ValueRow: View {
     let title: LocalizedStringKey
     let value: String
     var tint: Color = .primary
-    var monospaced = false
 
     var body: some View {
         // 间距与 `BandPanels.infoRow`（频段页「当前网络」）一致的 12。
@@ -429,32 +437,32 @@ struct ValueRow: View {
                 //
                 // 这里**不用 `mwReadout`**：那个会加 `.monospacedDigit()`。
                 // 频段页的值没有它，而加上了会让数字字形在 SF Proportional
-                // 与 Tabular 之间换一版宽度。需要等宽数字的那一行显式传
-                // `monospaced: true`，走 `mwMono`。
-                // ── 2026-10-16：16 → 15.5，并**去掉 `minimumScaleFactor`** ──────
+                // 与 Tabular 之间换一版宽度。
+                //
+                // ── 2026-10-16：16 → 15.5 → **15**，并**去掉 `minimumScaleFactor`** ─
                 //
                 // 用户实测：16 太大、15 太小，中间没有落点 —— 而且这个「跳档」的
                 // 观感不正常。两个原因，一起在这里解决：
                 //
                 // a. **整数档位没有中间值**。字号是 `CGFloat`，SwiftUI 也接受
-                //    分数字号，15.5 就是 16 与 15 的正中。以前只在整数上调，
-                //    等于把可调范围砍掉一半。
+                //    分数字号 —— 先用 15.5 试过，用户最后定了 15。
                 //
                 // b. **`minimumScaleFactor(0.7)` 让「设多少」不等于「看到多少」**。
-                //    它在本行文本超出可用宽度时把字号压到 70%（16 pt 下是 11.2 pt），
+                //    它在本行文本超出可用宽度时把字号压到 70%（15 pt 下是 10.5 pt），
                 //    压出来的值是个任意小数、而且**同一列各行触发与否不同** ——
                 //    于是每行的实际字号互不相同，看起来就像无故跳档。
                 //
-                //    去掉之后字号完全确定：设 15.5 就是 15.5，与频段页 `infoRow`
+                //    去掉之后字号完全确定：设 15 就是 15，与频段页 `infoRow`
                 //    一致（它从一开始就没有这个修饰）。放不下时由 `lineLimit(1)`
                 //    截断，而不是悄悄变小 —— 截断是看得见的，缩放是看不见的。
                 //
-                //    风险核对过：这一列最长的值是序列号（16 字符左右，15.5 pt
-                //    等宽约 150 pt）加标签与间距约 210 pt，常见机型卡片内可用
-                //    宽度在 320 pt 以上，够。
-                .font(monospaced
-                     ? AppFont.mono(15.5, weight: .semibold)
-                     : AppFont.text(15.5, weight: .semibold))
+                //    风险核对过：这一列最长的值是序列号（16 字符左右，15 pt
+                //    比例字形约 140 pt）加标签与间距约 200 pt，常见机型卡片内
+                //    可用宽度在 320 pt 以上，够。
+                //
+                // 字号与其余五行的**字形也必须一致**：以前 `Serial` 走 `.monospaced`
+                // （SF Mono），现在整列都是 `AppFont.text`，见类型头上的说明。
+                .font(AppFont.text(15, weight: .semibold))
                 .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
                 .lineLimit(1)
                 .multilineTextAlignment(.trailing)

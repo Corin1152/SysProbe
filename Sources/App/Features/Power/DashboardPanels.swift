@@ -165,7 +165,8 @@ struct DashboardPanels: View {
               trailing: charge.battery.updateTime.map {
                   Text($0.formatted(date: .omitted, time: .standard))
               }) {
-            VStack(spacing: 12) {
+            // 12 → 10（2026-10-16，压卡片高度）：上半截与分隔线之间。
+            VStack(spacing: 10) {
                 if let percent = snapshot.percent {
                     BarRow(title: Text("Charge level"),
                            detail: "\(percent)%",
@@ -200,7 +201,8 @@ struct DashboardPanels: View {
                 // `MemoryCard` 里分隔读数与优化按钮用的是同一条线。
                 Divider().overlay(Color.mwCardStroke)
 
-                VStack(spacing: 10) {
+                // 10 → 8（2026-10-16，压卡片高度）：六行之间共五处间隔，收 10 pt。
+                VStack(spacing: 8) {
                     ValueRow(title: "Health",
                              value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—")
                     ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
@@ -211,7 +213,13 @@ struct DashboardPanels: View {
                     // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
                     ValueRow(title: "Boot voltage",
                              value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
-                    ValueRow(title: "Serial", value: battery.serial ?? "—", monospaced: true)
+                    // ── 2026-10-16：Serial 不再走等宽 ──────────────────────────
+                    //
+                    // 它以前是唯一一个 `monospaced: true` 的行，走 `.monospaced`
+                    // design（SF Mono）—— 与上面五行（`.default`）不是同一套字形，
+                    // 同一列里混两种字形，看着就是「某一行跟别的不像」。
+                    // 用户要求整列统一，这里去掉那个参数。
+                    ValueRow(title: "Serial", value: battery.serial ?? "—")
                 }
             }
         }
@@ -264,7 +272,8 @@ struct DashboardPanels: View {
                   let percent = "\(Int(utilisation * 100))%"
                   return Text("\(percent) of adapter")
               }) {
-            VStack(spacing: 12) {
+            // 12 → 10（2026-10-16，压卡片高度）：三段之间共两处间隔，收 4 pt。
+            VStack(spacing: 10) {
                 // ── 第一段：这一秒的电 ─────────────────────────────────────────
                 //
                 // 四项读数在未插电时都按 **0** 显示，而不是「—」。

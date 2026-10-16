@@ -109,7 +109,13 @@ struct Panel<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // ── 2026-10-16：标题与内容之间 12 → 10（压卡片高度）─────────────────
+        //
+        // 这个 `spacing` 作用在**这一层的直接子视图**上：无标题的卡片只有一个内容
+        // 视图，收它不产生任何效果；有标题的卡片是「标题行 + 内容」两个子视图，
+        // 收它等于每张带标题的卡片再矮 2 pt。与 `Theme.cardPadding` 16 → 14
+        // （上下各 2）叠起来，一张带标题的卡片总共矮 6 pt。
+        VStack(alignment: .leading, spacing: 10) {
             if title != nil || trailing != nil {
                 if let expanded {
                     Button {

@@ -106,7 +106,8 @@ struct HardwareView: View {
         var body: some View {
             let snap = hardware.snapshot
             Panel("Device", systemImage: "iphone") {
-                VStack(alignment: .leading, spacing: 10) {
+                // 10 → 8（2026-10-16，压卡片高度）：三行之间共两处间隔，收 4 pt。
+                VStack(alignment: .leading, spacing: 8) {
                     // 三行都是**两格**，且每格的 `Metric` 自带
                     // `.frame(maxWidth: .infinity, alignment: .leading)`，
                     // 于是列宽恒为 (卡片宽 − 14) / 2，三行的竖线落在同一处。
@@ -154,7 +155,8 @@ struct HardwareView: View {
 
         var body: some View {
             Panel("CPU", systemImage: "cpu", trailing: trailing) {
-                VStack(alignment: .leading, spacing: 12) {
+                // 12 → 10（2026-10-16，压卡片高度）：型号行与下面的读数之间。
+                VStack(alignment: .leading, spacing: 10) {
                     Text(verbatim: snapshot.cpu.model)
                     .font(AppFont.text(13, weight: .medium))
                     .foregroundStyle(Color.mwMuted)
@@ -208,7 +210,8 @@ struct HardwareView: View {
 
         var body: some View {
             Panel("Memory", systemImage: "memorychip", trailing: trailing) {
-                VStack(alignment: .leading, spacing: 12) {
+                // 12 → 10（2026-10-16，压卡片高度）：三格读数与下面的进度/按钮之间。
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 14) {
                         Metric(caption: "Used",
                            value: Formatting.bytes(snapshot.memory.used),
@@ -269,7 +272,8 @@ struct HardwareView: View {
 
         var body: some View {
             Panel("Storage", systemImage: "internaldrive", trailing: trailing) {
-                VStack(alignment: .leading, spacing: 12) {
+                // 12 → 10（2026-10-16，压卡片高度）：三格读数与下面的进度条之间。
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 14) {
                         Metric(caption: "Used",
                                value: Formatting.bytes(snapshot.storage.used),

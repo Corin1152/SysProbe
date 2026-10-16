@@ -84,7 +84,16 @@ nonisolated extension UIColor {
 
 nonisolated enum Theme {
     static let cardRadius: CGFloat = 18
-    static let cardPadding: CGFloat = 16
+
+    /// 卡片内边距。**16 → 14（2026-10-16，压卡片高度）**。
+    ///
+    /// 这是所有卡片（`Panel`）共用的内边距，上下各收 2 pt 等于每张卡片矮 4 pt；
+    /// 三页加起来一屏能多出一截。改它是**有意波及所有页面**的 —— 以前只在某一页
+    /// 内部收间距，就是因为怕动这里（见 `ProcessOverviewPanel` 那条注释），结果
+    /// 各页卡片的「内容离边多远」慢慢会长歪。这次统一收，反而是一致的。
+    ///
+    /// 14 仍然是安全值：卡片里最靠边的是进度条与分隔线，离描边 14 pt 不显挤。
+    static let cardPadding: CGFloat = 14
 
     static func gradient(_ color: Color) -> LinearGradient {
         LinearGradient(colors: [color.opacity(0.55), color],

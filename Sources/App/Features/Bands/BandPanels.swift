@@ -279,7 +279,9 @@ struct BandPanels: View {
     private var infoPanel: some View {
         let info = service.slotInfo
         return Panel("Current network", systemImage: "antenna.radiowaves.left.and.right") {
-            VStack(alignment: .leading, spacing: 10) {
+            // 10 → 8（2026-10-16，压卡片高度）：这一张有 11 行，行间共十处间隔，
+            // 收 20 pt —— 三页里这一张减得最多，因为它本来就最高。
+            VStack(alignment: .leading, spacing: 8) {
                 if let name = info?.carrierName {
                     infoRow("Carrier", name)
                 }
@@ -422,7 +424,8 @@ struct BandPanels: View {
         let bands = info.supportedBands(of: rat)
         let active = selection[rat] ?? []
         let isExpanded = expandedRats.contains(rat)
-        return VStack(alignment: .leading, spacing: 12) {
+        // 12 → 10（2026-10-16，压卡片高度）：标题行与下面的频段列表之间。
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 // 整行标题都是折叠按钮（不只是那个小三角）—— 手指按得中比看得清更难，
                 // 而这一行除了文字没有别的东西。
