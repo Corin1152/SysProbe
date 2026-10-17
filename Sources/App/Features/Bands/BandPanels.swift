@@ -871,28 +871,46 @@ struct BandPanels: View {
         restartCheckTask = Task { @MainActor in
             let started = Date()
             var sawDown = false
+            var mismatchStreak = 0
             while !Task.isCancelled, Date().timeIntervalSince(started) < 20 {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard !Task.isCancelled else { return }
-                let info = await service.probeBands(slot: service.slot)
-                guard !Task.isCancelled else { return }
-                if info == nil {
+                guard let info = await service.probeBands(slot: service.slot) else {
                     // 读不到 = CommCenter 正处在「被杀了 / 还没起来」的窗口里。
                     sawDown = true
                     continue
                 }
+                guard !Task.isCancelled else { return }
                 let elapsed = Date().timeIntervalSince(started)
                 if !sawDown && elapsed < 8 {
                     // 从来没读到过失败，而且时间还短 —— 回答的可能是老进程，再等等。
                     continue
                 }
-                finishRestartCheck(expected: expected, info: info)
-                return
+                if matches(info, expected) {
+                    finishRestartCheck(expected: expected, info: info)
+                    return
+                }
+                // 不一致也要**连读两次**才算数：刚起来的 CommCenter 第一拍偶尔会给
+                // 一份还没填全的配置，拿它当「回退」会误报。
+                mismatchStreak += 1
+                if mismatchStreak >= 2 {
+                    finishRestartCheck(expected: expected, info: info)
+                    return
+                }
             }
             // 超时（CommCenter 一直没回来）：什么都不改，界面保持原样。
             restartCheckActive = false
             restartCheckTask = nil
         }
+    }
+
+    /// 一份读回来的频段，是否就是我们确认过的那一份（只比 `expected` 里出现的制式）。
+    private func matches(_ info: BandSet,
+                         _ expected: [RadioAccessTechnology: Set<Int>]) -> Bool {
+        for (rat, bands) in expected where info.activeNumbers(of: rat) != bands {
+            return false
+        }
+        return true
     }
 
     /// 比对并收尾。

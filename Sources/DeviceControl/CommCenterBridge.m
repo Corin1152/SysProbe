@@ -417,38 +417,28 @@ static NSDictionary *servingCellFields(id client, id context)
 
     // 优先服务小区；没有标记就退回第一条。
     //
-    // ── 2026-10-17：在多个「服务小区」里**优先挑 PCI 有效的那个** ─────────────
+    // ── 2026-10-17：为什么**不**改成「挑 PCI 有效的那条」────────────────────
     //
-    // 5G NSA 下 `legacyInfo` 里会同时出现 LTE 锚点小区与 NR 小区，两条都带
-    // `kCTCellMonitorCellTypeServing`。原来只取**第一条**标记为 serving 的 —— 如果
-    // 那条是 NR，而这一版 iOS 的 CommCenter 没给 NR 填 PID（填 0），整组字段就都
-    // 来自那个「半空」的小区，界面上的物理小区 ID 于是显示 0。
+    // PCI 偶发为 0 时很自然会想「换一条 serving 小区来取」。这里刻意不那么做：
+    // 5G NSA 下 `legacyInfo` 里 LTE 锚点与 NR 小区**都**带
+    // `kCTCellMonitorCellTypeServing`，按「谁有有效 PCI」来挑，等于每隔一拍就在
+    // 两组小区之间换来源 —— 频段 / TAC / 基站 ID 会跟着在 LTE 与 NR 之间跳，
+    // 比 PCI 少数一项糟得多（而且「服务频段」那一行是按 `getCurrentRat` 加前缀的，
+    // 换来源之后会出现 B3 被写成 n3 这种拼错）。
     //
-    // 现在按「PID > 0」挑：有有效 PCI 的那条 serving 优先。挑不到就退回第一条
-    // serving（PCI 那一项由下面的 `put` 判掉，不显示 0）。
-    //
-    // **一组字段必须来自同一条小区**：混着取会让「频段来自 LTE、PCI 来自 NR」这种
-    // 组合出现，比缺一项更误导人。所以这里只决定「用哪一条」，四项一起从它取。
+    // 所以仍然只认「第一条 serving」，PCI 为 0 的情况交给下面的 `put` 判掉。
     NSDictionary *serving = nil;
-    NSDictionary *firstServing = nil;
     for (id cell in cells) {
         if (![cell isKindOfClass:[NSDictionary class]]) {
             continue;
         }
-        if (![[cell objectForKey:@"kCTCellMonitorCellType"] isEqual:@"kCTCellMonitorCellTypeServing"]) {
-            continue;
-        }
-        if (firstServing == nil) {
-            firstServing = cell;
-        }
-        NSNumber *pid = [(NSDictionary *)cell objectForKey:@"kCTCellMonitorPID"];
-        if ([pid isKindOfClass:[NSNumber class]] && pid.integerValue > 0) {
+        if ([[cell objectForKey:@"kCTCellMonitorCellType"] isEqual:@"kCTCellMonitorCellTypeServing"]) {
             serving = cell;
             break;
         }
     }
     if (serving == nil) {
-        serving = firstServing ?: [cells firstObject];
+        serving = [cells firstObject];
     }
     if (![serving isKindOfClass:[NSDictionary class]]) {
         return @{};
