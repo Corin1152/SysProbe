@@ -265,6 +265,18 @@ final class BandService: ObservableObject {
         }
     }
 
+    /// 只读一次频段，**不碰任何 `@Published` 状态**。
+    ///
+    /// 给「重启蜂窝服务之后的校验」用。那几秒里 CommCenter 正好被杀了又拉起，
+    /// 走 `load()` 会把 `availability` 打成 `.unavailable`、`bandInfo` 置空 ——
+    /// 整页跟着闪一次「不可用」。这条路径只把结果交给调用方，界面状态由调用方
+    /// 在确认 CommCenter 回来之后才刷新。
+    func probeBands(slot: Int) async -> BandSet? {
+        await Task.detached(priority: .utility) {
+            BandService.readBandsSync(slot: slot)
+        }.value
+    }
+
     /// 除主卡槽之外、确实插着卡的卡槽。
     ///
     /// 走 `sysprobe_slot_has_sim` 而不是「频段读得回来」：频段配置是设备级的，没插卡

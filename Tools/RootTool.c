@@ -205,13 +205,36 @@ static int do_respring(void) {
 /// CommCenter 会让它重新读一遍配置，多数情况下能回到可用状态。原版 CellularInfo
 /// 的工具菜单里就有这一项（`restartCommCenter` → `killall -9 CommCenter`）。
 ///
-/// 用 SIGKILL 而不是 SIGTERM：CommCenter 对 TERM 不一定有响应，而 launchd 在
-/// 它退出后会立刻把它拉起来 —— 要的就是这个「硬重启」。
+/// ── 2026-10-17：SIGKILL 改成「先 TERM、等 3 秒、再 KILL」──────────────────
+///
+/// 真机反馈：**保存频段 → 重启蜂窝服务 → 几秒后勾选回到改之前**。查下来的顺序是
+/// 「写入在 CommCenter 的运行时模型里已经生效（所以我们写后回读能对上），但重启后
+/// 它读回来的还是旧值」—— 也就是**这次写入没有落盘/没写进基带**。
+///
+/// 最可能的解释是：`setActiveBandInfo` 之后 CommCenter 还要一段时间才把新配置
+/// 提交给基带并持久化，而原来那一下 SIGKILL 会把中间状态直接掐断 —— SIGKILL
+/// 不给进程任何收尾机会（不 flush、不 unlink、不发 IPC）。
+///
+/// 所以先发 SIGTERM：CommCenter 若对 TERM 有响应，会走正常退出路径（launchd
+/// 在它退出后立刻拉起一个新进程）；3 秒还没退就仍然用 SIGKILL 兜底 —— 这个按钮
+/// 的语义是「无论如何都要重启」，不能因为进程不理 TERM 就失效。
 static int do_restart_commcenter(void) {
     pid_t pid = process_pid_by_name(SYSPROBE_COMMCENTER);
     if (pid <= 0) {
         fprintf(stderr, "restart-commcenter: %s is not running\n", SYSPROBE_COMMCENTER);
         return SYSPROBE_EXIT_FAILED;
+    }
+    if (kill(pid, SIGTERM) != 0) {
+        perror("kill");
+        return SYSPROBE_EXIT_FAILED;
+    }
+    // 等它自己退：30 × 100ms = 3 秒。`kill(pid, 0)` 返回 -1 说明进程已经没了
+    // （launchd 会立刻用新 pid 拉起它，所以这里看的只是「老 pid 还在不在」）。
+    for (int i = 0; i < 30; i++) {
+        usleep(100 * 1000);
+        if (kill(pid, 0) != 0) {
+            return SYSPROBE_EXIT_OK;
+        }
     }
     if (kill(pid, SIGKILL) != 0) {
         perror("kill");

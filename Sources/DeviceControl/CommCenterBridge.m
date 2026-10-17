@@ -416,18 +416,39 @@ static NSDictionary *servingCellFields(id client, id context)
     }
 
     // 优先服务小区；没有标记就退回第一条。
+    //
+    // ── 2026-10-17：在多个「服务小区」里**优先挑 PCI 有效的那个** ─────────────
+    //
+    // 5G NSA 下 `legacyInfo` 里会同时出现 LTE 锚点小区与 NR 小区，两条都带
+    // `kCTCellMonitorCellTypeServing`。原来只取**第一条**标记为 serving 的 —— 如果
+    // 那条是 NR，而这一版 iOS 的 CommCenter 没给 NR 填 PID（填 0），整组字段就都
+    // 来自那个「半空」的小区，界面上的物理小区 ID 于是显示 0。
+    //
+    // 现在按「PID > 0」挑：有有效 PCI 的那条 serving 优先。挑不到就退回第一条
+    // serving（PCI 那一项由下面的 `put` 判掉，不显示 0）。
+    //
+    // **一组字段必须来自同一条小区**：混着取会让「频段来自 LTE、PCI 来自 NR」这种
+    // 组合出现，比缺一项更误导人。所以这里只决定「用哪一条」，四项一起从它取。
     NSDictionary *serving = nil;
+    NSDictionary *firstServing = nil;
     for (id cell in cells) {
         if (![cell isKindOfClass:[NSDictionary class]]) {
             continue;
         }
-        if ([[cell objectForKey:@"kCTCellMonitorCellType"] isEqual:@"kCTCellMonitorCellTypeServing"]) {
+        if (![[cell objectForKey:@"kCTCellMonitorCellType"] isEqual:@"kCTCellMonitorCellTypeServing"]) {
+            continue;
+        }
+        if (firstServing == nil) {
+            firstServing = cell;
+        }
+        NSNumber *pid = [(NSDictionary *)cell objectForKey:@"kCTCellMonitorPID"];
+        if ([pid isKindOfClass:[NSNumber class]] && pid.integerValue > 0) {
             serving = cell;
             break;
         }
     }
     if (serving == nil) {
-        serving = [cells firstObject];
+        serving = firstServing ?: [cells firstObject];
     }
     if (![serving isKindOfClass:[NSDictionary class]]) {
         return @{};
@@ -446,6 +467,19 @@ static NSDictionary *servingCellFields(id client, id context)
     put(@"pci", @"kCTCellMonitorPID");
     put(@"tac", @"kCTCellMonitorTAC");
     put(@"cellId", @"kCTCellMonitorCellId");
+
+    // ── 2026-10-17：PCI 为 0 一律当「没读到」──────────────────────────────────
+    //
+    // 真机上这一格会**不定时**蹦出 0：小区切换 / 测量间隙的窗口里基带把 PID 填成
+    // 0，NSA 下的 NR 小区也可能一直是 0。PCI 的定义虽允许 0，但一个真实服务小区
+    // 恰好是 0 的概率极低；而这个页面只要显示出一个数字，就会被当成真数据。
+    //
+    // 所以丢掉它 —— 界面那一行随之整行不显示（与 TAC / Cell ID 缺值时同一套规则），
+    // 一个轮询周期后读到真值再出现。
+    NSNumber *pci = fields[@"pci"];
+    if ([pci isKindOfClass:[NSNumber class]] && pci.integerValue <= 0) {
+        [fields removeObjectForKey:@"pci"];
+    }
     return fields;
 }
 

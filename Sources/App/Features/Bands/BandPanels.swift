@@ -120,6 +120,19 @@ struct BandPanels: View {
     /// 驱动校验回读的定时任务。换卡槽、再次保存、离开页面、用户又动了勾选都会取消它。
     @State private var verifyTask: Task<Void, Never>?
 
+    /// 最后一次**被 Modem 回读确认过**的勾选。
+    ///
+    /// 只活在这一个界面实例里（不落盘）：它的唯一用途是「重启蜂窝服务之后，判断
+    /// CommCenter 有没有把这次写入丢掉」（见 `scheduleRestartCheck`）。跨启动保留
+    /// 反而危险 —— 那是别的会话里的期望值，拿来对比只会误报。
+    @State private var confirmedSelection: [RadioAccessTechnology: Set<Int>]?
+
+    /// 正在做「重启后校验」。为真时不许 `syncSelectionFromModem` 覆盖界面 ——
+    /// 否则用户会先看到勾选跳回旧值，再被我们改成期望值，白闪一次。
+    @State private var restartCheckActive = false
+    /// 驱动重启后校验的定时任务。
+    @State private var restartCheckTask: Task<Void, Never>?
+
     /// 频段网格：4 列。和原版一样 —— 一屏能扫完一个制式，不用滚。
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
@@ -203,6 +216,7 @@ struct BandPanels: View {
             // 人已经走了：在校验里的那几次回读没有意义，也省得它稍后弹一条
             // 用户根本没在看的横幅。
             cancelVerify()
+            cancelRestartCheck()
         }
         // 右上角只有齿轮（维护 / 关于），由外壳 `PageScaffold` 渲染 —— 这一层
         // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
@@ -217,6 +231,8 @@ struct BandPanels: View {
             hasUnsavedChanges = false
             // 换卡了：上一张卡的校验现场没有意义，回读会读到另一张卡。
             cancelVerify()
+            cancelRestartCheck()
+            confirmedSelection = nil
             dismissBanner()
             service.load(slot: newSlot)
         }
@@ -686,13 +702,18 @@ struct BandPanels: View {
     ///
     /// 失败也走 5 秒：那条文案（"Could not restart the cellular service."）同样
     /// 只是一次动作的回执，而真正的失败原因在别处（关于页的 Root tool 那一行）。
-    private func showBanner(_ text: String, isError: Bool) {
+    ///
+    /// ── 2026-10-17：加 `duration` 参数，默认仍是 5 秒 ────────────────────────
+    ///
+    /// 唯一改时长的是「重启后 Modem 把频段退回去了」那一条：它不是一次动作的回执，
+    /// 而是一件**需要用户处理**的事（要去点保存重新写入），5 秒不够看清就没了。
+    private func showBanner(_ text: String, isError: Bool, duration: Double = 5) {
         banner = text
         bannerIsError = isError
         let token = bannerToken &+ 1
         bannerToken = token
         Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
             // 这 5 秒里又出过新横幅（或它已被别处清掉）就什么都不做。
             guard bannerToken == token else { return }
             banner = nil
@@ -720,6 +741,7 @@ struct BandPanels: View {
         // 用户开始改新的了 —— 上一轮的写后校验连同它的重试一起作废，否则它会在
         // 几次回读之后弹一句「Modem 没确认」，说的却是用户早就改掉的旧设置。
         cancelVerify()
+        cancelRestartCheck()
         // 用户已经开始改了，上一次动作的回执就不再成立 —— 连同它那个在途的
         // 定时器一起作废（见 `dismissBanner`）。
         dismissBanner()
@@ -729,6 +751,7 @@ struct BandPanels: View {
         selection[rat] = on ? Set(bands.map(\.number)) : []
         hasUnsavedChanges = true
         cancelVerify()
+        cancelRestartCheck()
         dismissBanner()
     }
 
@@ -740,8 +763,14 @@ struct BandPanels: View {
     /// `verify != nil` 那一条是 2026-10-17 补的：保存成功后 `hasUnsavedChanges`
     /// 已经置为 false，光靠它挡不住「刚写完就读到旧值」的那一读 —— 校验窗口内
     /// 由 `verifyReadback` 自己决定界面该不该动（见 `BandWriteVerify`）。
+    ///
+    /// `restartCheckActive` 同理：重启蜂窝服务之后的第一次回读，结果由
+    /// `compareAfterRestart` 处理，不让它先闪一下再被改回来。
     private func syncSelectionFromModem() {
-        guard let info = service.bandInfo, !hasUnsavedChanges, verify == nil else { return }
+        guard let info = service.bandInfo,
+              !hasUnsavedChanges,
+              verify == nil,
+              !restartCheckActive else { return }
         var next: [RadioAccessTechnology: Set<Int>] = [:]
         for rat in info.supported.keys {
             next[rat] = info.activeNumbers(of: rat)
@@ -807,6 +836,95 @@ struct BandPanels: View {
             ? Strings.text("Cellular service is restarting.")
             : Strings.text("Could not restart the cellular service."),
             isError: !ok)
+        // ── 2026-10-17：重启之后要**自己验一次**，不能等用户发现勾选跳回去了 ──
+        //
+        // 真机现象：保存后 5 秒内一切正常（写后校验也确认过），可一旦点这个按钮，
+        // 几秒后勾选回到改之前。也就是「CommCenter 的运行时状态改了，重启后读回来
+        // 的还是旧值」。
+        //
+        // 真因在 Modem / CommCenter 的持久化那一侧（RootTool 那一处已改成先
+        // SIGTERM 再兜底 SIGKILL，见 `do_restart_commcenter`）。App 这边能做的是
+        // **别让它悄无声息地发生**：重启后等 CommCenter 回来，把实际值与我们确认
+        // 过的值比一次；退回去了就把勾选恢复成用户想要的，并说明「需要重新写入」。
+        if ok, let expected = confirmedSelection {
+            scheduleRestartCheck(expected: expected)
+        }
+    }
+
+    // MARK: - 重启后校验
+
+    /// 重启蜂窝服务之后，等 CommCenter 回来并把频段读出来，与我们确认过的值比一次。
+    ///
+    /// 为什么要「等」：`kill` 是异步的，CommCenter 退出、launchd 重新拉起、基带重新
+    /// 附着，加起来几秒钟。这段时间里的读要么失败，要么还是**老进程**在回答（它手里
+    /// 是刚写进去的新值），早早比一次会得出「一切正常」的假结论。
+    ///
+    /// 判定「已经换了一个进程」用两条线索：① 读到过失败（老进程已经没了）；
+    /// ② 或者已经过了 8 秒（老进程无论如何活不到这时）。之后再读到第一份成功结果
+    /// 才开始比。
+    ///
+    /// 走 `probeBands` 而不是 `service.load`：后者会把 `availability` 打成
+    /// `.unavailable`，整页在重启期间闪一次「不可用」。
+    private func scheduleRestartCheck(expected: [RadioAccessTechnology: Set<Int>]) {
+        restartCheckTask?.cancel()
+        restartCheckActive = true
+        restartCheckTask = Task { @MainActor in
+            let started = Date()
+            var sawDown = false
+            while !Task.isCancelled, Date().timeIntervalSince(started) < 20 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                let info = await service.probeBands(slot: service.slot)
+                guard !Task.isCancelled else { return }
+                if info == nil {
+                    // 读不到 = CommCenter 正处在「被杀了 / 还没起来」的窗口里。
+                    sawDown = true
+                    continue
+                }
+                let elapsed = Date().timeIntervalSince(started)
+                if !sawDown && elapsed < 8 {
+                    // 从来没读到过失败，而且时间还短 —— 回答的可能是老进程，再等等。
+                    continue
+                }
+                finishRestartCheck(expected: expected, info: info)
+                return
+            }
+            // 超时（CommCenter 一直没回来）：什么都不改，界面保持原样。
+            restartCheckActive = false
+            restartCheckTask = nil
+        }
+    }
+
+    /// 比对并收尾。
+    private func finishRestartCheck(expected: [RadioAccessTechnology: Set<Int>],
+                                    info: BandSet) {
+        var actual: [RadioAccessTechnology: Set<Int>] = [:]
+        for rat in expected.keys {
+            actual[rat] = info.activeNumbers(of: rat)
+        }
+        restartCheckActive = false
+        restartCheckTask = nil
+
+        // 无论一致与否都把卡片刷新一次：`probeBands` 刻意不动界面状态，
+        // 重启之后「当前网络」那一块也需要一份新数据。
+        service.load(slot: service.slot)
+
+        guard actual != expected else { return }
+
+        // 退回去了。界面恢复成用户**上次保存的那一份**，并明确标成「未保存」——
+        // 这一页的底色是「界面必须说实话」：勾选回到旧值本身没错，错的是不说一声。
+        // 而把它改回旧值也不是答案：那是用户明确要的配置，他要的是「重新写进去」。
+        selection = expected
+        hasUnsavedChanges = true
+        showBanner(Strings.text("The modem went back to the previous bands after the restart. Your last saved selection is restored — tap \"Save\" to write it again."),
+                   isError: true,
+                   duration: 12)
+    }
+
+    private func cancelRestartCheck() {
+        restartCheckTask?.cancel()
+        restartCheckTask = nil
+        restartCheckActive = false
     }
 
     // MARK: - 写后校验
@@ -814,6 +932,7 @@ struct BandPanels: View {
     /// 保存成功后开始一轮写后校验。见 `BandWriteVerify`。
     private func beginVerify(expected: [RadioAccessTechnology: Set<Int>]) {
         cancelVerify()
+        cancelRestartCheck()
         verify = BandWriteVerify(expected: expected, slot: service.slot)
         scheduleVerifyRead(after: BandWriteVerify.firstDelay)
     }
@@ -864,6 +983,8 @@ struct BandPanels: View {
 
         if matched {
             // 落地了。放开守卫，把（已经一致的）值铺一次，之后恢复正常联动。
+            // 记下这一份「Modem 确认过的勾选」—— 重启蜂窝服务之后要拿它对比。
+            confirmedSelection = pending.expected
             verify = nil
             verifyTask = nil
             syncSelectionFromModem()
