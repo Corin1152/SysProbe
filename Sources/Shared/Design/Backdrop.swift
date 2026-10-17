@@ -4,10 +4,11 @@ import SwiftUI
 /// vertical wash with a faint measurement grid and a single soft glow behind the
 /// content, which is what made the screens read as instrument panels.
 ///
-/// 用户要求「去掉主程序的网格背景，改为纯白色」：渐变、28 pt 网格、`plusLighter`
-/// 的径向发光三样一起删掉了，只剩 `Color.mwCanvas`（浅色纯白 / 深色近黑）。
-/// 结果是整屏只剩卡片与它的 1 pt 描边 —— 卡片之间靠描边和 4 pt 间隙分层，
-/// 不再有底色差。卡片自己的填充色（`mwCard`）不变。
+/// 用户要求「去掉主程序的网格背景」，渐变、28 pt 网格、`plusLighter` 的径向发光
+/// 三样一起删掉了，只剩 `Color.mwCanvas`（浅色浅灰 `#F2F2F7` / 深色近黑）。
+/// 底色最初按「纯白」做过一版，但卡片填充也是白色、整屏只剩 1 pt 描边分层，
+/// 可读性不足 —— 随后改成 iOS 的 grouped 灰，卡片（白）就重新浮起来了。
+/// 卡片自己的填充色（`mwCard`）不变。
 ///
 /// ── 参数为什么还留着 ────────────────────────────────────────────────────────
 ///

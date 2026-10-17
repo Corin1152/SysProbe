@@ -83,9 +83,11 @@ struct CleanSection: View {
                 appsSection
                 previewSection
                 footerNotes()
-            } else {
-                toolRow
             }
+            // 2026-10-17：原来这里还有一个 `else { toolRow }` —— 未扫描时铺那条
+            // 「系统缓存清理会保留一小撮关键项…」的说明。按要求把这条文案去掉了，
+            // `toolRow` 也就成了空视图，连它一起删掉。未扫描时这一块只剩
+            // 顶部的总量与下面那排按钮。
         }
         // 自检要起一个子进程并等它结束（毫秒级，但最长会等到 1 秒），放到
         // 主 actor 之外 —— 与维护页同一句话，同一个理由。
@@ -357,25 +359,14 @@ struct CleanSection: View {
         return bytesLabel(total)
     }
 
-    /// 页脚说明。**没有工具状态那一行**（2026-10-14 去掉）——
-    /// 「Root tool 能不能用」在关于页已经有一行，同一处信息在两页各写一遍，
-    /// 这边多出来的只有「这一页也会坏」的暗示。
-    /// 「大小由特权维护工具实时测得」那句也去了（2026-10-15）：脚注只留
-    /// 有行动含义的（保留名单），来源说明属于关于页。
-    ///
-    /// 2026-10-15：**不再自带卡片底**。它并进硬件页的存储卡片之后，外面已经是
-    /// 一张卡片了 —— 再套一层同色的圆角块就是「卡片里长了个卡片」，而两层描边
-    /// 叠在一起比什么都显眼。
-    private var toolRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
-                .font(AppFont.text(11))
-                .foregroundStyle(Color.mwMuted)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+    // `toolRow`（未扫描时那条「系统缓存清理会保留一小撮关键项…」）2026-10-17
+    // 按要求删掉了 —— 它只有那一句说明，文案一去就成了空视图。
 
-    /// 扫完之后的页脚：释放量 + 两条说明。
+    /// 扫完之后的页脚：只剩「释放量」一行。
+    ///
+    /// 2026-10-17：原来这里还有一条「系统缓存清理会保留一小撮关键项（定位学习、
+    /// Siri、iCloud 同步状态）」的说明，按要求去掉 —— 那段内容在确认弹窗里本来
+    /// 就有一份，页脚不再重复。
     ///
     /// 不接 `scan` 参数 —— 它要的东西（`lastFreed`）都在 `self` 上，传进来反而让
     /// 读者以为用了扫描结果。
@@ -386,11 +377,6 @@ struct CleanSection: View {
                     .font(AppFont.text(13, weight: .semibold))
                     .foregroundStyle(Color.mwAccent)
             }
-            // 排除名单的存在要在这里说，而不是只在确认弹窗里 —— 弹窗一闪就没，
-            // 页脚才是用户会回头核对的地方。
-            Text("The system cache clean keeps a small set of critical system items: location learning, Siri, and iCloud sync state.")
-                .font(AppFont.text(11))
-                .foregroundStyle(Color.mwMuted)
         }
         .padding(.top, 4)
     }
@@ -406,7 +392,8 @@ struct CleanSection: View {
     ///
     /// 2026-10-15：**不再自带卡片底**。并进硬件页的存储卡片之后，外面已经是一张
     /// 卡片了 —— 再套一层同色的圆角块就是「卡片里长了个卡片」，两层描边叠在一起
-    /// 比什么都显眼。`toolRow` 与 `previewSection` 同样处理。
+    /// 比什么都显眼。`previewSection` 同样处理（那时同一层的说明行叫 `toolRow`，
+    /// 2026-10-17 已删除）。
     private var appsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("App caches")
@@ -505,7 +492,7 @@ struct CleanSection: View {
     /// 「哪一类最占地方」。收起状态下每行右边就是该类的实测总量，
     /// 已经足够做那个判断。
     ///
-    /// 与 `toolRow` 同一件事：**不再自带卡片底**，外面那张存储卡片就是它的底。
+    /// 与其余几块同一件事：**不再自带卡片底**，外面那张存储卡片就是它的底。
     private var previewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("What will be removed")

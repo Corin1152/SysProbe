@@ -157,13 +157,12 @@ struct ThermalThrottlePanel: View {
                 Text(verbatim: Strings.text("Disable thermal throttling warning"))
             }
 
-            // 说明与失败提示都是 `.caption`：这一段是卡片里的一个开关，
-            // 不是一张卡片，正文级字号会把它顶得跟上面的「智能停充」一样重。
-            Text("Stops the thermalmonitord daemon so iOS stops lowering the CPU clock in response to heat. Takes effect after a restart.")
-                .font(.caption)
-                .foregroundStyle(Color.mwMuted)
-                .fixedSize(horizontal: false, vertical: true)
-
+            // 2026-10-17：开关下方那段说明（"Stops the thermalmonitord daemon so
+            // iOS stops lowering the CPU clock…"）按要求去掉 —— 开关标题本身已经
+            // 说明了做什么，确认弹窗里还有一份完整的后果说明。
+            //
+            // 失败提示仍是 `.caption`：这一段是卡片里的一个开关，不是一张卡片，
+            // 正文级字号会把它顶得跟上面的「智能停充」一样重。
             if thermalFailed {
                 Text("Could not change the thermal setting.")
                     .font(.caption)

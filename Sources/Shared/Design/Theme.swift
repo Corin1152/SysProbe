@@ -17,12 +17,17 @@ nonisolated extension Color {
         })
     }
 
-    /// Page background. **浅色纯白（2026-10-17）**：用户要求「去掉主程序的网格背景，
-    /// 改为纯白色」，所以浅色从 `0xEEF1F6`（冷调浅灰蓝）改成 `0xFFFFFF`。深色不变
-    /// —— 纯白在深色模式下不可读，那一侧仍是近黑。
+    /// Page background. **浅灰 `0xF2F2F7`（2026-10-17 第二轮）**。
     ///
+    /// 当天先按要求去过一次纯白（`0xFFFFFF`），但卡片填充色也是白色，整屏只剩
+    /// 1 pt 描边分层，卡片几乎看不出来 —— 用户随后要求「背景改成浅灰，让卡片
+    /// 可读性好点即可」。取值就是 iOS 的 `systemGroupedBackground`（`#F2F2F7`），
+    /// 中性灰、不带原来的蓝调（旧值 `0xEEF1F6`），与白卡片的明度差刚好够分层
+    /// 又不刺眼。
+    ///
+    /// 深色不变（`0x06070A`）—— 浅灰在深色模式下没有意义。
     /// 背景现在是**平铺色**，不再是渐变的一侧：见 `Backdrop`。
-    static let mwCanvas = Color.mw(0xFFFFFF, 0x06070A)
+    static let mwCanvas = Color.mw(0xF2F2F7, 0x06070A)
     /// 旧画布渐变的顶部色。**2026-10-17 起没有任何绘制点** —— 背景改纯色时渐变被
     /// 删掉了，这里保留常量是为了恢复时不用重新取色。
     static let mwCanvasTop = Color.mw(0xF7F9FC, 0x0C1018)
