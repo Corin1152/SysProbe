@@ -205,6 +205,8 @@ struct DashboardPanels: View {
                 //
                 // 2026-10-17：这六行（健康度及以下）的值字号单独收到 14 —— 见
                 // `ValueRow.valueSize`。标签不动（13），所以是「13 标签 / 14 值」。
+                // 同一天值颜色也改成与标签同一种淡灰（`ValueRow.valueColor`）：
+                // 这六项是静态参数，不是那三个实时读数，不该跟它们抢颜色。
                 VStack(spacing: 8) {
                     ValueRow(title: "Health",
                              value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—",

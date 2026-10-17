@@ -393,7 +393,26 @@ private struct MenuRow<Options: View>: View {
 struct ValueRow: View {
     let title: LocalizedStringKey
     let value: String
-    var tint: Color = .primary
+
+    /// 值的颜色。默认 **`mwMuted`（与标签同一种淡灰）**。
+    ///
+    /// ── 2026-10-17 第九次改：值由 `.primary` 改为与标签同色 ─────────────────
+    ///
+    /// 用户要求「分隔线以下六行的数值字体颜色改成跟标签一样的淡灰」。这六行是
+    /// 电池卡片里「这块电池是什么」那组静态参数，标签与值说的是同一件事的两半，
+    /// 同色之后整列读起来是一张**表**，而不是「六个彩色读数配六个灰标题」——
+    /// 上半截的实时读数（电压 / 电流 / 温度）仍然是彩色 20 pt，层次照样分得开。
+    ///
+    /// 原来是 `var tint: Color = .primary`。改名不只是因为默认值变了：「tint」
+    /// 在这套代码里一直指**强调色**（`Metric` / `BarRow` / `actionButton` 的那个
+    /// 参数），而这里现在传的是中性灰，继续叫 tint 会误导下一个改它的人。
+    ///
+    /// 值仍是 `semibold`：同色不靠颜色分主次，就靠这点粗细差 —— 与频段页
+    /// `infoRow`「同号、靠粗细拉开层次」是同一套取向。
+    ///
+    /// 缺值（`—`）走的仍是 `mwMuted.opacity(0.55)`，比正常值更淡一档：那不是
+    /// 读数，只表示这一项读不到。
+    var valueColor: Color = .mwMuted
 
     /// 值的字号。
     ///
@@ -481,7 +500,7 @@ struct ValueRow: View {
                 // 字号与其余五行的**字形也必须一致**：以前 `Serial` 走 `.monospaced`
                 // （SF Mono），现在整列都是 `AppFont.text`，见类型头上的说明。
                 .font(AppFont.text(valueSize, weight: .semibold))
-                .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
+                .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : valueColor)
                 .lineLimit(1)
                 .multilineTextAlignment(.trailing)
         }

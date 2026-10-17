@@ -115,6 +115,11 @@ struct BandPanels: View {
     /// 当前这条横幅的序号。见 `showBanner`。
     @State private var bannerToken = 0
 
+    /// 保存后「写 → 回读」的校验现场。`nil` = 没有在途校验。见 `BandWriteVerify`。
+    @State private var verify: BandWriteVerify?
+    /// 驱动校验回读的定时任务。换卡槽、再次保存、离开页面、用户又动了勾选都会取消它。
+    @State private var verifyTask: Task<Void, Never>?
+
     /// 频段网格：4 列。和原版一样 —— 一屏能扫完一个制式，不用滚。
     private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
 
@@ -193,7 +198,12 @@ struct BandPanels: View {
         }
         // 离开就停表：切分段、切分页都会走到这里。定时器挂在 `.default` 模式上，
         // 滚动期间本来就会让路，这一句管的是「人已经不在这页了」那种情况。
-        .onDisappear { service.stopSlotPolling() }
+        .onDisappear {
+            service.stopSlotPolling()
+            // 人已经走了：在校验里的那几次回读没有意义，也省得它稍后弹一条
+            // 用户根本没在看的横幅。
+            cancelVerify()
+        }
         // 右上角只有齿轮（维护 / 关于），由外壳 `PageScaffold` 渲染 —— 这一层
         // 不再声明任何工具栏项。2026-10-14 之前保存 / 刷新 / 齿轮三个按钮走
         // `.toolbar` 排在导航栏右侧，现在这四个动作全部搬到页面顶部（见 `actionRow`）。
@@ -205,6 +215,8 @@ struct BandPanels: View {
             // 上一张卡的对象，不重读就没得写。
             selection = [:]
             hasUnsavedChanges = false
+            // 换卡了：上一张卡的校验现场没有意义，回读会读到另一张卡。
+            cancelVerify()
             dismissBanner()
             service.load(slot: newSlot)
         }
@@ -705,6 +717,9 @@ struct BandPanels: View {
         }
         selection[rat] = set
         hasUnsavedChanges = true
+        // 用户开始改新的了 —— 上一轮的写后校验连同它的重试一起作废，否则它会在
+        // 几次回读之后弹一句「Modem 没确认」，说的却是用户早就改掉的旧设置。
+        cancelVerify()
         // 用户已经开始改了，上一次动作的回执就不再成立 —— 连同它那个在途的
         // 定时器一起作废（见 `dismissBanner`）。
         dismissBanner()
@@ -713,15 +728,20 @@ struct BandPanels: View {
     private func setAll(_ rat: RadioAccessTechnology, in bands: [Band], on: Bool) {
         selection[rat] = on ? Set(bands.map(\.number)) : []
         hasUnsavedChanges = true
+        cancelVerify()
         dismissBanner()
     }
 
     /// 把刚从 Modem 读回来的 active 灌进界面状态。
     ///
-    /// **只在没有未保存修改时覆盖**：读回来的时机不由界面控制（进页面、换卡槽、
-    /// 保存后刷新都会触发），无条件覆盖会把用户刚勾的东西抹掉。
+    /// **只在没有未保存修改、也没有在途写后校验时覆盖**：读回来的时机不由界面控制
+    /// （进页面、换卡槽、保存后刷新都会触发），无条件覆盖会把用户刚勾的东西抹掉。
+    ///
+    /// `verify != nil` 那一条是 2026-10-17 补的：保存成功后 `hasUnsavedChanges`
+    /// 已经置为 false，光靠它挡不住「刚写完就读到旧值」的那一读 —— 校验窗口内
+    /// 由 `verifyReadback` 自己决定界面该不该动（见 `BandWriteVerify`）。
     private func syncSelectionFromModem() {
-        guard let info = service.bandInfo, !hasUnsavedChanges else { return }
+        guard let info = service.bandInfo, !hasUnsavedChanges, verify == nil else { return }
         var next: [RadioAccessTechnology: Set<Int>] = [:]
         for rat in info.supported.keys {
             next[rat] = info.activeNumbers(of: rat)
@@ -734,25 +754,51 @@ struct BandPanels: View {
     private func save() {
         // 只提交界面上画出来的制式（现在就是 4G）。没画出来的 3G / 2G 由桥接层
         // 从原对象里原样带回去 —— 不展示不等于禁用。
+        let expected = selection
         let ok = service.write(selection: selection, only: visibleRats, slot: service.slot)
         showBanner(ok
             ? Strings.text("Band settings saved.")
             : Strings.text("Could not write the band settings. Nothing was changed."),
             isError: !ok)
-        // 无论成没成都重读一次：失败时界面回到 Modem 的真实状态，
-        // 而不是停在一个「看起来改了、其实没改」的勾选上。
         hasUnsavedChanges = false
-        service.load(slot: service.slot)
+        if ok {
+            // ── 2026-10-17：成功路径不再「立刻回读」 ───────────────────────────
+            //
+            // `write()` 返回成功只代表 XPC 收下了，CommCenter 里 `fActiveBands`
+            // 还要过一小会儿才变。立刻 `load()` 会读到旧值，再经
+            // `syncSelectionFromModem` 铺回界面 —— 用户看到的就是「保存后过一两秒
+            // 勾选自己跳回改之前」。改成延迟 + 校验，见 `BandWriteVerify`。
+            beginVerify(expected: expected)
+        } else {
+            // 写失败：没有「等落地」这回事，直接回读真实状态，让界面回到 Modem
+            // 的样子，而不是停在一个「看起来改了、其实没改」的勾选上。
+            cancelVerify()
+            service.load(slot: service.slot)
+        }
     }
 
     private func restoreDefault() {
+        // 恢复默认 = 把 active 整个换成 supported，所以预期值就是「可见制式下
+        // 全部支持的频段」。写入后同样存在落地延迟，走同一套校验。
+        let expected: [RadioAccessTechnology: Set<Int>] = service.bandInfo.map { info in
+            var next: [RadioAccessTechnology: Set<Int>] = [:]
+            for rat in visibleRats {
+                next[rat] = Set((info.supported[rat] ?? []).map(\.number))
+            }
+            return next
+        } ?? [:]
         let ok = service.restoreDefault(slot: service.slot)
         showBanner(ok
             ? Strings.text("Default band settings restored.")
             : Strings.text("Could not restore the default band settings."),
             isError: !ok)
         hasUnsavedChanges = false
-        service.load(slot: service.slot)
+        if ok {
+            beginVerify(expected: expected)
+        } else {
+            cancelVerify()
+            service.load(slot: service.slot)
+        }
     }
 
     private func restartCellular() {
@@ -762,4 +808,127 @@ struct BandPanels: View {
             : Strings.text("Could not restart the cellular service."),
             isError: !ok)
     }
+
+    // MARK: - 写后校验
+
+    /// 保存成功后开始一轮写后校验。见 `BandWriteVerify`。
+    private func beginVerify(expected: [RadioAccessTechnology: Set<Int>]) {
+        cancelVerify()
+        verify = BandWriteVerify(expected: expected, slot: service.slot)
+        scheduleVerifyRead(after: BandWriteVerify.firstDelay)
+    }
+
+    /// 排一次「回读」。写入后 Modem 需要一小段时间才生效，所以第一次要先等 ——
+    /// 这一段等待就是上游 `asyncAfter(0.5)` 在做的事。
+    private func scheduleVerifyRead(after delay: Double) {
+        verifyTask?.cancel()
+        verifyTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let pending = verify else { return }
+            service.load(slot: pending.slot)
+            // 等这一读真正落地再比，否则比的是上一次的 `bandInfo`。
+            await waitForLoadToFinish()
+            guard !Task.isCancelled, verify != nil else { return }
+            verifyReadback()
+        }
+    }
+
+    /// 等 `service.load` 这一读落地（`isLoading` 由 `load` 置起、`apply` 之后落下）。
+    ///
+    /// 不用 `bandInfo` 的 `onChange` 判：回读值与上一次**完全相同**时不会触发
+    /// `onChange`，校验就永远卡在等一个不来的事件上。`isLoading` 是这一读自己的
+    /// 进度，谁来读都一样。
+    private func waitForLoadToFinish() async {
+        // 上限 2 秒：`copyCellInfo` 最坏等 1 秒，再留一倍余量。超时也往下走 ——
+        // 读不到就按「没确认」处理（会重试或认账），不把校验悬在半空。
+        var waited = 0.0
+        while service.isLoading && waited < 2.0 {
+            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 0.1
+        }
+    }
+
+    /// 一次回读的结果：一致 → 收工；不一致 → 重试，次数用完才认账。
+    private func verifyReadback() {
+        guard let pending = verify else { return }
+        var actual: [RadioAccessTechnology: Set<Int>] = [:]
+        // 读不到 `bandInfo`（基带无响应）按「没确认」处理，而不是直接 return ——
+        // 那样 `verify` 会一直挂着，`syncSelectionFromModem` 就再也不放行了。
+        if let info = service.bandInfo {
+            for rat in pending.expected.keys {
+                actual[rat] = info.activeNumbers(of: rat)
+            }
+        }
+        let matched = service.bandInfo != nil && actual == pending.expected
+
+        if matched {
+            // 落地了。放开守卫，把（已经一致的）值铺一次，之后恢复正常联动。
+            verify = nil
+            verifyTask = nil
+            syncSelectionFromModem()
+            return
+        }
+
+        if pending.attempt + 1 < BandWriteVerify.maxAttempts {
+            var next = pending
+            next.attempt += 1
+            verify = next
+            scheduleVerifyRead(after: BandWriteVerify.retryDelay)
+            return
+        }
+
+        // 三次都不一致：Modem 确实没接受这次写入。这时才按真实值铺回界面，
+        // 并且把原因说出来 —— 与「界面抢跑」区分开，否则用户无从判断。
+        verify = nil
+        verifyTask = nil
+        showBanner(Strings.text("The modem did not confirm the new band settings."),
+                   isError: true)
+        syncSelectionFromModem()
+    }
+
+    private func cancelVerify() {
+        verifyTask?.cancel()
+        verifyTask = nil
+        verify = nil
+    }
+}
+
+/// 保存成功后「写 → 回读」的校验现场。
+///
+/// ## 为什么需要它
+///
+/// `write()` 的 XPC 返回成功**不等于**新值已经在 CommCenter 里生效：
+/// `getBandInfo:` 在返回后的一小段时间里仍然给旧的 `fActiveBands`。原先 `save()`
+/// 是「返回成功就立刻 `load()`」，那一读正好落在这个窗口里 —— 读到旧值，
+/// `syncSelectionFromModem()` 又把旧值无条件铺回界面，于是表现为
+/// **「保存后过一两秒，勾选自己跳回改之前」**。
+///
+/// 上游 CellularInfo 早就撞过同一个坑，它用 `asyncAfter(0.5)` 延迟刷新绕开
+/// （注释原话：「延迟刷新 这样UI就不会已选/未选的频段CheckBox闪一下了」）。
+/// 这里把「延迟」和「校验」一起做，因为延迟只能避开窗口、不能证明写成功：
+///
+///   1. 先记下这次想写成的 `expected`，等 `firstDelay` 再回读；
+///   2. 与 `expected` 一致就收工；
+///   3. 不一致**不动界面**（`syncSelectionFromModem` 在 `verify != nil` 时直接
+///      返回），隔 `retryDelay` 再读，最多读 `maxAttempts` 次（合计约 3.2 秒）；
+///   4. 全都对不上才认账：按 Modem 的真实值铺回界面，并明确提示
+///      「Modem 没有确认这次设置」。
+///
+/// 第 4 步是这套东西比单纯延迟更有价值的地方 —— 真没写进去的时候，界面必须
+/// 说实话，而不是停在一个假的勾选状态上。
+private struct BandWriteVerify {
+    /// 这次想写成的勾选，按制式分组。
+    let expected: [RadioAccessTechnology: Set<Int>]
+    /// 写的是哪张卡。回读必须读同一张。
+    let slot: Int
+    /// 已经重试过几次（首次回读不计）。
+    var attempt = 0
+
+    /// 回读总次数（首次 + 2 次重试）。
+    static let maxAttempts = 3
+    /// 首次回读前等多久。量级对齐上游那 0.5 秒，再留一点余量。
+    static let firstDelay: Double = 0.8
+    /// 重试间隔。三次加起来约 3.2 秒，仍在「人会觉得是刚保存完」的范围里。
+    static let retryDelay: Double = 1.2
 }

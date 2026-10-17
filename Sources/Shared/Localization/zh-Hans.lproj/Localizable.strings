@@ -269,6 +269,7 @@
 "Show in Settings" = "在设置中显示";
 "Slot %d" = "卡槽 %d";
 "The baseband did not answer. This usually means the CommCenter entitlement is not in effect for this build, or there is no SIM in the device. Reading bands is refused the same way as writing them, so nothing here can be edited until it works." = "基带没有响应。通常意味着这一版构建里 CommCenter 权限没有生效，或者设备里没有 SIM 卡。读频段与写频段是被同样拦下的，所以在它能用之前，这里什么都改不了。";
+"The modem did not confirm the new band settings." = "Modem 没有确认新的频段设置，已按当前实际状态显示。";
 "Unavailable" = "不可用";
 "Version" = "版本";
 
