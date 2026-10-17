@@ -395,6 +395,24 @@ struct ValueRow: View {
     let value: String
     var tint: Color = .primary
 
+    /// 值的字号。
+    ///
+    /// ── 2026-10-17 第八次改：值 15 → 14（仅「健康度及以下」六行）─────────────
+    ///
+    /// 用户要求「电源页健康度及以下的数值改成 14pt」。上限定 15 是 2026-10-16
+    /// 真机对比后定下的，这一轮不再全局改：**只有**电源页电池卡片里分隔线以下
+    /// 那六行（健康度 / 循环次数 / 设计容量 / 满充容量 / 开机电压 / 序列号）
+    /// 传 14，充电控制页与其余 `ValueRow` 沿用 15。
+    ///
+    /// 参数化而不是改常量：同一个行样式被两页共用（见类型头），而在其中一页的
+    /// 六行上收 1 pt 是**版式决定**，不是「这个组件的值字该多大了」的重新定稿。
+    /// 写死在 body 里等于把另一页一起改掉，那一页并没有提这个要求。
+    ///
+    /// 标签仍是 13（`regular` + 淡灰），所以这一列现在是「标签 13 / 值 14
+    /// semibold」—— 与频段页 `infoRow` 的「同号、靠粗细拉开层次」是同一套取向，
+    /// 值与标签仍看得出主次。
+    var valueSize: CGFloat = 15
+
     var body: some View {
         // 间距与 `BandPanels.infoRow`（频段页「当前网络」）一致的 12。
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -462,7 +480,7 @@ struct ValueRow: View {
                 //
                 // 字号与其余五行的**字形也必须一致**：以前 `Serial` 走 `.monospaced`
                 // （SF Mono），现在整列都是 `AppFont.text`，见类型头上的说明。
-                .font(AppFont.text(15, weight: .semibold))
+                .font(AppFont.text(valueSize, weight: .semibold))
                 .foregroundStyle(value == "—" ? Color.mwMuted.opacity(0.55) : tint)
                 .lineLimit(1)
                 .multilineTextAlignment(.trailing)

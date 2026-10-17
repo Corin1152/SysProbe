@@ -202,24 +202,33 @@ struct DashboardPanels: View {
                 Divider().overlay(Color.mwCardStroke)
 
                 // 10 → 8（2026-10-16，压卡片高度）：六行之间共五处间隔，收 10 pt。
+                //
+                // 2026-10-17：这六行（健康度及以下）的值字号单独收到 14 —— 见
+                // `ValueRow.valueSize`。标签不动（13），所以是「13 标签 / 14 值」。
                 VStack(spacing: 8) {
                     ValueRow(title: "Health",
-                             value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—")
-                    ValueRow(title: "Cycle count", value: battery.cycleCount.map { String($0) } ?? "—")
+                             value: battery.healthPercent.map { String(format: "%.1f%%", $0) } ?? "—",
+                             valueSize: 14)
+                    ValueRow(title: "Cycle count",
+                             value: battery.cycleCount.map { String($0) } ?? "—",
+                             valueSize: 14)
                     ValueRow(title: "Design capacity",
-                             value: battery.designCapacity.map { "\($0) mAh" } ?? "—")
+                             value: battery.designCapacity.map { "\($0) mAh" } ?? "—",
+                             valueSize: 14)
                     ValueRow(title: "Full charge capacity",
-                             value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—")
+                             value: battery.nominalChargeCapacity.map { "\($0) mAh" } ?? "—",
+                             valueSize: 14)
                     // 两个电压都是毫伏，跟原版前端一样除以 1000 显示。
                     ValueRow(title: "Boot voltage",
-                             value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—")
+                             value: battery.bootVoltage.map { String(format: "%.2f V", Double($0) / 1000) } ?? "—",
+                             valueSize: 14)
                     // ── 2026-10-16：Serial 不再走等宽 ──────────────────────────
                     //
                     // 它以前是唯一一个 `monospaced: true` 的行，走 `.monospaced`
                     // design（SF Mono）—— 与上面五行（`.default`）不是同一套字形，
                     // 同一列里混两种字形，看着就是「某一行跟别的不像」。
                     // 用户要求整列统一，这里去掉那个参数。
-                    ValueRow(title: "Serial", value: battery.serial ?? "—")
+                    ValueRow(title: "Serial", value: battery.serial ?? "—", valueSize: 14)
                 }
             }
         }
