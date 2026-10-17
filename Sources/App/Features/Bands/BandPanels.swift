@@ -61,7 +61,13 @@ struct BandPanels: View {
 
     /// 自动刷新的参数。**由 `BandView` 注入** —— 「当前网络」卡片下半截要按它决定
     /// 画哪几行（见 `RefreshStatusRows`），而参数的持有者是页面层。
-    let refreshConfig: BandAutoRefreshConfig
+    ///
+    /// ── 2026-10-17：从 `let` 改成 `@Binding` ────────────────────────────────
+    ///
+    /// 「参数」那张卡片挪到了这一层（排在 4G 频段卡片**上方**，见 `body`），
+    /// 它要能改值，光读不够。持有者仍是 `BandView` —— 落盘、下发守护进程、
+    /// 重排定时器都挂在那边（见 `BandView.syncRefreshExecutor`）。
+    @Binding var refreshConfig: BandAutoRefreshConfig
 
     /// 界面上的勾选状态：制式 → 启用的频段号。
     ///
@@ -160,8 +166,12 @@ struct BandPanels: View {
         //
         // 包一层 `VStack` 就能把这一整套收在一个视图上。代价是这一层从「外层
         // `LazyVStack` 的四个元素」变成一个元素，懒加载范围小了一格 —— 而它内部
-        // 只有四块、且都在页面顶部，省不下什么。间距 14 与外层是同一个数。
-        VStack(spacing: 14) {
+        // 只有四块、且都在页面顶部，省不下什么。
+        //
+        // 间距与外层 `PageScaffold` 用的**是同一个数**（2026-10-17 起两边都是 10）：
+        // 这一层包住的卡片与外面的卡片在用户眼里是同一列东西，两处不一致的话
+        // 同一页会出现两种卡片间隙。
+        VStack(spacing: 10) {
             if let banner {
                 bannerPanel(banner)
             }
@@ -176,6 +186,12 @@ struct BandPanels: View {
                 actionRow
                 infoPanel
                 if service.slots.count > 1 { slotPanel }
+                // ── 2026-10-17：与 4G 频段卡片换了位置 ─────────────────────────
+                //
+                // 原来顺序是「频段卡片 → 参数卡片」，现按要求改成「参数卡片 →
+                // 频段卡片」：参数是这一页的前置条件（多久看一次、什么条件下才
+                // 动手），而频段网格是一片要点很多次的格子 —— 先看条件，再动手。
+                AutoRefreshParametersPanel(config: $refreshConfig)
                 bandPanels
             }
         }
@@ -645,9 +661,17 @@ struct BandPanels: View {
         Button {
             tap()
         } label: {
-            VStack(spacing: 4) {
+            // ── 2026-10-17：整排矮一截（按要求「四个按钮高度调小一些」）──────
+            //
+            // 上下内边距 10 → 6（合计 −8）、图标 16 → 15、图标与文字间距 4 → 3，
+            // 一个按钮大约矮 10 pt。四个并排时这一排本来就是页面上最占高度的一块，
+            // 而它上面只有导航栏 —— 压下来整页第一屏能多露出一张卡片。
+            //
+            // 文字仍 12 semibold：再小在窄屏上就要靠 `minimumScaleFactor` 缩，
+            // 四个按钮的字号一缩就不一致了，比多那 2 pt 高度更难接受。
+            VStack(spacing: 3) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                 Text(title)
                     .font(AppFont.text(12, weight: .semibold))
                     // 四列里每列只有屏宽的四分之一多一点，窄屏上要能缩。
@@ -657,7 +681,7 @@ struct BandPanels: View {
             }
             .foregroundStyle(tint)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(tint.opacity(0.12))

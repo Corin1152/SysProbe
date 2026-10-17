@@ -56,14 +56,24 @@ struct DashboardPanels: View {
     // MARK: Hero
 
     private var heroPanel: some View {
-        Panel {
-            VStack(spacing: 14) {
+        // ── 2026-10-17：这一张单独缩小（按要求）────────────────────────────────
+        //
+        // 三处一起收，都是这一张自己的尺寸，不影响别的卡片：
+        //   · 卡片内边距 14 → 12（`Panel` 的 `padding` 参数）；
+        //   · 环与药丸之间 14 → 10、环上方留白 4 → 2；
+        //   · 功率环 232 → 204。
+        //
+        // 只压环不压内边距的话，卡片两侧的空白会显得更宽 —— 环变小了、卡片却没
+        // 变，看起来是「没居中」而不是「变小了」。
+        Panel(padding: 12) {
+            VStack(spacing: 10) {
                 PowerRing(inputWatts: monitor.headline?.watts,
                           batteryWatts: plugged && snapshot.inputWatts != nil ? snapshot.batteryWatts : nil,
                           fullScale: fullScale,
                           caption: monitor.headline?.caption,
-                          tint: ringTint)
-                    .padding(.top, 4)
+                          tint: ringTint,
+                          size: 204)
+                    .padding(.top, 2)
 
                 FlowRow(spacing: 6) {
                     Pill(text: Text(verbatim: snapshot.statusText),

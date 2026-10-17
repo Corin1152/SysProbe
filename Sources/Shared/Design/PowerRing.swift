@@ -77,15 +77,18 @@ struct PowerRing: View {
             if let inputWatts {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(Formatting.watts(inputWatts))
-                        .mwReadout(size: 52, weight: .semibold, rolling: true)
+                        // 读数跟着环走：52 pt 是 232 pt 盘面的尺寸。缩盘不缩字的话，
+                        // 环一小，那串数字就顶到内圈弧上 —— 2026-10-17 加这个
+                        // `scale`，只为主 App 那张首卡把盘面收到 204。
+                        .mwReadout(size: 52 * scale, weight: .semibold, rolling: true)
                         .foregroundStyle(tint)
                     Text(verbatim: "W")
-                        .font(AppFont.text(20, weight: .medium))
+                        .font(AppFont.text(20 * scale, weight: .medium))
                         .foregroundStyle(Color.mwMuted)
                 }
             } else {
                 Text("no reading")
-                    .font(AppFont.text(22, weight: .medium))
+                    .font(AppFont.text(22 * scale, weight: .medium))
                     .foregroundStyle(Color.mwMuted.opacity(0.6))
             }
             if let caption {
@@ -103,8 +106,12 @@ struct PowerRing: View {
                     .padding(.top, 4)
             }
         }
-        .padding(.horizontal, 34)
+        .padding(.horizontal, 34 * scale)
     }
+
+    /// 盘面相对 232 pt 的缩放比。中心那一组字号与内边距都按它换算 ——
+    /// 环的直径是外部传进来的，字却是写死的，不换算就会脱节。
+    private var scale: CGFloat { size / 232 }
 }
 
 /// 表盘刻度。

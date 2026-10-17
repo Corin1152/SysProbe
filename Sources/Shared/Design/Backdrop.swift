@@ -94,17 +94,25 @@ struct Panel<Content: View>: View {
     /// （`Theme.cardPadding` + `Color.mwCard` + `strokeBorder`），复制一份的话
     /// 圆角、描边、内边距迟早会长歪。
     var expanded: Binding<Bool>?
+    /// 内边距。默认 `Theme.cardPadding` —— 只有**需要单独收一点**的卡片才传
+    /// （2026-10-17 电源页首卡：按要求「卡片缩小一点」，只动它一张）。
+    ///
+    /// 不做成「整站统一调小」：卡片的呼吸感靠的就是这个数，压全局会让所有页
+    /// 一起变挤，而用户要的是那一张。
+    var padding: CGFloat = Theme.cardPadding
     @ViewBuilder var content: () -> Content
 
     init(_ title: LocalizedStringKey? = nil,
          systemImage: String? = nil,
          trailing: Text? = nil,
          expanded: Binding<Bool>? = nil,
+         padding: CGFloat = Theme.cardPadding,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.systemImage = systemImage
         self.trailing = trailing
         self.expanded = expanded
+        self.padding = padding
         self.content = content
     }
 
@@ -135,7 +143,7 @@ struct Panel<Content: View>: View {
                 content()
             }
         }
-        .padding(Theme.cardPadding)
+        .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)

@@ -43,7 +43,9 @@ struct BandView: View {
 
     var body: some View {
         PageScaffold("Bands", glow: .mwAccent, openSettings: openSettings) {
-            BandPanels(service: bands, refreshConfig: refreshConfig)
+            // 参数的 `Binding` 交给它：参数卡片现在排在 4G 频段卡片**上方**，
+            // 位置归 `BandPanels` 管（见那边的 `body`）；日志卡片留在页面最后。
+            BandPanels(service: bands, refreshConfig: $refreshConfig)
             AutoRefreshPanels(config: $refreshConfig)
         }
         .task {

@@ -15,8 +15,13 @@ import SwiftUI
 /// modem」的前提，先说前者。
 ///
 /// 它原来的「当前网络」卡片按要求并进了上面那张同名的卡片（去掉了重复的 RSRP，
-/// 以及设备型号与卡槽两行），实现见 `RefreshStatusRows`。这里只剩三样：参数、
-/// 日志、脚注。
+/// 以及设备型号与卡槽两行），实现见 `RefreshStatusRows`。
+///
+/// ── 2026-10-17：只剩日志卡 ────────────────────────────────────────────────
+///
+/// 参数卡拆成 `AutoRefreshParametersPanel`，位置也换了 —— 它现在排在 4G 频段
+/// 卡片**上方**，由 `BandPanels` 画；页面最底下那段说明文案（两行红色警告 + 前置
+/// 开关说明）按要求删掉。这个类型因此只画「最近活动」一张卡，没日志时什么都不画。
 ///
 /// ── 参数为什么走 `@Binding` 而不是这里的 `@State` ──────────────────────────
 ///
@@ -40,66 +45,14 @@ struct AutoRefreshPanels: View {
     @ObservedObject private var controller = BandAutoRefreshController.shared
 
     var body: some View {
-        Group {
-            actionPanel
-            if !displayedLog.isEmpty {
-                logPanel
-            }
-            footnote
+        // ── 2026-10-17：只剩日志 ────────────────────────────────────────────
+        //
+        // 参数卡片挪到了 `BandPanels` 里（排在 4G 频段卡片上方，见那边的 `body`），
+        // 最下面那段说明文案按要求删掉 —— 参数摘要、警告与脚注四段文字挤在页尾，
+        // 读的人到那里已经滚完了整页，多出来的几行只是把页面拉长。
+        if !displayedLog.isEmpty {
+            logPanel
         }
-    }
-
-    // MARK: - 参数
-
-    private var actionPanel: some View {
-        // 标题不叫「自动刷新」：这一段回答的是「多久动一次手」，参数是它的全部内容。
-        Panel("Parameters", systemImage: "arrow.clockwise") {
-            VStack(alignment: .leading, spacing: 10) {
-                toggle("Enabled", isOn: $config.enabled)
-                // 前置开关（2026-10-14 要求）：连着 Wi-Fi 时暂停，断开自动恢复。
-                //
-                // 紧挨着「启用」放，因为它管的就是「这个功能什么时候该让路」——
-                // 与下面那些阈值不是一个层级的东西。默认开，见
-                // `BandAutoRefreshConfig.pauseOnWiFi` 的说明。
-                //
-                // 后台模式下**同样生效**：这一项会随配置一起下发到守护进程
-                // （见 `BandRefreshDaemonBridge.writeConfig`），判定在那边重跑一遍。
-                toggle("Pause on Wi-Fi", isOn: $config.pauseOnWiFi)
-                // 只有包里真的有守护进程时才给出这一项 —— 否则它是「能点、点了什么都不发生」，
-                // 而这件事在界面上完全看不出来。
-                if daemon.bundled {
-                    toggle("Run in background", isOn: $config.backgroundDaemon)
-                }
-                toggle("Log only (do not refresh)", isOn: $config.dryRun)
-
-                // 触发方向不再可选（2026-10-14）：只有「RSRP 低于阈值」一种 ——
-                // 这个功能的存在理由就是信号变弱时重载 modem。
-                stepper(value: $config.thresholdDbm, in: -125...(-70), step: 1,
-                        label: "Trigger threshold",
-                        valueText: "\(config.thresholdDbm) dBm")
-                stepper(value: $config.dwellSec, in: 0...120, step: 5,
-                        label: "Sustained for",
-                        valueText: Strings.text("%lld s", Int(config.dwellSec)))
-                stepper(value: $config.cooldownSec, in: 30...1800, step: 30,
-                        label: "Cooldown",
-                        valueText: Strings.text("%lld s", Int(config.cooldownSec)))
-                stepper(value: $config.sampleIntervalSec, in: 1...30, step: 1,
-                        label: "Sample every",
-                        valueText: Strings.text("%lld s", Int(config.sampleIntervalSec)))
-
-                // 「信号弱于 -100 且持续 20 秒」比四行开关更能说明它在等什么。
-                Text(verbatim: summary)
-                    .font(AppFont.text(12))
-                    .foregroundStyle(Color.mwMuted)
-            }
-        }
-    }
-
-    private var summary: String {
-        let base = "RSRP < \(config.thresholdDbm) dBm for \(Int(config.dwellSec))s → refresh, then wait \(Int(config.cooldownSec))s"
-        // 前置开关开着时把这件事说在参数摘要里 —— 否则「怎么一直不动手」没有解释。
-        guard config.pauseOnWiFi else { return base }
-        return base + " · " + Strings.text("paused while Wi-Fi is connected")
     }
 
     // MARK: - 日志
@@ -172,27 +125,79 @@ struct AutoRefreshPanels: View {
         }
     }
 
-    private var footnote: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // 上面两行是**警告**（掉网 / 通话中断 / 只在什么条件下跑），走红色。
-            Group {
-                Text("Refreshing reloads the modem and re-registers on the network. Cellular service drops for a few seconds; ongoing calls may drop. It does not change your locked bands.")
-                Text(config.backgroundDaemon
-                     ? "Runs in a separate root process, so it keeps working after you leave the app. It stops when the phone restarts — open SysProbe once to bring it back."
-                     : "Only runs while this page is in the foreground — the app has no background modes.")
-            }
-            .font(AppFont.text(11))
-            .foregroundStyle(Color.mwDanger)
+}
 
-            // 前置开关的说明。它是**行为说明**不是警告，所以不跟着上面走红色 ——
-            // 一屏红色文字里多一句正常说明，只会让人以为它也出了什么问题。
-            if config.pauseOnWiFi {
-                Text("While Wi-Fi is connected the countdown and the refresh are held, and it resumes by itself once Wi-Fi drops. Applies to background mode as well.")
-                    .font(AppFont.text(11))
+// ══════════════════════════════════════════════════════════════════════════════
+//  「参数」卡片
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// 自动刷新的参数卡片。
+///
+/// ── 2026-10-17：从 `AutoRefreshPanels` 拆出来 ────────────────────────────────
+///
+/// 拆的理由是**位置**：按要求它与 4G 频段卡片换了上下位置，现在排在频段网格
+/// **上方**（见 `BandPanels.body`），而日志卡片留在页面最底下。原来是同一个视图
+/// 里的一串兄弟，现在中间夹进了别的东西，只能拆成两个视图。
+///
+/// 值仍由 `BandView` 持有（`@Binding`）—— 落盘、下发守护进程、按执行体重排定时器
+/// 都挂在那边，理由见 `BandView` 与 `AutoRefreshPanels` 的类型头。
+struct AutoRefreshParametersPanel: View {
+
+    /// 参数。**持有者仍是 `BandView`**，这一层只是能写。
+    @Binding var config: BandAutoRefreshConfig
+
+    /// 只有包里真的有守护进程时才给出「后台运行」那一条 —— 见下面。
+    @ObservedObject private var daemon = BandRefreshDaemonBridge.shared
+
+    var body: some View {
+        // 标题不叫「自动刷新」：这一段回答的是「多久动一次手」，参数是它的全部内容。
+        Panel("Parameters", systemImage: "arrow.clockwise") {
+            VStack(alignment: .leading, spacing: 10) {
+                toggle("Enabled", isOn: $config.enabled)
+                // 前置开关（2026-10-14 要求）：连着 Wi-Fi 时暂停，断开自动恢复。
+                //
+                // 紧挨着「启用」放，因为它管的就是「这个功能什么时候该让路」——
+                // 与下面那些阈值不是一个层级的东西。默认开，见
+                // `BandAutoRefreshConfig.pauseOnWiFi` 的说明。
+                //
+                // 后台模式下**同样生效**：这一项会随配置一起下发到守护进程
+                // （见 `BandRefreshDaemonBridge.writeConfig`），判定在那边重跑一遍。
+                toggle("Pause on Wi-Fi", isOn: $config.pauseOnWiFi)
+                // 只有包里真的有守护进程时才给出这一项 —— 否则它是「能点、点了什么都不发生」，
+                // 而这件事在界面上完全看不出来。
+                if daemon.bundled {
+                    toggle("Run in background", isOn: $config.backgroundDaemon)
+                }
+                toggle("Log only (do not refresh)", isOn: $config.dryRun)
+
+                // 触发方向不再可选（2026-10-14）：只有「RSRP 低于阈值」一种 ——
+                // 这个功能的存在理由就是信号变弱时重载 modem。
+                stepper(value: $config.thresholdDbm, in: -125...(-70), step: 1,
+                        label: "Trigger threshold",
+                        valueText: "\(config.thresholdDbm) dBm")
+                stepper(value: $config.dwellSec, in: 0...120, step: 5,
+                        label: "Sustained for",
+                        valueText: Strings.text("%lld s", Int(config.dwellSec)))
+                stepper(value: $config.cooldownSec, in: 30...1800, step: 30,
+                        label: "Cooldown",
+                        valueText: Strings.text("%lld s", Int(config.cooldownSec)))
+                stepper(value: $config.sampleIntervalSec, in: 1...30, step: 1,
+                        label: "Sample every",
+                        valueText: Strings.text("%lld s", Int(config.sampleIntervalSec)))
+
+                // 「信号弱于 -100 且持续 20 秒」比四行开关更能说明它在等什么。
+                Text(verbatim: summary)
+                    .font(AppFont.text(12))
                     .foregroundStyle(Color.mwMuted)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var summary: String {
+        let base = "RSRP < \(config.thresholdDbm) dBm for \(Int(config.dwellSec))s → refresh, then wait \(Int(config.cooldownSec))s"
+        // 前置开关开着时把这件事说在参数摘要里 —— 否则「怎么一直不动手」没有解释。
+        guard config.pauseOnWiFi else { return base }
+        return base + " · " + Strings.text("paused while Wi-Fi is connected")
     }
 
     // MARK: - 控件
@@ -266,6 +271,25 @@ struct RefreshStatusRows: View {
     /// 本地时钟。只做一件事：每秒变一次，把 body 重算一遍，让外推的剩余秒数跟着走。
     @State private var now = Date()
 
+    /// Wi-Fi 是否连着。**独立问系统**，不读引擎的状态。
+    ///
+    /// ── 2026-10-17：修「连着 Wi-Fi 却显示未接入」─────────────────────────────
+    ///
+    /// 这一行原来读的是 `controller.wifiConnected`（后台模式下读守护进程写进状态
+    /// 文件的那一份）。两个数据源**都只在引擎跑着时才会更新**：
+    ///
+    ///   · 前台那条定时器在「启用」关着时根本不排拍（`BandAutoRefreshController.start`
+    ///     的第一条就是 `guard config.enabled`）；后台模式下 App 侧压根不停表。
+    ///
+    /// 于是启用开关关着的时候，这一行显示的是那个初值 `false` —— 用户明明连着
+    /// Wi-Fi，界面写「未接入」。而这一行存在的意义正是「让用户判断暂停逻辑有没有
+    /// 生效」，它回答的必须是**事实**，不能取决于「此刻谁在跑」。
+    ///
+    /// 现在改成每秒直接问 `sysprobe_wifi_connected()`（`getifaddrs` 看 `en0` 上有没有
+    /// 非链路本地地址，判据见桥接层），与引擎状态、前台/后台都无关。只在值变了
+    /// 才写回 `@State` —— 否则每秒都会触发一次无意义的重算。
+    @State private var wifiConnected = sysprobe_wifi_connected()
+
     /// 每秒一拍的时钟源。
     ///
     /// `.common` 而不是 `.default`：`ScrollView` 滚动时 run loop 会切到 tracking mode，
@@ -301,7 +325,14 @@ struct RefreshStatusRows: View {
         .onChange(of: countdownSource) { _ in resetCountdownAnchor() }
         // 每秒把 body 重算一遍，让外推出来的剩余秒数跟着走。见 `secondTick` 与
         // `countdownAnchor` 的说明 —— 这是「倒计时每秒递减」的全部机制。
-        .onReceive(Self.secondTick) { now = $0 }
+        //
+        // 顺带在同一拍里问一次 Wi-Fi：一次 `getifaddrs` 与这行的其余开销相比可以
+        // 忽略，而它让这一行与「引擎开没开」彻底脱钩（见 `wifiConnected`）。
+        .onReceive(Self.secondTick) { tick in
+            now = tick
+            let wifi = sysprobe_wifi_connected()
+            if wifi != wifiConnected { wifiConnected = wifi }
+        }
     }
 
     /// 一行「标签 —— 值」。与 `BandPanels.infoRow` 同款 —— 这两半现在在同一张卡片里，
@@ -320,10 +351,14 @@ struct RefreshStatusRows: View {
 
     /// 界面显示哪一侧的 Wi-Fi 状态。
     ///
-    /// 两条执行体各判各的：前台是 `controller` 每拍顺带查一次，后台是守护进程写在
-    /// 状态文件里的那一份（那时 App 内那条定时器是停着的，自己不会去查）。
+    /// ── 2026-10-17：不再分前后台读两份状态 ─────────────────────────────────────
+    ///
+    /// 原来按 `config.backgroundDaemon` 二选一：前台读 `controller` 每拍查的那份，
+    /// 后台读守护进程写在状态文件里的那份。两条路都只在**引擎跑着**时才更新，
+    /// 于是「启用」关着时这一行永远是初值 —— 那正是用户报的「连着 Wi-Fi 却显示
+    /// 未接入」。现在统一读这一层自己每秒问出来的 `wifiConnected`。
     private var displayedWifi: Bool {
-        config.backgroundDaemon ? daemon.state.wifiConnected : controller.wifiConnected
+        wifiConnected
     }
 
     private var lastRefreshText: String? {
