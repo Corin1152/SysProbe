@@ -268,15 +268,20 @@ struct PageScaffold<Content: View>: View {
     /// 但**保留**这个参数 —— 它是这个外壳本来就该有的一项，删掉只会让下一个
     /// 需要它的页面再改一遍外壳。
     var titleDisplayMode: NavigationBarItem.TitleDisplayMode
-    /// 内容栈的纵向间距。**默认 10**（2026-10-17 从 14 收到 10：用户要求
-    /// 「所有页面的所有卡片之间的间隙调小」）。这是「卡片与卡片之间」唯一的量 ——
-    /// 每张卡片自己的内边距在 `Panel` 里，不在这一层。
+    /// 内容栈的纵向间距。**默认 4**。
     ///
-    /// 2026-10-15 才加这个参数，起因是进程页：那边几百行**每一行都是这个
+    /// ── 2026-10-17：14 → 10 → 4 ────────────────────────────────────────────
+    ///
+    /// 用户先要求「所有页面的所有卡片之间的间隙调小」（14 → 10），随后要求
+    /// 「所有页面所有卡片的间距调整为跟进程页相同」—— 进程页原来就是 4，所以 4
+    /// 现在是**全站默认值**，其余页面一律不再单独传。这是「卡片与卡片之间」唯一
+    /// 的量 —— 每张卡片自己的内边距在 `Panel` 里，不在这一层。
+    ///
+    /// 这个参数是 2026-10-15 为进程页加的：那边几百行**每一行都是这个
     /// `LazyVStack` 的直接子视图**（`ForEach` 不包容器，为的是保住懒加载），
     /// 于是「页面级间距」直接变成了「行间距」。14 再叠上每行自身上下各 9 的
     /// 内边距，相邻两行的边框之间要空出 32 pt，用户反馈「行间隙太大」。
-    /// 页面级间距是这里唯一能压的量，所以让它可配；进程页传 4。
+    /// 页面级间距是这里唯一能压的量，所以让它可配；现在全站统一到进程页那个值。
     ///
     /// **频段页自己还包了一层 `VStack`**（`BandPanels`），那一层的间距必须与这里
     /// 相同，否则同一页会出现两种卡片间隙 —— 见 `BandPanels.body`。
@@ -290,7 +295,7 @@ struct PageScaffold<Content: View>: View {
     init(_ title: LocalizedStringKey,
          glow: Color = .mwAccent,
          titleDisplayMode: NavigationBarItem.TitleDisplayMode = .large,
-         spacing: CGFloat = 10,
+         spacing: CGFloat = 4,
          openSettings: @escaping @MainActor (SettingsDestination) -> Void,
          @ViewBuilder content: @escaping () -> Content) {
         self.title = title

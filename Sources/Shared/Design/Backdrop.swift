@@ -1,75 +1,35 @@
 import SwiftUI
 
-/// The page background: a cool vertical wash with a faint measurement grid and a
-/// single soft glow behind the content. Drawn once, cheap, and it is what makes
-/// the screens read as instrument panels instead of settings pages.
+/// The page background. **A flat fill since 2026-10-17** — it used to be a cool
+/// vertical wash with a faint measurement grid and a single soft glow behind the
+/// content, which is what made the screens read as instrument panels.
 ///
-/// ── 为什么是 `Equatable`（2026-10-14）────────────────────────────────────────
+/// 用户要求「去掉主程序的网格背景，改为纯白色」：渐变、28 pt 网格、`plusLighter`
+/// 的径向发光三样一起删掉了，只剩 `Color.mwCanvas`（浅色纯白 / 深色近黑）。
+/// 结果是整屏只剩卡片与它的 1 pt 描边 —— 卡片之间靠描边和 4 pt 间隙分层，
+/// 不再有底色差。卡片自己的填充色（`mwCard`）不变。
 ///
-/// 「Drawn once」原来只是意图，不是事实。这一层是整屏 `Canvas`：一次绘制要铺两遍
-/// 渐变、画约 400 条网格线、再叠一层 `plusLighter` 的径向发光。而它挂在每个分页的
-/// `ZStack` 里，**父视图 body 一重算它就跟着重新求值** —— 读数每秒一次、分段切换、
-/// 弹层开合，全都算。SwiftUI 对 `Canvas` 的闭包做不了比较，于是每次都当它变了、
-/// 每次都重画一遍整屏。
+/// ── 参数为什么还留着 ────────────────────────────────────────────────────────
 ///
-/// 它的参数只有两个（`glow` / `glowIntensity`），而且都是 `Equatable` 的静态常量 ——
-/// 所以标上 `Equatable`、在调用处接 `.equatable()` 就能让 SwiftUI 在值没变时
-/// **跳过整个 body**。切分页、切分段、每秒刷新都不再重画背景。
+/// `glow` / `glowIntensity` 现在**不参与绘制**。保留而不是删掉，是因为调用点散在
+/// `PageScaffold`、`AboutView`、`MaintenanceSheet` 三处，而 `PageScaffold.glow`
+/// 又是页面自己的一项属性（电源页按插电／无线／降频传不同的色）。哪天要恢复
+/// 那层发光，改这一个 body 就行，不用顺着五处签名往回改。
+///
+/// ── 为什么是 `Equatable`（2026-10-14）──────────────────────────────────────
+///
+/// 从前这一层是整屏 `Canvas`：一次绘制铺两遍渐变、画约 400 条网格线、再叠一层
+/// 径向发光，而它挂在每个分页的 `ZStack` 里，父视图 body 一重算它就跟着重新求值。
+/// 标 `Equatable` 并让调用处接 `.equatable()`，值没变就能跳过整个 body。
+///
+/// 现在是纯色，重算也不贵了；但 `.equatable()` 的调用点照旧成立，保持原样 ——
+/// 它省的是「整屏一层的求值」，纯色也一样受益。
 struct Backdrop: View, Equatable {
     var glow: Color = .mwAccent
     var glowIntensity: Double = 1
 
-    private let spacing: CGFloat = 28
-
     var body: some View {
-        ZStack {
-            // 最底下一层不透明画布色。上面的渐变本来就铺满，这一层是为了**兜住一帧**：
-            // 转场里若某一帧上层的 `Canvas` 还没画上，露出来的就是它，而不是窗口底色
-            // （浅色下白、深色下黑）—— 那才是「整屏闪一下」看起来的样子。
-            Color.mwCanvas
-
-            Canvas { context, size in
-                // 渐变、网格、发光全部画在**同一层**里。
-                //
-                // 这里以前是三个 SwiftUI 视图叠着，发光那层用 `.blendMode(.plusLighter)`。
-                // 那是整条链上最贵也最不稳的一环：SwiftUI 的 blend mode 底下是 Core
-                // Image 的合成滤镜，要额外一遍离屏渲染；而弹设置面板、切分页这些转场里
-                // UIKit 正在对整棵视图做变换，这一遍常常来不及，露出来就是一帧空白。
-                //
-                // `GraphicsContext.blendMode` 是 Core Graphics 自己的混合模式，画在同一个
-                // `Canvas` 里 —— 一层 CALayer、一次画完，没有额外的合成组。外观完全一致。
-                // 代价只有一个：`Canvas` 不参与隐式动画插值，发光换色（插电／无线／降频）
-                // 从 0.8 秒渐变变成直接切。
-                let canvas = Path(CGRect(origin: .zero, size: size))
-                context.fill(canvas, with: .linearGradient(
-                    Gradient(colors: [.mwCanvasTop, .mwCanvas]),
-                    startPoint: .zero,
-                    endPoint: CGPoint(x: 0, y: size.height)))
-
-                var grid = Path()
-                var x: CGFloat = 0
-                while x <= size.width {
-                    grid.move(to: CGPoint(x: x, y: 0))
-                    grid.addLine(to: CGPoint(x: x, y: size.height))
-                    x += spacing
-                }
-                var y: CGFloat = 0
-                while y <= size.height {
-                    grid.move(to: CGPoint(x: 0, y: y))
-                    grid.addLine(to: CGPoint(x: size.width, y: y))
-                    y += spacing
-                }
-                context.stroke(grid, with: .color(.mwGrid), lineWidth: 0.5)
-
-                context.blendMode = .plusLighter
-                context.fill(canvas, with: .radialGradient(
-                    Gradient(colors: [glow.opacity(0.22 * glowIntensity), .clear]),
-                    center: CGPoint(x: size.width * 0.5, y: size.height * 0.18),
-                    startRadius: 0,
-                    endRadius: 420))
-            }
-        }
-        .ignoresSafeArea()
+        Color.mwCanvas.ignoresSafeArea()
     }
 }
 

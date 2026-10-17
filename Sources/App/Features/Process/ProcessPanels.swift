@@ -92,15 +92,15 @@ struct ProcessPanels: View {
     @State private var collapsedGroups: Set<ProcessGroup> = [.system]
 
     var body: some View {
-        // `spacing: 6` → `4`（本轮）—— 这一页几百行**每一行都是这个 `LazyVStack`
-        // 的直接子视图**，所以页面级间距就是行间距的一半（另一半在 `ProcessRow`
-        // 自己的上下内边距里）。
+        // 不再显式传 `spacing`：`PageScaffold` 的默认值 2026-10-17 已收到 4
+        // （用户要求「所有页面所有卡片的间距跟进程页相同」），这一页就是那个基准。
         //
-        // 四次收紧的记录：14 + 9 + 9 = 32 pt →（0.0.73）8 + 6 + 6 = 20 pt →
-        // 6 + 4 + 4 = 14 pt →（本轮）4 + 3 + 3 = 10 pt。用户每次都说「再小点」，
-        // 而进程列表本来就该像列表那样紧凑 —— 它唯一的用途是让人一眼扫出
-        // 「谁在吃 CPU」，行与行之间留白越大，一屏能看的行就越少。
-        PageScaffold("Processes", glow: .mwAccent, spacing: 4, openSettings: openSettings) {
+        // 沿革：这一页几百行**每一行都是 `LazyVStack` 的直接子视图**，所以页面级
+        // 间距就是行间距的一半（另一半在 `ProcessRow` 自己的上下内边距里）。四次
+        // 收紧：14 + 9 + 9 = 32 pt →（0.0.73）8 + 6 + 6 = 20 pt → 6 + 4 + 4 =
+        // 14 pt → 4 + 3 + 3 = 10 pt。用户每次都说「再小点」，而进程列表本来就该
+        // 像列表那样紧凑 —— 它唯一的用途是让人一眼扫出「谁在吃 CPU」。
+        PageScaffold("Processes", glow: .mwAccent, openSettings: openSettings) {
             // 概览单独成一个子视图：它观察 `HardwareMonitor`（每秒发布一次），
             // 而列表是几百行 —— 把那份订阅留在这一层，等于每秒让整页 body
             // 重算一遍、把整个列表 diff 一次。拆出去之后只有这个小面板跟着重算。

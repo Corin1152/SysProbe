@@ -17,13 +17,19 @@ nonisolated extension Color {
         })
     }
 
-    /// Page background, bottom of the canvas gradient.
-    static let mwCanvas = Color.mw(0xEEF1F6, 0x06070A)
-    /// Page background, top of the canvas gradient — a cool cast, so the screen
-    /// reads as an instrument rather than a form.
+    /// Page background. **浅色纯白（2026-10-17）**：用户要求「去掉主程序的网格背景，
+    /// 改为纯白色」，所以浅色从 `0xEEF1F6`（冷调浅灰蓝）改成 `0xFFFFFF`。深色不变
+    /// —— 纯白在深色模式下不可读，那一侧仍是近黑。
+    ///
+    /// 背景现在是**平铺色**，不再是渐变的一侧：见 `Backdrop`。
+    static let mwCanvas = Color.mw(0xFFFFFF, 0x06070A)
+    /// 旧画布渐变的顶部色。**2026-10-17 起没有任何绘制点** —— 背景改纯色时渐变被
+    /// 删掉了，这里保留常量是为了恢复时不用重新取色。
     static let mwCanvasTop = Color.mw(0xF7F9FC, 0x0C1018)
     static let mwCard = Color.mw(0xFFFFFF, 0x14171F)
     static let mwCardStroke = Color.mw(0x0A0A0A, 0xFFFFFF).opacity(0.08)
+    /// 图表轴的网格线。**与页面背景的网格无关** —— 背景那一层 2026-10-17 已删，
+    /// 这个色现在只服务 `Charts.swift` 里的坐标轴（那是数据本身的一部分）。
     static let mwGrid = Color.mw(0x2B3A55, 0x6C8CC7).opacity(0.10)
 
     /// Adapter side: what arrives from the charger.
